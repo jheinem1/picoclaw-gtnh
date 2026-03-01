@@ -1,0 +1,64 @@
+services:
+  dathost-bridge:
+    build:
+      context: ../bridge
+      dockerfile: Dockerfile
+    container_name: dathost-bridge
+    restart: unless-stopped
+    env_file:
+      - ./env/dathost-bridge.env
+    volumes:
+      - ../runtime/dathost-bridge:/var/lib/dathost-bridge
+    ports:
+      - "127.0.0.1:18080:8080"
+
+  mc-relay:
+    build:
+      context: ../relay
+      dockerfile: Dockerfile
+    container_name: mc-relay
+    restart: unless-stopped
+    env_file:
+      - ./env/picoclaw.env
+      - ./env/dathost-bridge.env
+    environment:
+      - DATHOST_BRIDGE_URL=http://dathost-bridge:8080
+      - MC_RELAY_STATE_FILE=/var/lib/mc-relay/state.json
+    volumes:
+      - ../runtime/mc-relay:/var/lib/mc-relay
+      - ../runtime/picoclaw/picoclaw.custom:/usr/local/bin/picoclaw:ro
+      - ../runtime/picoclaw/config.json:/root/.picoclaw/config.json
+      - ../runtime/picoclaw/auth.json:/root/.picoclaw/auth.json
+      - ../workspace:/root/.picoclaw/workspace
+    depends_on:
+      - dathost-bridge
+
+  kanban-sync:
+    build:
+      context: ../kanban-sync
+      dockerfile: Dockerfile
+    container_name: kanban-sync
+    restart: unless-stopped
+    env_file:
+      - ./env/picoclaw.env
+    environment:
+      - KANBAN_STATE_FILE=/var/lib/kanban-sync/state.json
+      - KANBAN_WORKDIR=/root/.picoclaw/workspace
+    volumes:
+      - ../runtime/kanban-sync:/var/lib/kanban-sync
+      - ../workspace:/root/.picoclaw/workspace
+
+  picoclaw-gateway:
+    image: docker.io/sipeed/picoclaw:latest
+    container_name: picoclaw-gateway
+    restart: unless-stopped
+    env_file:
+      - ./env/picoclaw.env
+    volumes:
+      - ../runtime/picoclaw/picoclaw.custom:/usr/local/bin/picoclaw:ro
+      - ../runtime/picoclaw/config.json:/root/.picoclaw/config.json
+      - ../runtime/picoclaw/auth.json:/root/.picoclaw/auth.json
+      - ../workspace:/root/.picoclaw/workspace
+    command: ["gateway"]
+    ports:
+      - "127.0.0.1:18790:18790"

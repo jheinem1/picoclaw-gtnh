@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+set -eu
+exec sh tools/mc_poll.sh "$@"

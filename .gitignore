@@ -1,0 +1,11 @@
+# Runtime data and secrets
+runtime/
+deploy/env/picoclaw.env
+deploy/env/dathost-bridge.env
+
+# Local misc
+*.log
+.DS_Store
+
+# Local build artifacts
+relay/picoclaw-gtnh-mc-relay
