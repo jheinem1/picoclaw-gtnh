@@ -39,6 +39,15 @@ Last updated: 2026-03-01
 - Reply cap: 180 chars
 - State file: `/home/jhein/picoclaw-gtnh/runtime/dathost-bridge/state.json`
 - Secrets file: `/home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env` (not committed)
+- DatHost file API is available separately from bridge (not yet wired into bridge routes):
+  - list: `GET /game-servers/{id}/files?path=<folder/>`
+  - download: `GET /game-servers/{id}/files/<path>`
+  - sync cache: `POST /game-servers/{id}/files/sync`
+- Verified quest data files on server:
+  - `world/betterquesting/NameCache.json`
+  - `world/betterquesting/QuestDatabase.json`
+  - `world/betterquesting/QuestingParties.json`
+  - `world/betterquesting/QuestProgress/*.json`
 
 ## Minecraft relay
 - Poll source: `dathost-bridge /mc/console`

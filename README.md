@@ -101,6 +101,20 @@ The bridge is chat-only in v1:
 - `POST /mc/say` with `{"text":"..."}`
 - Local debug bind on Pi host: `127.0.0.1:18080` (bridge `:8080` inside container network)
 
+### Quest progress via DatHost file API
+DatHost can also expose GTNH/BetterQuesting save data directly from server files:
+- Sync DatHost file cache: `POST /game-servers/{id}/files/sync`
+- List files under a folder: `GET /game-servers/{id}/files?path=<folder/>`
+- Download a file: `GET /game-servers/{id}/files/<path>`
+
+Observed live quest files on this server:
+- `world/betterquesting/NameCache.json` (UUID -> player name)
+- `world/betterquesting/QuestDatabase.json` (quest metadata/title/desc)
+- `world/betterquesting/QuestingParties.json` (party membership)
+- `world/betterquesting/QuestProgress/*.json` (per-player quest progress)
+
+This makes it possible to build a deterministic quest-progress summary endpoint without reading Minecraft chat logs.
+
 Populate `deploy/env/dathost-bridge.env` on the Pi:
 - `DATHOST_API_TOKEN` (if your DatHost account exposes token auth), or:
 - `DATHOST_API_EMAIL` + `DATHOST_API_PASSWORD`
