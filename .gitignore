@@ -9,3 +9,9 @@ deploy/env/dathost-bridge.env
 
 # Local build artifacts
 relay/picoclaw-gtnh-mc-relay
+
+# Large GTNH source/index artifacts (tracked as compressed .xz only when needed)
+data/gtnh/recipes.json
+data/gtnh/recipes_stacks.json
+data/gtnh/index/item_index.tsv
+data/gtnh_runtime/index/recipe_index.tsv
