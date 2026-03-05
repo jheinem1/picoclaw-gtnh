@@ -3,18 +3,22 @@
 Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, with DatHost Minecraft chat integration.
 
 ## What this repo contains
-- `deploy/compose.yaml`: PicoClaw gateway + DatHost bridge + MC relay + kanban-sync services
+- `deploy/compose.yaml`: PicoClaw gateway + DatHost bridge + MC relay + kanban-sync + inventory-sync services
 - `deploy/config/picoclaw.config.template.json`: base PicoClaw config (OpenAI OAuth + Discord)
 - `deploy/env/picoclaw.env.template`: secret env template
 - `deploy/env/dathost-bridge.env.template`: DatHost bridge env template
 - `bridge/`: lightweight Go DatHost bridge (`/healthz`, `/mc/console`, `/mc/say`)
 - `relay/`: lightweight Go worker that polls bridge events and asks PicoClaw for MC replies
 - `kanban-sync/`: deterministic Discord embed renderer for GTNH Kanban board
+- `inventory-sync/`: deterministic DatHost file indexer for player inventories and chest coordinates
 - `workspace/AGENTS.md`: GTNH-specific behavior constraints
 - `workspace/tools/build_item_index.py`: builds search index from `recipes_stacks.json`
 - `workspace/tools/build_recipe_index.py`: builds recipe index TSV from `recipes.json`
 - `workspace/gtnh_query`: runtime GTNH query API (shell + awk/grep, no Python dependency in container)
+- `workspace/gtnh_wiki_search`: GTNH wiki search API (MediaWiki-backed shell command)
+- `workspace/gtnh_find_item`, `workspace/gtnh_resolve_recipes`, `workspace/gtnh_search_recipes`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
+- `workspace/gtnh_inventory`: inventory/chest lookup API for PicoClaw prompts
 - `workspace/tools/search_gtnh.sh`: convenience wrapper for indexed item search
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
 - `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
@@ -51,6 +55,12 @@ Use indexed queries:
 - Prepare runtime dataset: `scripts/prepare_runtime_data.sh`
 - Find item: `sh gtnh_query find-item "copper nugget"`
 - Resolve item + recipes: `sh gtnh_query resolve-recipes "copper nugget"`
+- Search wiki pages: `sh gtnh_wiki_search "steam fluid pipe throughput"`
+- Focused commands:
+  - `sh gtnh_find_item "copper nugget"`
+  - `sh gtnh_search_recipes "potin fluid pipe"`
+  - `sh gtnh_resolve_recipes "bronze fluid pipe"`
+  - `sh gtnh_wiki_page "Steam Machines"`
 
 ## GTNH task board workflow
 Use task tracking commands from workspace root:
@@ -93,6 +103,44 @@ Core env vars in `deploy/env/picoclaw.env`:
 - `KANBAN_PIN_MESSAGE`
 
 The bot workspace policy (`workspace/AGENTS.md`) is configured to prefer this API-first path.
+
+## Inventory lookup sync service
+`inventory-sync` builds a deterministic inventory index from DatHost server files:
+- player inventories + positions from `world/playerdata/*.dat`
+- chest inventories + coordinates from region files:
+  - `world/region/*.mca` (Overworld)
+  - `world/DIM-1/region/*.mca` (Nether)
+  - `world/DIM1/region/*.mca` (End)
+
+Index outputs written under workspace state:
+- `state/inventory_index.json`
+- `state/inventory_status.json`
+- `state/inventory_refresh.json` (manual refresh request)
+
+Commands from workspace root:
+- `sh gtnh_inventory status`
+- `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]`
+- `sh gtnh_inventory find-item --query "<name>" [--scope players|chests|both] [--limit <n>]`
+- `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
+- `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
+- `sh gtnh_inventory refresh [--players|--chests|--all]`
+
+Notes:
+- `find --id` remains as strict legacy mode and requires `--damage`.
+- `player --all` includes nested container contents from inventory items (for example backpacks/toolboxes) as `src=nested`.
+- Custom item names are indexed from item NBT when present and shown in inventory/chest listings.
+
+Env vars in `deploy/env/picoclaw.env`:
+- `INVENTORY_SYNC_ENABLED`
+- `INVENTORY_WORKDIR`
+- `INVENTORY_STATE_FILE`
+- `INVENTORY_PLAYERS_INTERVAL_SECONDS`
+- `INVENTORY_CHESTS_INTERVAL_SECONDS`
+- `INVENTORY_MAX_RESULTS`
+- `INVENTORY_DEFAULT_LIMIT`
+- `INVENTORY_HTTP_TIMEOUT_SECONDS`
+- `INVENTORY_SCAN_DIMS`
+- `INVENTORY_MAX_REGION_FILES_PER_RUN`
 
 ## DatHost bridge workflow (v1)
 The bridge is chat-only in v1:
@@ -138,6 +186,7 @@ Trigger policy for Minecraft chat:
 - Bridge logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f dathost-bridge`
 - Relay logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f mc-relay`
 - Kanban logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f kanban-sync`
+- Inventory sync logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f inventory-sync`
 - Restart: `systemctl --user restart picoclaw-gtnh.service`
 - Bridge smoke checks: `ALLOW_CONSOLE_FAILURE=1 scripts/test_dathost_bridge.sh`
 - Heartbeat runtime log: `tail -f ~/picoclaw-gtnh/workspace/heartbeat.log`

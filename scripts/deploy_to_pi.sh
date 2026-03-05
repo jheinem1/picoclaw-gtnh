@@ -29,6 +29,7 @@ set -euo pipefail
 mkdir -p /home/jhein/picoclaw-gtnh/runtime/picoclaw
 mkdir -p /home/jhein/picoclaw-gtnh/runtime/dathost-bridge
 mkdir -p /home/jhein/picoclaw-gtnh/runtime/mc-relay
+mkdir -p /home/jhein/picoclaw-gtnh/runtime/inventory-sync
 mkdir -p /home/jhein/picoclaw-gtnh/data/gtnh
 mkdir -p /home/jhein/picoclaw-gtnh/data/gtnh_runtime
 if [[ ! -f /home/jhein/picoclaw-gtnh/deploy/env/picoclaw.env ]]; then
@@ -40,5 +41,5 @@ fi
 if [[ ! -f /home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env ]]; then
   cp /home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env.template /home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env
 fi
-chmod +x /home/jhein/picoclaw-gtnh/workspace/gtnh_query /home/jhein/picoclaw-gtnh/workspace/mc_poll /home/jhein/picoclaw-gtnh/workspace/mc_say /home/jhein/picoclaw-gtnh/workspace/tools/*.py /home/jhein/picoclaw-gtnh/workspace/tools/*.sh /home/jhein/picoclaw-gtnh/scripts/*.sh || true
+chmod +x /home/jhein/picoclaw-gtnh/workspace/gtnh_query /home/jhein/picoclaw-gtnh/workspace/gtnh_inventory /home/jhein/picoclaw-gtnh/workspace/mc_poll /home/jhein/picoclaw-gtnh/workspace/mc_say /home/jhein/picoclaw-gtnh/workspace/tools/*.py /home/jhein/picoclaw-gtnh/workspace/tools/*.sh /home/jhein/picoclaw-gtnh/scripts/*.sh || true
 '

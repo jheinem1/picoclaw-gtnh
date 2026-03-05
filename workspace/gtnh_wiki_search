@@ -1,0 +1,81 @@
+#!/usr/bin/env sh
+set -eu
+
+API_BASE="${GTNH_WIKI_API_BASE:-https://wiki.gtnewhorizons.com/w/api.php}"
+QUERY="${*:-}"
+LIMIT="${GTNH_WIKI_LIMIT:-5}"
+
+fail() {
+  printf '{"ok":false,"error":"%s"}\n' "$1"
+  exit 1
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+[ -n "$QUERY" ] || fail "usage: gtnh_wiki_search <query>"
+
+case "$LIMIT" in
+  ''|*[!0-9]*)
+    LIMIT=5
+    ;;
+esac
+if [ "$LIMIT" -lt 1 ]; then
+  LIMIT=1
+fi
+if [ "$LIMIT" -gt 10 ]; then
+  LIMIT=10
+fi
+
+RAW="$(
+  curl -fsS --get "$API_BASE" \
+    --data-urlencode "action=query" \
+    --data-urlencode "list=search" \
+    --data-urlencode "format=json" \
+    --data-urlencode "formatversion=2" \
+    --data-urlencode "utf8=1" \
+    --data-urlencode "srsearch=${QUERY}" \
+    --data-urlencode "srlimit=${LIMIT}" \
+    --data-urlencode "srprop=" \
+    --data-urlencode "origin=*"
+)"
+
+MIN="$(printf '%s' "$RAW" | tr '\n\r' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+TOTAL="$(printf '%s' "$MIN" | sed -n 's/.*"totalhits":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+[ -n "$TOTAL" ] || TOTAL=0
+
+RESULTS="$(
+  printf '%s' "$MIN" | awk -v limit="$LIMIT" '
+    BEGIN { RS="\\{\"ns\":"; count=0 }
+    NR == 1 { next }
+    {
+      if (count >= limit) { next }
+      title = ""
+
+      if (match($0, /"title":"([^"]+)"/, m1)) { title = m1[1] }
+      if (title == "") { next }
+
+      count++
+      gsub(/\\\//, "/", title)
+      gsub(/\\"/, "\"", title)
+      printf("%s\n", title)
+    }
+  '
+)"
+
+printf '{"ok":true,"query":"%s","total_hits":%s,"results":[' "$(json_escape "$QUERY")" "$TOTAL"
+FIRST=1
+printf '%s\n' "$RESULTS" | while IFS= read -r TITLE; do
+  [ -n "$TITLE" ] || continue
+  PAGE="$(printf '%s' "$TITLE" | sed 's/ /_/g')"
+  URL="https://wiki.gtnewhorizons.com/wiki/${PAGE}"
+  if [ "$FIRST" -eq 0 ]; then
+    printf ','
+  fi
+  FIRST=0
+  printf '{"title":"%s","url":"%s"}' \
+    "$(json_escape "$TITLE")" \
+    "$(json_escape "$URL")"
+done
+printf '],"source":"wiki.gtnewhorizons.com/w/api.php"}\n'

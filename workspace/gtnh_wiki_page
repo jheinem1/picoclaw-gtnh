@@ -1,0 +1,53 @@
+#!/usr/bin/env sh
+set -eu
+
+API_BASE="${GTNH_WIKI_API_BASE:-https://wiki.gtnewhorizons.com/w/api.php}"
+TITLE="${*:-}"
+
+fail() {
+  printf '{"ok":false,"error":"%s"}\n' "$1"
+  exit 1
+}
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+clean_text() {
+  printf '%s' "$1" \
+    | sed 's/<[^>]*>//g' \
+    | sed 's/&quot;/"/g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&#39;/'"'"'/g' \
+    | tr '\n\r\t' '   ' \
+    | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
+}
+
+[ -n "$TITLE" ] || fail "usage: gtnh_wiki_page <title>"
+
+RAW="$(
+  curl -fsS --get "$API_BASE" \
+    --data-urlencode "action=query" \
+    --data-urlencode "format=json" \
+    --data-urlencode "formatversion=2" \
+    --data-urlencode "prop=extracts|info" \
+    --data-urlencode "explaintext=1" \
+    --data-urlencode "exintro=1" \
+    --data-urlencode "inprop=url" \
+    --data-urlencode "redirects=1" \
+    --data-urlencode "titles=${TITLE}" \
+    --data-urlencode "origin=*"
+)"
+
+MIN="$(printf '%s' "$RAW" | tr '\n\r' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+PAGE_TITLE="$(printf '%s' "$MIN" | sed -n 's/.*"title":"\([^"]*\)".*/\1/p' | head -n1)"
+EXTRACT="$(printf '%s' "$MIN" | sed -n 's/.*"extract":"\([^"]*\)".*/\1/p' | head -n1)"
+FULLURL="$(printf '%s' "$MIN" | sed -n 's/.*"fullurl":"\([^"]*\)".*/\1/p' | head -n1)"
+
+[ -n "$PAGE_TITLE" ] || fail "page not found"
+[ -n "$FULLURL" ] || FULLURL="https://wiki.gtnewhorizons.com/wiki/$(printf '%s' "$PAGE_TITLE" | sed 's/ /_/g')"
+
+EXTRACT_CLEAN="$(clean_text "$EXTRACT")"
+printf '{"ok":true,"query":"%s","title":"%s","url":"%s","summary":"%s","source":"wiki.gtnewhorizons.com/w/api.php"}\n' \
+  "$(json_escape "$TITLE")" \
+  "$(json_escape "$PAGE_TITLE")" \
+  "$(json_escape "$FULLURL")" \
+  "$(json_escape "$EXTRACT_CLEAN")"

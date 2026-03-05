@@ -15,3 +15,4 @@ data/gtnh/recipes.json
 data/gtnh/recipes_stacks.json
 data/gtnh/index/item_index.tsv
 data/gtnh_runtime/index/recipe_index.tsv
+data/gtnh/index/gtnh.db

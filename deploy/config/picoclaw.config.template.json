@@ -45,7 +45,11 @@
     },
     "exec": {
       "enable_deny_patterns": true,
-      "custom_deny_patterns": []
+      "custom_deny_patterns": [
+        "(^|\\s)cd\\s",
+        "&&|\\|\\||;|\\|",
+        "[\\x00-\\x1F]"
+      ]
     }
   },
   "gateway": {

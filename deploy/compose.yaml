@@ -48,8 +48,26 @@ services:
       - ../runtime/kanban-sync:/var/lib/kanban-sync
       - ../workspace:/root/.picoclaw/workspace
 
+  inventory-sync:
+    build:
+      context: ../inventory-sync
+      dockerfile: Dockerfile
+    container_name: inventory-sync
+    restart: unless-stopped
+    env_file:
+      - ./env/picoclaw.env
+      - ./env/dathost-bridge.env
+    environment:
+      - INVENTORY_WORKDIR=/root/.picoclaw/workspace
+      - INVENTORY_STATE_FILE=/var/lib/inventory-sync/state.json
+    volumes:
+      - ../runtime/inventory-sync:/var/lib/inventory-sync
+      - ../workspace:/root/.picoclaw/workspace
+
   picoclaw-gateway:
-    image: docker.io/sipeed/picoclaw:latest
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile
     container_name: picoclaw-gateway
     restart: unless-stopped
     env_file:

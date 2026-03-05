@@ -6,5 +6,6 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mc-relay ./main.go
 
 FROM docker.io/sipeed/picoclaw:latest
 COPY --from=builder /out/mc-relay /usr/local/bin/mc-relay
+RUN apk add --no-cache jq curl
 RUN mkdir -p /var/lib/mc-relay
 ENTRYPOINT ["/usr/local/bin/mc-relay"]

@@ -15,6 +15,7 @@ Last updated: 2026-03-01
 - DatHost bridge service: `dathost-bridge` (Go HTTP service in `bridge/`)
 - Minecraft relay service: `mc-relay` (Go worker in `relay/`, uses `picoclaw agent`)
 - Kanban sync service: `kanban-sync` (Go worker in `kanban-sync/`, renders persistent Discord board embed)
+- Inventory sync service: `inventory-sync` (Go worker in `inventory-sync/`, indexes player inventories and chest coordinates)
 
 ## Discord
 - Bot account: `GregGPT` (`1477150836227444862`)
@@ -48,6 +49,23 @@ Last updated: 2026-03-01
   - `world/betterquesting/QuestDatabase.json`
   - `world/betterquesting/QuestingParties.json`
   - `world/betterquesting/QuestProgress/*.json`
+
+## Inventory index
+- Source files (via DatHost file API):
+  - `world/playerdata/*.dat`
+  - `world/region/*.mca`, `world/DIM-1/region/*.mca`, `world/DIM1/region/*.mca`
+- Index outputs:
+  - `workspace/state/inventory_index.json`
+  - `workspace/state/inventory_status.json`
+  - `workspace/state/inventory_refresh.json` (manual refresh request)
+- Workspace tool:
+  - `sh gtnh_inventory status`
+  - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]`
+  - `sh gtnh_inventory find-item --query "<name>" [--scope players|chests|both] [--limit <n>]`
+  - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
+  - `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
+  - `sh gtnh_inventory refresh [--players|--chests|--all]`
+  - `find --id` is strict legacy mode and requires `--damage`
 
 ## Minecraft relay
 - Poll source: `dathost-bridge /mc/console`
