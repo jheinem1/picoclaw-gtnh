@@ -428,6 +428,11 @@ cmd_find() {
   fi
 
   jq -r --argjson keys "$keys_json" --arg scope "$scope" --argjson limit "$limit" --arg mode "$resolved_mode" --arg player "$player_filter" '
+    def selected_player(root):
+      ((root.players // [])
+        | map(select(($player|length)>0 and ((((.name // "")|ascii_downcase)==($player|ascii_downcase)) or (((.uuid // "")|ascii_downcase)==($player|ascii_downcase)))))
+        | .[0]);
+
     def merge_players(arr):
       reduce arr[] as $p ({};
         .[$p.uuid] = (
@@ -439,7 +444,7 @@ cmd_find() {
         )
       ) | to_entries | map(.value) | sort_by(-(.total_count // 0), (.name // ""));
 
-    def merge_chests(arr):
+    def merge_chests(arr; ref):
       reduce arr[] as $c ({};
         .[(($c.dim|tostring)+":"+($c.x|tostring)+":"+($c.y|tostring)+":"+($c.z|tostring))] = (
           if has((($c.dim|tostring)+":"+($c.x|tostring)+":"+($c.y|tostring)+":"+($c.z|tostring))) then
@@ -448,14 +453,40 @@ cmd_find() {
             $c
           end
         )
-      ) | to_entries | map(.value) | sort_by(-(.total_count // 0), .dim, .x, .y, .z);
+      )
+      | to_entries
+      | map(.value
+          | if ref != null and (.dim == (ref.dim // 999999)) then
+              . + {
+                distance: (
+                  (
+                    ((.x - (ref.pos.x // 0)) * (.x - (ref.pos.x // 0))) +
+                    ((.y - (ref.pos.y // 0)) * (.y - (ref.pos.y // 0))) +
+                    ((.z - (ref.pos.z // 0)) * (.z - (ref.pos.z // 0)))
+                  ) | sqrt
+                )
+              }
+            else
+              .
+            end)
+      | sort_by(
+          (if ref != null and (.dim == (ref.dim // 999999)) then 0 else 1 end),
+          (.distance // 1e18),
+          -(.total_count // 0),
+          .dim, .x, .y, .z
+        );
 
     . as $root
     | (reduce ($keys[]) as $k ({players:[], chests:[]};
         .players += (($root.item_index[$k].players // []))
         | .chests += (($root.item_index[$k].chests // []))
       )) as $hits
+    | selected_player($root) as $ref
     | "Inventory find mode=" + $mode + " keys=" + (($keys|length)|tostring) + " scope=" + $scope + (if ($player|length)>0 then " player=" + $player else "" end),
+      (if $ref != null then
+         "Reference player: " + ($ref.name // $ref.uuid // "unknown") +
+         " pos=(" + (($ref.pos.x // 0)|tostring) + "," + (($ref.pos.y // 0)|tostring) + "," + (($ref.pos.z // 0)|tostring) + ") dim=" + (($ref.dim // 0)|tostring)
+       else empty end),
       (if $scope == "players" or $scope == "both" then
          "Players:",
          ((merge_players($hits.players // [])
@@ -474,9 +505,10 @@ cmd_find() {
        else empty end),
       (if $scope == "chests" or $scope == "both" then
          "Containers:",
-         ((merge_chests($hits.chests // []))[:$limit] |
+         ((merge_chests($hits.chests // []; $ref))[:$limit] |
             if length == 0 then "(none)"
-            else .[] | "- count=" + ((.total_count // 0)|tostring) + " at (" + ((.x // 0)|tostring) + "," + ((.y // 0)|tostring) + "," + ((.z // 0)|tostring) + ") dim=" + ((.dim // 0)|tostring) + " type=" + (.type // "Chest")
+            else .[] | "- count=" + ((.total_count // 0)|tostring) + " at (" + ((.x // 0)|tostring) + "," + ((.y // 0)|tostring) + "," + ((.z // 0)|tostring) + ") dim=" + ((.dim // 0)|tostring) + " type=" + (.type // "Chest") +
+              (if (.distance // null) != null then " dist=" + (((.distance * 10 | round) / 10)|tostring) else "" end)
             end)
        else empty end)
   ' "$INDEX_FILE"

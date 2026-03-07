@@ -63,6 +63,19 @@ type ConsoleResponse struct {
 	Events []ConsoleEvent `json:"events"`
 }
 
+type PresencePlayer struct {
+	Name      string `json:"name"`
+	LastSeen  string `json:"last_seen"`
+	LastEvent string `json:"last_event"`
+}
+
+type PresenceResponse struct {
+	OK      bool             `json:"ok"`
+	Players []PresencePlayer `json:"players"`
+	Source  string           `json:"source"`
+	RawLine string           `json:"raw_line,omitempty"`
+}
+
 type consoleLine struct {
 	Text      string
 	Timestamp string
@@ -294,6 +307,35 @@ func (b *Bridge) getMCConsole(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (b *Bridge) getMCOnline(w http.ResponseWriter, r *http.Request) {
+	line, status, err := b.fetchOnlineListLine(r.Context())
+	if err != nil {
+		log.Printf("event=online_poll_error status=%d error=%q", status, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	players, err := parseOnlineListLine(line)
+	if err != nil {
+		log.Printf("event=online_poll_error status=%d error=%q line=%q", status, err.Error(), line)
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, PresenceResponse{
+		OK:      true,
+		Players: players,
+		Source:  "dathost_console_list",
+		RawLine: line,
+	})
+}
+
 func (b *Bridge) postMCSay(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Text string `json:"text"`
@@ -382,6 +424,38 @@ func (b *Bridge) callDatHost(ctx context.Context, method, path, contentType stri
 		return data, resp.StatusCode, fmt.Errorf("dathost HTTP %d: %s", resp.StatusCode, msg)
 	}
 	return data, resp.StatusCode, nil
+}
+
+func (b *Bridge) fetchOnlineListLine(ctx context.Context) (string, int, error) {
+	if _, status, err := b.sendConsoleCommand(ctx, "list"); err != nil {
+		return "", status, err
+	}
+
+	time.Sleep(1200 * time.Millisecond)
+
+	raw, status, err := b.callDatHost(ctx, http.MethodGet, fmt.Sprintf("/game-servers/%s/console", b.cfg.DatHostServer), "", nil)
+	if err != nil {
+		return "", status, err
+	}
+
+	lines, err := parseConsolePayload(raw)
+	if err != nil {
+		return "", status, err
+	}
+
+	listRe := regexp.MustCompile(`There are \d+/\d+ players online(?::\s*(.*))?$`)
+	for i := len(lines) - 1; i >= 0; i-- {
+		text := strings.TrimSpace(lines[i].Text)
+		if text == "" {
+			continue
+		}
+		normalized, _ := b.normalizeDatHostLine(text)
+		if listRe.MatchString(normalized) {
+			return normalized, status, nil
+		}
+	}
+
+	return "", status, errors.New("did not find a recent list response in console output")
 }
 
 func parseConsolePayload(raw []byte) ([]consoleLine, error) {
@@ -523,6 +597,31 @@ func (b *Bridge) normalizeDatHostLine(raw string) (string, string) {
 	return rest, parsed.UTC().Format(time.RFC3339)
 }
 
+func parseOnlineListLine(line string) ([]PresencePlayer, error) {
+	line = strings.TrimSpace(line)
+	re := regexp.MustCompile(`There are (\d+)/(\d+) players online(?::\s*(.*))?$`)
+	m := re.FindStringSubmatch(line)
+	if len(m) != 4 {
+		return nil, errors.New("unexpected list response format")
+	}
+
+	namesRaw := strings.TrimSpace(m[3])
+	if namesRaw == "" {
+		return []PresencePlayer{}, nil
+	}
+
+	parts := strings.Split(namesRaw, ",")
+	out := make([]PresencePlayer, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		out = append(out, PresencePlayer{Name: name})
+	}
+	return out, nil
+}
+
 func sanitizeSayText(input string, maxChars int) (string, bool, string) {
 	text := strings.TrimSpace(toASCII(input))
 	if text == "" {
@@ -586,6 +685,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", bridge.healthz)
 	mux.HandleFunc("/mc/console", bridge.getMCConsole)
+	mux.HandleFunc("/mc/online", bridge.getMCOnline)
 	mux.HandleFunc("/mc/say", bridge.postMCSay)
 
 	authMode := "token"

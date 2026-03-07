@@ -141,6 +141,7 @@ Env vars in `deploy/env/picoclaw.env`:
 - `INVENTORY_HTTP_TIMEOUT_SECONDS`
 - `INVENTORY_SCAN_DIMS`
 - `INVENTORY_MAX_REGION_FILES_PER_RUN`
+- `INVENTORY_CHEST_BOUNDS` (`dim,min_x,min_z,max_x,max_z`; optional chest scan bounding box)
 
 ## DatHost bridge workflow (v1)
 The bridge is chat-only in v1:
@@ -170,6 +171,7 @@ Populate `deploy/env/dathost-bridge.env` on the Pi:
 
 Wrapper commands in PicoClaw workspace:
 - `sh mc_poll [lines]`
+- `sh mc_online [lines]`
 - `sh mc_say "<text>"`
 
 Trigger policy for Minecraft chat:

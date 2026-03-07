@@ -105,3 +105,33 @@ func TestSanitizeSayText(t *testing.T) {
 		t.Fatalf("expected newline reject")
 	}
 }
+
+func TestParseOnlineListLine_WithPlayers(t *testing.T) {
+	players, err := parseOnlineListLine("There are 2/20 players online: __exx, SugaryCoffee")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(players) != 2 {
+		t.Fatalf("expected 2 players, got %d", len(players))
+	}
+	if players[0].Name != "__exx" || players[1].Name != "SugaryCoffee" {
+		t.Fatalf("unexpected players: %+v", players)
+	}
+}
+
+func TestParseOnlineListLine_NoPlayers(t *testing.T) {
+	players, err := parseOnlineListLine("There are 0/20 players online:")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(players) != 0 {
+		t.Fatalf("expected no players, got %d", len(players))
+	}
+}
+
+func TestParseOnlineListLine_Invalid(t *testing.T) {
+	_, err := parseOnlineListLine("joined the game")
+	if err == nil {
+		t.Fatalf("expected parse error")
+	}
+}

@@ -36,9 +36,18 @@ type Config struct {
 	HTTPTimeout        time.Duration
 	MaxRegionFiles     int
 	ScanDims           []int
+	ChestBounds        *ChestBounds
 	DefaultResultLimit int
 	MaxResults         int
 	LoopSleep          time.Duration
+}
+
+type ChestBounds struct {
+	Dim  int
+	MinX int
+	MaxX int
+	MinZ int
+	MaxZ int
 }
 
 type RuntimeState struct {
@@ -214,6 +223,7 @@ func loadConfig() (Config, error) {
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
 		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1")),
+		ChestBounds:        parseChestBounds(strings.TrimSpace(os.Getenv("INVENTORY_CHEST_BOUNDS"))),
 		DefaultResultLimit: max(1, getenvInt("INVENTORY_DEFAULT_LIMIT", 20)),
 		MaxResults:         max(1, getenvInt("INVENTORY_MAX_RESULTS", 100)),
 		LoopSleep:          15 * time.Second,
@@ -249,6 +259,41 @@ func parseDims(raw string) []int {
 		return []int{0, -1, 1}
 	}
 	return out
+}
+
+func parseChestBounds(raw string) *ChestBounds {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) != 5 {
+		return nil
+	}
+	vals := make([]int, 0, 5)
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil
+		}
+		vals = append(vals, n)
+	}
+	minX := vals[1]
+	maxX := vals[3]
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	minZ := vals[2]
+	maxZ := vals[4]
+	if minZ > maxZ {
+		minZ, maxZ = maxZ, minZ
+	}
+	return &ChestBounds{
+		Dim:  vals[0],
+		MinX: minX,
+		MaxX: maxX,
+		MinZ: minZ,
+		MaxZ: maxZ,
+	}
 }
 
 func nowUTC() string {
@@ -1221,9 +1266,16 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 				continue
 			}
 			for _, c := range chests {
+				if cfg.ChestBounds != nil {
+					if c.Dimension != cfg.ChestBounds.Dim ||
+						c.X < cfg.ChestBounds.MinX || c.X > cfg.ChestBounds.MaxX ||
+						c.Z < cfg.ChestBounds.MinZ || c.Z > cfg.ChestBounds.MaxZ {
+						continue
+					}
+				}
 				chestStacks += len(c.Items)
+				all = append(all, c)
 			}
-			all = append(all, chests...)
 		}
 	}
 	sort.Slice(all, func(i, j int) bool {
@@ -1255,7 +1307,11 @@ func main() {
 	client := &http.Client{Timeout: cfg.HTTPTimeout + 3*time.Second}
 	state := loadRuntimeState(stateFile)
 
-	log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval)
+	if cfg.ChestBounds != nil {
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
+	} else {
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval)
+	}
 
 	for {
 		if !cfg.Enabled {

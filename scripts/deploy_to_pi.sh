@@ -41,5 +41,5 @@ fi
 if [[ ! -f /home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env ]]; then
   cp /home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env.template /home/jhein/picoclaw-gtnh/deploy/env/dathost-bridge.env
 fi
-chmod +x /home/jhein/picoclaw-gtnh/workspace/gtnh_query /home/jhein/picoclaw-gtnh/workspace/gtnh_inventory /home/jhein/picoclaw-gtnh/workspace/mc_poll /home/jhein/picoclaw-gtnh/workspace/mc_say /home/jhein/picoclaw-gtnh/workspace/tools/*.py /home/jhein/picoclaw-gtnh/workspace/tools/*.sh /home/jhein/picoclaw-gtnh/scripts/*.sh || true
+chmod +x /home/jhein/picoclaw-gtnh/workspace/gtnh_query /home/jhein/picoclaw-gtnh/workspace/gtnh_inventory /home/jhein/picoclaw-gtnh/workspace/mc_poll /home/jhein/picoclaw-gtnh/workspace/mc_online /home/jhein/picoclaw-gtnh/workspace/mc_say /home/jhein/picoclaw-gtnh/workspace/tools/*.py /home/jhein/picoclaw-gtnh/workspace/tools/*.sh /home/jhein/picoclaw-gtnh/scripts/*.sh || true
 '
