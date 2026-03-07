@@ -102,6 +102,80 @@ lookup_item_label() {
 }
 
 format_stack_lines_with_names() {
+  raw_file="$(mktemp)"
+  key_file="$(mktemp)"
+  uniq_key_file="$(mktemp)"
+  label_file="$(mktemp)"
+  trap 'rm -f "$raw_file" "$key_file" "$uniq_key_file" "$label_file"' EXIT INT TERM HUP
+
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$raw_file"
+    case "$line" in
+      STACK\|*)
+        rec="${line#STACK|}"
+        src="${rec%%|*}"
+        rec="${rec#*|}"
+        id="${rec%%|*}"
+        rec="${rec#*|}"
+        damage="${rec%%|*}"
+        printf '%s:%s\n' "$id" "$damage" >> "$key_file"
+        ;;
+    esac
+  done
+
+  if [ -s "$key_file" ] && [ -f "$ITEMS_INDEX_FILE" ]; then
+    sort -u "$key_file" > "$uniq_key_file"
+    awk -F '\t' '
+      FNR == NR {
+        want[$1] = 1
+        split($1, parts, ":")
+        want_id[parts[1]] = 1
+        next
+      }
+      NR == 1 { next }
+      {
+        slug = $1
+        item_id = slug
+        sub(/d.*/, "", item_id)
+        item_damage = 0
+        if (slug ~ /d[0-9-]+$/) {
+          item_damage = slug
+          sub(/^.*d/, "", item_damage)
+        }
+        if (!(item_id in want_id)) {
+          next
+        }
+        label = ""
+        if ($2 != "") {
+          label = $2
+        } else if ($3 != "") {
+          label = $3
+        }
+        gsub(/[[:space:]]+/, " ", label)
+        sub(/^ /, "", label)
+        sub(/ $/, "", label)
+        key = item_id ":" item_damage
+        if ((key in want) && !(key in exact) && label != "") {
+          exact[key] = label
+        }
+        if (!(item_id in fallback) && label != "") {
+          fallback[item_id] = label
+        }
+      }
+      END {
+        for (key in want) {
+          split(key, parts, ":")
+          item_id = parts[1]
+          if (key in exact) {
+            print key "\t" exact[key]
+          } else if (item_id in fallback) {
+            print key "\t" fallback[item_id]
+          }
+        }
+      }
+    ' "$uniq_key_file" "$ITEMS_INDEX_FILE" > "$label_file"
+  fi
+
   while IFS= read -r line; do
     case "$line" in
       STACK\|*)
@@ -121,7 +195,11 @@ format_stack_lines_with_names() {
           custom=""
         fi
         custom="$(printf '%s' "$custom" | tr '\r\n\t' '   ' | tr -s ' ' | sed 's/^ //; s/ $//')"
-        name="$(lookup_item_label "$id" "$damage" | tr '\r\n\t' '   ' | tr -s ' ' | sed 's/^ //; s/ $//')"
+        name=""
+        if [ -s "$label_file" ]; then
+          name="$(awk -F '\t' -v key="$id:$damage" '$1 == key { print $2; exit }' "$label_file" 2>/dev/null || true)"
+        fi
+        name="$(printf '%s' "$name" | tr '\r\n\t' '   ' | tr -s ' ' | sed 's/^ //; s/ $//')"
         [ -n "$name" ] || name="unknown"
         source_note=""
         case "$src" in
@@ -137,7 +215,10 @@ format_stack_lines_with_names() {
         echo "$line"
         ;;
     esac
-  done
+  done < "$raw_file"
+
+  rm -f "$raw_file" "$key_file" "$uniq_key_file" "$label_file"
+  trap - EXIT INT TERM HUP
 }
 
 print_inventory_process_hint() {
