@@ -73,6 +73,7 @@ lookup_item_label() {
           v = $2
           gsub(/[[:space:]]+/, " ", v)
           sub(/^ /, "", v); sub(/ $/, "", v)
+          found = 1
           print v
           exit
         }
@@ -80,6 +81,7 @@ lookup_item_label() {
           v = $3
           gsub(/[[:space:]]+/, " ", v)
           sub(/^ /, "", v); sub(/ $/, "", v)
+          found = 1
           print v
           exit
         }
@@ -90,7 +92,7 @@ lookup_item_label() {
       }
     }
     END {
-      if (fallback != "") {
+      if (!found && fallback != "") {
         gsub(/[[:space:]]+/, " ", fallback)
         sub(/^ /, "", fallback); sub(/ $/, "", fallback)
         print fallback
