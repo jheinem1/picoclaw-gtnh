@@ -14,23 +14,37 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
+	DiscordToken string
+	PollInterval time.Duration
+	WorkDir      string
+	HTTPTimeout  time.Duration
+	Board        BoardConfig
+	InProgress   InProgressConfig
+}
+
+type BoardConfig struct {
 	Enabled           bool
-	DiscordToken      string
 	ChannelID         string
 	Title             string
 	MaxItemsPerColumn int
-	PollInterval      time.Duration
 	StateFile         string
 	PinMessage        bool
 	TasksCommand      string
-	WorkDir           string
-	HTTPTimeout       time.Duration
+}
+
+type InProgressConfig struct {
+	Enabled      bool
+	ChannelID    string
+	StateFile    string
+	TasksCommand string
+	MaxUpdates   int
 }
 
 type SyncState struct {
@@ -38,6 +52,16 @@ type SyncState struct {
 	ChannelID string `json:"channel_id"`
 	MessageID string `json:"message_id"`
 	LastHash  string `json:"last_hash"`
+}
+
+type InProgressMessageState struct {
+	MessageID string `json:"message_id"`
+	LastHash  string `json:"last_hash"`
+}
+
+type InProgressSyncState struct {
+	ChannelID    string                            `json:"channel_id"`
+	TaskMessages map[string]InProgressMessageState `json:"task_messages"`
 }
 
 type BoardSummary struct {
@@ -56,10 +80,10 @@ type BoardTask struct {
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
 	Title        string `json:"title"`
-	Notes        string `json:"notes"`
 	SortKey      int    `json:"sort_key"`
 	Owner        string `json:"owner"`
 	PausedReason string `json:"paused_reason"`
+	Description  string `json:"description"`
 }
 
 type BoardColumns struct {
@@ -73,6 +97,32 @@ type BoardPayload struct {
 	Board   string       `json:"board"`
 	Summary BoardSummary `json:"summary"`
 	Columns BoardColumns `json:"columns"`
+}
+
+type StatusUpdate struct {
+	Timestamp string `json:"timestamp"`
+	Author    string `json:"author"`
+	Text      string `json:"text"`
+}
+
+type InProgressTask struct {
+	ID            int            `json:"id"`
+	Status        string         `json:"status"`
+	Priority      string         `json:"priority"`
+	Area          string         `json:"area"`
+	CreatedAt     string         `json:"created_at"`
+	UpdatedAt     string         `json:"updated_at"`
+	Title         string         `json:"title"`
+	SortKey       int            `json:"sort_key"`
+	Owner         string         `json:"owner"`
+	PausedReason  string         `json:"paused_reason"`
+	Description   string         `json:"description"`
+	StatusUpdates []StatusUpdate `json:"status_updates"`
+}
+
+type InProgressPayload struct {
+	Tasks []InProgressTask `json:"tasks"`
+	Count int              `json:"count"`
 }
 
 type DiscordMessage struct {
@@ -89,10 +139,11 @@ type DiscordMessagePayload struct {
 }
 
 type DiscordEmbed struct {
-	Title  string             `json:"title,omitempty"`
-	Color  int                `json:"color,omitempty"`
-	Fields []DiscordEmbedItem `json:"fields,omitempty"`
-	Footer *DiscordFooter     `json:"footer,omitempty"`
+	Title       string             `json:"title,omitempty"`
+	Description string             `json:"description,omitempty"`
+	Color       int                `json:"color,omitempty"`
+	Fields      []DiscordEmbedItem `json:"fields,omitempty"`
+	Footer      *DiscordFooter     `json:"footer,omitempty"`
 }
 
 type DiscordEmbedItem struct {
@@ -152,17 +203,26 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		Enabled:           getenvBool("KANBAN_ENABLED", false),
-		DiscordToken:      token,
-		ChannelID:         strings.TrimSpace(getenv("KANBAN_CHANNEL_ID", "")),
-		Title:             getenv("KANBAN_TITLE", "GTNH Kanban Board"),
-		MaxItemsPerColumn: getenvInt("KANBAN_MAX_ITEMS_PER_COLUMN", 15),
-		PollInterval:      time.Duration(poll) * time.Second,
-		StateFile:         getenv("KANBAN_STATE_FILE", "/var/lib/kanban-sync/state.json"),
-		PinMessage:        getenvBool("KANBAN_PIN_MESSAGE", true),
-		TasksCommand:      getenv("KANBAN_TASKS_COMMAND", "sh gtnh_tasks board-json"),
-		WorkDir:           getenv("KANBAN_WORKDIR", "/root/.picoclaw/workspace"),
-		HTTPTimeout:       time.Duration(getenvInt("KANBAN_HTTP_TIMEOUT_SECONDS", 15)) * time.Second,
+		DiscordToken: token,
+		PollInterval: time.Duration(poll) * time.Second,
+		WorkDir:      getenv("KANBAN_WORKDIR", "/root/.picoclaw/workspace"),
+		HTTPTimeout:  time.Duration(getenvInt("KANBAN_HTTP_TIMEOUT_SECONDS", 15)) * time.Second,
+		Board: BoardConfig{
+			Enabled:           getenvBool("KANBAN_ENABLED", false),
+			ChannelID:         strings.TrimSpace(getenv("KANBAN_CHANNEL_ID", "")),
+			Title:             getenv("KANBAN_TITLE", "GTNH Kanban Board"),
+			MaxItemsPerColumn: getenvInt("KANBAN_MAX_ITEMS_PER_COLUMN", 15),
+			StateFile:         getenv("KANBAN_STATE_FILE", "/var/lib/kanban-sync/state.json"),
+			PinMessage:        getenvBool("KANBAN_PIN_MESSAGE", true),
+			TasksCommand:      getenv("KANBAN_TASKS_COMMAND", "sh gtnh_tasks board-json"),
+		},
+		InProgress: InProgressConfig{
+			Enabled:      getenvBool("KANBAN_IN_PROGRESS_ENABLED", false),
+			ChannelID:    strings.TrimSpace(getenv("KANBAN_IN_PROGRESS_CHANNEL_ID", "")),
+			StateFile:    getenv("KANBAN_IN_PROGRESS_STATE_FILE", "/var/lib/kanban-sync/in-progress-state.json"),
+			TasksCommand: getenv("KANBAN_IN_PROGRESS_TASKS_COMMAND", "sh gtnh_tasks in-progress-json"),
+			MaxUpdates:   getenvInt("KANBAN_IN_PROGRESS_MAX_UPDATES", 8),
+		},
 	}
 }
 
@@ -182,38 +242,73 @@ func loadState(path string) SyncState {
 	return st
 }
 
-func saveState(path string, st SyncState) {
+func loadInProgressState(path string) InProgressSyncState {
+	st := InProgressSyncState{TaskMessages: map[string]InProgressMessageState{}}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("event=in_progress_state_load_error file=%q err=%q", path, err.Error())
+		}
+		return st
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		log.Printf("event=in_progress_state_parse_error file=%q err=%q", path, err.Error())
+		return InProgressSyncState{TaskMessages: map[string]InProgressMessageState{}}
+	}
+	if st.TaskMessages == nil {
+		st.TaskMessages = map[string]InProgressMessageState{}
+	}
+	return st
+}
+
+func saveJSONFile(path string, v any, eventPrefix string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Printf("event=kanban_state_dir_error err=%q", err.Error())
+		log.Printf("event=%s_dir_error err=%q", eventPrefix, err.Error())
 		return
 	}
-	raw, err := json.MarshalIndent(st, "", "  ")
+	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		log.Printf("event=kanban_state_encode_error err=%q", err.Error())
+		log.Printf("event=%s_encode_error err=%q", eventPrefix, err.Error())
 		return
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("event=kanban_state_write_error err=%q", err.Error())
+		log.Printf("event=%s_write_error err=%q", eventPrefix, err.Error())
 		return
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		log.Printf("event=kanban_state_rename_error err=%q", err.Error())
+		log.Printf("event=%s_rename_error err=%q", eventPrefix, err.Error())
 	}
 }
 
-func runBoardJSON(cfg Config) (BoardPayload, error) {
-	cmd := exec.Command("sh", "-c", cfg.TasksCommand)
+func saveState(path string, st SyncState) {
+	saveJSONFile(path, st, "kanban_state")
+}
+
+func saveInProgressState(path string, st InProgressSyncState) {
+	saveJSONFile(path, st, "in_progress_state")
+}
+
+func runJSONCommand[T any](cfg Config, command string) (T, error) {
+	var parsed T
+	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = cfg.WorkDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return BoardPayload{}, fmt.Errorf("tasks command failed: %w: %s", err, strings.TrimSpace(string(out)))
+		return parsed, fmt.Errorf("tasks command failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	var board BoardPayload
-	if err := json.Unmarshal(out, &board); err != nil {
-		return BoardPayload{}, fmt.Errorf("tasks json parse failed: %w", err)
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return parsed, fmt.Errorf("tasks json parse failed: %w", err)
 	}
-	return board, nil
+	return parsed, nil
+}
+
+func runBoardJSON(cfg Config) (BoardPayload, error) {
+	return runJSONCommand[BoardPayload](cfg, cfg.Board.TasksCommand)
+}
+
+func runInProgressJSON(cfg Config) (InProgressPayload, error) {
+	return runJSONCommand[InProgressPayload](cfg, cfg.InProgress.TasksCommand)
 }
 
 func cut(s string, max int) string {
@@ -283,7 +378,7 @@ func columnText(tasks []BoardTask, maxItems int) string {
 	return "```text\n" + cut(lines[0], 1000) + "\n```"
 }
 
-func renderMessage(cfg Config, board BoardPayload) DiscordMessagePayload {
+func renderBoardMessage(cfg BoardConfig, board BoardPayload) DiscordMessagePayload {
 	title := cfg.Title
 	if strings.TrimSpace(board.Board) != "" {
 		title = strings.TrimSpace(board.Board)
@@ -298,6 +393,83 @@ func renderMessage(cfg Config, board BoardPayload) DiscordMessagePayload {
 			{Name: fmt.Sprintf("Completed (%d)", board.Summary.Done), Value: columnText(board.Columns.Done, cfg.MaxItemsPerColumn), Inline: false},
 		},
 		Footer: &DiscordFooter{Text: fmt.Sprintf("Total tasks: %d | auto-refresh", board.Summary.Total)},
+	}
+	return DiscordMessagePayload{Embeds: []DiscordEmbed{embed}}
+}
+
+func formatStatusUpdates(updates []StatusUpdate, maxUpdates int) string {
+	if len(updates) == 0 {
+		return "No status updates yet."
+	}
+	if maxUpdates <= 0 {
+		maxUpdates = 8
+	}
+	lines := make([]string, 0, maxUpdates)
+	for i := len(updates) - 1; i >= 0 && len(lines) < maxUpdates; i-- {
+		update := updates[i]
+		line := "- " + strings.TrimSpace(update.Timestamp)
+		if author := strings.TrimSpace(update.Author); author != "" {
+			line += " [" + cut(author, 32) + "]"
+		}
+		text := strings.TrimSpace(update.Text)
+		if text != "" {
+			line += " " + text
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return "No status updates yet."
+	}
+
+	value := strings.Join(lines, "\n")
+	if len(value) <= 1024 {
+		return value
+	}
+	for len(lines) > 1 {
+		lines = lines[:len(lines)-1]
+		value = strings.Join(lines, "\n")
+		if len(value) <= 1024 {
+			return value
+		}
+	}
+	return cut(lines[0], 1024)
+}
+
+func renderInProgressMessage(cfg InProgressConfig, task InProgressTask) DiscordMessagePayload {
+	description := strings.TrimSpace(task.Description)
+	if description == "" {
+		description = "No description yet."
+	}
+
+	owner := strings.TrimSpace(task.Owner)
+	if owner == "" {
+		owner = "unassigned"
+	}
+	priority := strings.TrimSpace(task.Priority)
+	if priority == "" {
+		priority = "med"
+	}
+	area := strings.TrimSpace(task.Area)
+	if area == "" {
+		area = "general"
+	}
+	updatedAt := strings.TrimSpace(task.UpdatedAt)
+	if updatedAt == "" {
+		updatedAt = "unknown"
+	}
+
+	embed := DiscordEmbed{
+		Title:       cut(fmt.Sprintf("%d - %s", task.ID, task.Title), 256),
+		Description: cut(description, 4096),
+		Color:       0xF97316,
+		Fields: []DiscordEmbedItem{
+			{Name: "Owner", Value: cut(owner, 1024), Inline: true},
+			{Name: "Priority", Value: cut(priority, 1024), Inline: true},
+			{Name: "Area", Value: cut(area, 1024), Inline: true},
+			{Name: "Updated", Value: cut(updatedAt, 1024), Inline: false},
+			{Name: "Status Updates", Value: formatStatusUpdates(task.StatusUpdates, cfg.MaxUpdates), Inline: false},
+		},
+		Footer: &DiscordFooter{Text: "Removed automatically when the task leaves in progress"},
 	}
 	return DiscordMessagePayload{Embeds: []DiscordEmbed{embed}}
 }
@@ -371,8 +543,8 @@ func doDiscordJSON(client *http.Client, cfg Config, method, path string, body []
 	return nil, 0, fmt.Errorf("discord API %s %s failed after retries", method, path)
 }
 
-func fetchGuildID(client *http.Client, cfg Config) (string, error) {
-	body, _, err := doDiscordJSON(client, cfg, http.MethodGet, "/channels/"+cfg.ChannelID, nil)
+func fetchGuildID(client *http.Client, cfg Config, channelID string) (string, error) {
+	body, _, err := doDiscordJSON(client, cfg, http.MethodGet, "/channels/"+channelID, nil)
 	if err != nil {
 		return "", err
 	}
@@ -383,9 +555,9 @@ func fetchGuildID(client *http.Client, cfg Config) (string, error) {
 	return strings.TrimSpace(channel.GuildID), nil
 }
 
-func createMessage(client *http.Client, cfg Config, payload DiscordMessagePayload) (string, error) {
+func createMessage(client *http.Client, cfg Config, channelID string, payload DiscordMessagePayload) (string, error) {
 	raw, _ := json.Marshal(payload)
-	body, _, err := doDiscordJSON(client, cfg, http.MethodPost, "/channels/"+cfg.ChannelID+"/messages", raw)
+	body, _, err := doDiscordJSON(client, cfg, http.MethodPost, "/channels/"+channelID+"/messages", raw)
 	if err != nil {
 		return "", err
 	}
@@ -399,83 +571,193 @@ func createMessage(client *http.Client, cfg Config, payload DiscordMessagePayloa
 	return msg.ID, nil
 }
 
-func editMessage(client *http.Client, cfg Config, messageID string, payload DiscordMessagePayload) error {
+func editMessage(client *http.Client, cfg Config, channelID, messageID string, payload DiscordMessagePayload) error {
 	raw, _ := json.Marshal(payload)
-	_, _, err := doDiscordJSON(client, cfg, http.MethodPatch, "/channels/"+cfg.ChannelID+"/messages/"+messageID, raw)
+	_, _, err := doDiscordJSON(client, cfg, http.MethodPatch, "/channels/"+channelID+"/messages/"+messageID, raw)
 	return err
 }
 
-func pinMessage(client *http.Client, cfg Config, messageID string) error {
-	_, _, err := doDiscordJSON(client, cfg, http.MethodPut, "/channels/"+cfg.ChannelID+"/pins/"+messageID, nil)
+func deleteMessage(client *http.Client, cfg Config, channelID, messageID string) error {
+	_, _, err := doDiscordJSON(client, cfg, http.MethodDelete, "/channels/"+channelID+"/messages/"+messageID, nil)
 	return err
 }
 
-func syncOnce(client *http.Client, cfg Config, st *SyncState) error {
+func pinMessage(client *http.Client, cfg Config, channelID, messageID string) error {
+	_, _, err := doDiscordJSON(client, cfg, http.MethodPut, "/channels/"+channelID+"/pins/"+messageID, nil)
+	return err
+}
+
+func syncBoardOnce(client *http.Client, cfg Config, st *SyncState) error {
 	board, err := runBoardJSON(cfg)
 	if err != nil {
 		return err
 	}
-	payload := renderMessage(cfg, board)
+	payload := renderBoardMessage(cfg.Board, board)
 	hash := payloadHash(payload)
 
-	if st.ChannelID == cfg.ChannelID && st.MessageID != "" && st.LastHash == hash {
+	if st.ChannelID == cfg.Board.ChannelID && st.MessageID != "" && st.LastHash == hash {
 		return nil
 	}
 
 	if strings.TrimSpace(st.GuildID) == "" {
-		guildID, err := fetchGuildID(client, cfg)
+		guildID, err := fetchGuildID(client, cfg, cfg.Board.ChannelID)
 		if err != nil {
-			log.Printf("event=kanban_channel_lookup_failed channel_id=%s err=%q", cfg.ChannelID, err.Error())
+			log.Printf("event=kanban_channel_lookup_failed channel_id=%s err=%q", cfg.Board.ChannelID, err.Error())
 		} else {
 			st.GuildID = guildID
 		}
 	}
 
 	messageID := st.MessageID
-	if strings.TrimSpace(messageID) == "" || st.ChannelID != cfg.ChannelID {
-		messageID, err = createMessage(client, cfg, payload)
+	if strings.TrimSpace(messageID) == "" || st.ChannelID != cfg.Board.ChannelID {
+		messageID, err = createMessage(client, cfg, cfg.Board.ChannelID, payload)
 		if err != nil {
 			return err
 		}
-		if cfg.PinMessage {
-			if err := pinMessage(client, cfg, messageID); err != nil {
-				log.Printf("event=kanban_pin_failed channel_id=%s message_id=%s err=%q", cfg.ChannelID, messageID, err.Error())
+		if cfg.Board.PinMessage {
+			if err := pinMessage(client, cfg, cfg.Board.ChannelID, messageID); err != nil {
+				log.Printf("event=kanban_pin_failed channel_id=%s message_id=%s err=%q", cfg.Board.ChannelID, messageID, err.Error())
 			}
 		}
-		log.Printf("event=kanban_message_created channel_id=%s message_id=%s", cfg.ChannelID, messageID)
+		log.Printf("event=kanban_message_created channel_id=%s message_id=%s", cfg.Board.ChannelID, messageID)
 	} else {
-		err = editMessage(client, cfg, messageID, payload)
+		err = editMessage(client, cfg, cfg.Board.ChannelID, messageID, payload)
 		if err != nil {
 			if strings.Contains(err.Error(), "HTTP 404") {
-				messageID, err = createMessage(client, cfg, payload)
+				messageID, err = createMessage(client, cfg, cfg.Board.ChannelID, payload)
 				if err != nil {
 					return err
 				}
-				if cfg.PinMessage {
-					if err := pinMessage(client, cfg, messageID); err != nil {
-						log.Printf("event=kanban_pin_failed channel_id=%s message_id=%s err=%q", cfg.ChannelID, messageID, err.Error())
+				if cfg.Board.PinMessage {
+					if err := pinMessage(client, cfg, cfg.Board.ChannelID, messageID); err != nil {
+						log.Printf("event=kanban_pin_failed channel_id=%s message_id=%s err=%q", cfg.Board.ChannelID, messageID, err.Error())
 					}
 				}
-				log.Printf("event=kanban_message_recreated channel_id=%s message_id=%s", cfg.ChannelID, messageID)
+				log.Printf("event=kanban_message_recreated channel_id=%s message_id=%s", cfg.Board.ChannelID, messageID)
 			} else {
 				return err
 			}
 		} else {
-			log.Printf("event=kanban_message_updated channel_id=%s message_id=%s", cfg.ChannelID, messageID)
+			log.Printf("event=kanban_message_updated channel_id=%s message_id=%s", cfg.Board.ChannelID, messageID)
 		}
 	}
 
-	st.ChannelID = cfg.ChannelID
+	st.ChannelID = cfg.Board.ChannelID
 	st.MessageID = messageID
 	st.LastHash = hash
-	saveState(cfg.StateFile, *st)
+	saveState(cfg.Board.StateFile, *st)
+	return nil
+}
+
+func deleteTrackedMessages(client *http.Client, cfg Config, channelID string, messages map[string]InProgressMessageState) {
+	for taskID, tracked := range messages {
+		if strings.TrimSpace(tracked.MessageID) == "" {
+			continue
+		}
+		if err := deleteMessage(client, cfg, channelID, tracked.MessageID); err != nil && !strings.Contains(err.Error(), "HTTP 404") {
+			log.Printf("event=in_progress_message_delete_failed channel_id=%s task_id=%s message_id=%s err=%q", channelID, taskID, tracked.MessageID, err.Error())
+		}
+	}
+}
+
+func syncInProgressOnce(client *http.Client, cfg Config, st *InProgressSyncState) error {
+	if st.TaskMessages == nil {
+		st.TaskMessages = map[string]InProgressMessageState{}
+	}
+	if st.ChannelID != "" && st.ChannelID != cfg.InProgress.ChannelID {
+		deleteTrackedMessages(client, cfg, st.ChannelID, st.TaskMessages)
+		st.TaskMessages = map[string]InProgressMessageState{}
+		st.ChannelID = cfg.InProgress.ChannelID
+	}
+
+	payload, err := runInProgressJSON(cfg)
+	if err != nil {
+		return err
+	}
+
+	sort.Slice(payload.Tasks, func(i, j int) bool {
+		if payload.Tasks[i].SortKey == payload.Tasks[j].SortKey {
+			return payload.Tasks[i].ID < payload.Tasks[j].ID
+		}
+		return payload.Tasks[i].SortKey < payload.Tasks[j].SortKey
+	})
+
+	seen := make(map[string]struct{}, len(payload.Tasks))
+	changed := false
+
+	for _, task := range payload.Tasks {
+		taskID := strconv.Itoa(task.ID)
+		seen[taskID] = struct{}{}
+		msgPayload := renderInProgressMessage(cfg.InProgress, task)
+		hash := payloadHash(msgPayload)
+		tracked := st.TaskMessages[taskID]
+
+		if st.ChannelID == cfg.InProgress.ChannelID && tracked.MessageID != "" && tracked.LastHash == hash {
+			continue
+		}
+
+		if strings.TrimSpace(tracked.MessageID) == "" || st.ChannelID != cfg.InProgress.ChannelID {
+			messageID, err := createMessage(client, cfg, cfg.InProgress.ChannelID, msgPayload)
+			if err != nil {
+				return err
+			}
+			st.TaskMessages[taskID] = InProgressMessageState{MessageID: messageID, LastHash: hash}
+			log.Printf("event=in_progress_message_created channel_id=%s task_id=%s message_id=%s", cfg.InProgress.ChannelID, taskID, messageID)
+			changed = true
+			continue
+		}
+
+		err = editMessage(client, cfg, cfg.InProgress.ChannelID, tracked.MessageID, msgPayload)
+		if err != nil {
+			if strings.Contains(err.Error(), "HTTP 404") {
+				messageID, createErr := createMessage(client, cfg, cfg.InProgress.ChannelID, msgPayload)
+				if createErr != nil {
+					return createErr
+				}
+				st.TaskMessages[taskID] = InProgressMessageState{MessageID: messageID, LastHash: hash}
+				log.Printf("event=in_progress_message_recreated channel_id=%s task_id=%s message_id=%s", cfg.InProgress.ChannelID, taskID, messageID)
+				changed = true
+				continue
+			}
+			return err
+		}
+
+		tracked.LastHash = hash
+		st.TaskMessages[taskID] = tracked
+		log.Printf("event=in_progress_message_updated channel_id=%s task_id=%s message_id=%s", cfg.InProgress.ChannelID, taskID, tracked.MessageID)
+		changed = true
+	}
+
+	for taskID, tracked := range st.TaskMessages {
+		if _, ok := seen[taskID]; ok {
+			continue
+		}
+		if strings.TrimSpace(tracked.MessageID) != "" {
+			err := deleteMessage(client, cfg, cfg.InProgress.ChannelID, tracked.MessageID)
+			if err != nil && !strings.Contains(err.Error(), "HTTP 404") {
+				return err
+			}
+			log.Printf("event=in_progress_message_deleted channel_id=%s task_id=%s message_id=%s", cfg.InProgress.ChannelID, taskID, tracked.MessageID)
+		}
+		delete(st.TaskMessages, taskID)
+		changed = true
+	}
+
+	if st.ChannelID != cfg.InProgress.ChannelID {
+		st.ChannelID = cfg.InProgress.ChannelID
+		changed = true
+	}
+
+	if changed {
+		saveInProgressState(cfg.InProgress.StateFile, *st)
+	}
 	return nil
 }
 
 func main() {
 	cfg := loadConfig()
-	if !cfg.Enabled {
-		log.Printf("event=kanban_disabled message=%q", "KANBAN_ENABLED=false, kanban-sync idle")
+	if !cfg.Board.Enabled && !cfg.InProgress.Enabled {
+		log.Printf("event=kanban_disabled message=%q", "KANBAN_ENABLED=false and KANBAN_IN_PROGRESS_ENABLED=false, kanban-sync idle")
 		for {
 			time.Sleep(5 * time.Minute)
 		}
@@ -483,22 +765,40 @@ func main() {
 	if cfg.DiscordToken == "" {
 		log.Fatalf("missing Discord bot token: set KANBAN_DISCORD_TOKEN or PICOCLAW_CHANNELS_DISCORD_TOKEN")
 	}
-	if cfg.ChannelID == "" {
+	if cfg.Board.Enabled && cfg.Board.ChannelID == "" {
 		log.Fatalf("missing KANBAN_CHANNEL_ID")
+	}
+	if cfg.InProgress.Enabled && cfg.InProgress.ChannelID == "" {
+		log.Fatalf("missing KANBAN_IN_PROGRESS_CHANNEL_ID")
 	}
 
 	client := &http.Client{Timeout: cfg.HTTPTimeout + 5*time.Second}
-	state := loadState(cfg.StateFile)
+	boardState := loadState(cfg.Board.StateFile)
+	inProgressState := loadInProgressState(cfg.InProgress.StateFile)
 
-	if err := syncOnce(client, cfg, &state); err != nil {
-		log.Printf("event=kanban_sync_error err=%q", err.Error())
+	if cfg.Board.Enabled {
+		if err := syncBoardOnce(client, cfg, &boardState); err != nil {
+			log.Printf("event=kanban_sync_error err=%q", err.Error())
+		}
+	}
+	if cfg.InProgress.Enabled {
+		if err := syncInProgressOnce(client, cfg, &inProgressState); err != nil {
+			log.Printf("event=in_progress_sync_error err=%q", err.Error())
+		}
 	}
 
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if err := syncOnce(client, cfg, &state); err != nil {
-			log.Printf("event=kanban_sync_error err=%q", err.Error())
+		if cfg.Board.Enabled {
+			if err := syncBoardOnce(client, cfg, &boardState); err != nil {
+				log.Printf("event=kanban_sync_error err=%q", err.Error())
+			}
+		}
+		if cfg.InProgress.Enabled {
+			if err := syncInProgressOnce(client, cfg, &inProgressState); err != nil {
+				log.Printf("event=in_progress_sync_error err=%q", err.Error())
+			}
 		}
 	}
 }

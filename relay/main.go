@@ -59,7 +59,7 @@ var makeRe = regexp.MustCompile(`(?i)(?:how much .* to )?make\s+(?:a|an|the)?\s*
 var specificGTRe = regexp.MustCompile(`(?i)\b(recipe|recipes|refine|smelt|craft|make|turn .* into|what does .* (do|refine)|ore|dust|ingot|plate|rod|pickaxe|tool material)\b`)
 var gtnhDomainRe = regexp.MustCompile(`(?i)\b(gtnh|gregtech|steam|pipe|fluid|throughput|boiler|turbine|lv|mv|hv|ev|iv|luv|zpm|uv|machine|multiblock|ore|dust|ingot|plate|rod|cable|wire)\b`)
 var taskBoardRe = regexp.MustCompile(`(?i)\b(task\s*board|tasks?\s+board|open\s+tasks?|task\s+list)\b`)
-var taskMutationIntentRe = regexp.MustCompile(`(?i)\b(assign|reassign|move|pause|unpause|resume|reopen|describe|description)\b`)
+var taskMutationIntentRe = regexp.MustCompile(`(?i)\b(assign|reassign|move|pause|unpause|resume|reopen|describe|description|update|status update|progress update)\b`)
 var inventoryIntentRe = regexp.MustCompile(`(?i)\b(who has|where is|which chest|inventory|inventories|in chests?|in my chest|has item|holding|stored)\b`)
 var safetyGuardReplyRe = regexp.MustCompile(`(?i)safety guard|dangerous pattern`)
 var coordTupleCountRe = regexp.MustCompile(`\((-?\d+),(-?\d+),(-?\d+)\)(?:×|:)(\d+)`)
@@ -260,7 +260,9 @@ func askAgent(cfg Config, ev ConsoleEvent, session string, mustVerify bool) (str
 	if taskMutationIntentRe.MatchString(ev.Text) {
 		prompt += "\nIf this is a GTNH task-management request, you should execute the task command directly in workspace using sh gtnh_tasks, then reply with the command result."
 		prompt += "\nYou do have access to task tools. Do not claim you cannot run board commands."
-		prompt += "\nUseful commands: sh gtnh_tasks reassign <id> <owner>, sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id>] [--reason \"...\"], sh gtnh_tasks pause <id> \"...\", sh gtnh_tasks unpause <id>, sh gtnh_tasks describe <id> \"...\"."
+		prompt += "\nUseful commands: sh gtnh_tasks reassign <id> <owner>, sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id>] [--reason \"...\"], sh gtnh_tasks pause <id> \"...\", sh gtnh_tasks unpause <id>, sh gtnh_tasks describe <id> \"...\", sh gtnh_tasks status-update <id> \"...\"."
+		prompt += "\nFor requests to add a progress update or status update to an existing task, use exactly: sh gtnh_tasks status-update <id> \"<update text>\"."
+		prompt += "\nDo not invent alternate task-update commands, and do not prepend cd or use shell chaining."
 	}
 	if inventoryIntentRe.MatchString(ev.Text) {
 		prompt += "\nIf this asks who has an item, where an item is stored, or chest/inventory location, run exactly one inventory command (no cd/&& chaining) and answer only from that command output."
@@ -328,8 +330,8 @@ func directWikiReply(cfg Config, question string) (string, error) {
 	}
 
 	var payload struct {
-		OK       bool `json:"ok"`
-		Results  []struct {
+		OK      bool `json:"ok"`
+		Results []struct {
 			Title string `json:"title"`
 			URL   string `json:"url"`
 		} `json:"results"`

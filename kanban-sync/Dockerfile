@@ -5,7 +5,7 @@ COPY main.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/kanban-sync ./main.go
 
 FROM docker.io/alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates python3
 WORKDIR /app
 COPY --from=builder /out/kanban-sync /usr/local/bin/kanban-sync
 RUN mkdir -p /var/lib/kanban-sync

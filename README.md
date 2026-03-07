@@ -73,10 +73,12 @@ Use task tracking commands from workspace root:
 - Pause task with reason: `sh gtnh_tasks pause 3 "Waiting on Industrial TNT (#2)"`
 - Unpause task: `sh gtnh_tasks unpause 3`
 - Set living description: `sh gtnh_tasks describe 3 "Need 12 titanium ingots and one nether star. Blocked on TNT chain."`
+- Add status update: `sh gtnh_tasks status-update 3 "Got the heaters built; still short on bronze pipes."`
+- Show status history: `sh gtnh_tasks status-history 3`
+- In-progress JSON (for automation/services): `sh gtnh_tasks in-progress-json`
 - List tasks: `sh gtnh_tasks list --open`
 - Mark done: `sh gtnh_tasks done 3`
 - Reopen: `sh gtnh_tasks reopen 3`
-- Add note: `sh gtnh_tasks note 3 "Need more kanthal"`
 - Show detail: `sh gtnh_tasks show 3`
 - Summary: `sh gtnh_tasks summary`
 - Check-in due in-progress tasks: `sh gtnh_task_checkin check`
@@ -84,15 +86,26 @@ Use task tracking commands from workspace root:
 
 Task data is stored at `workspace/state/gtnh_tasks.tsv`.
 For Discord display consistency, prefer `board-code` and post output verbatim.
-Task schema now includes Kanban and metadata fields (`kanban_status`, `sort_key`, `owner`, `paused_reason`, `description`) with automatic migration for older TSV rows.
+Task schema now includes Kanban and metadata fields (`kanban_status`, `sort_key`, `owner`, `paused_reason`, `description`) with automatic migration for older TSV rows. Status-update history is stored separately in `workspace/state/gtnh_task_status_updates.json`.
 
 ## Discord Kanban sync service
-`kanban-sync` keeps one pinned board embed updated in a fixed Discord channel:
-- Source of truth: `sh gtnh_tasks board-json`
+`kanban-sync` supports two Discord outputs:
+- Board sync: one pinned board embed from `sh gtnh_tasks board-json`
+- In-progress sync: one embed per active task from `sh gtnh_tasks in-progress-json`
+
+Board sync:
 - Channel ID: `KANBAN_CHANNEL_ID` (default template is `1477539994825392128`)
-- Poll interval: `KANBAN_POLL_INTERVAL_SECONDS` (default `10`)
 - Enable with: `KANBAN_ENABLED=true` in `deploy/env/picoclaw.env`
 - Board columns rendered in Discord: `Backlog`, `In Progress`, `Paused`, `Completed`
+
+In-progress sync:
+- Channel ID: `KANBAN_IN_PROGRESS_CHANNEL_ID` (default template is `1479648899575844974`)
+- Enable with: `KANBAN_IN_PROGRESS_ENABLED=true`
+- Each embed includes the task description plus recent status updates
+- Messages are removed automatically when tasks leave `doing`
+
+Shared:
+- Poll interval: `KANBAN_POLL_INTERVAL_SECONDS` (default `10`)
 
 Core env vars in `deploy/env/picoclaw.env`:
 - `KANBAN_ENABLED`
@@ -101,6 +114,9 @@ Core env vars in `deploy/env/picoclaw.env`:
 - `KANBAN_MAX_ITEMS_PER_COLUMN`
 - `KANBAN_POLL_INTERVAL_SECONDS`
 - `KANBAN_PIN_MESSAGE`
+- `KANBAN_IN_PROGRESS_ENABLED`
+- `KANBAN_IN_PROGRESS_CHANNEL_ID`
+- `KANBAN_IN_PROGRESS_MAX_UPDATES`
 
 The bot workspace policy (`workspace/AGENTS.md`) is configured to prefer this API-first path.
 

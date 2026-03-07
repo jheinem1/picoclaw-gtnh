@@ -43,6 +43,7 @@ services:
       - ./env/picoclaw.env
     environment:
       - KANBAN_STATE_FILE=/var/lib/kanban-sync/state.json
+      - KANBAN_IN_PROGRESS_STATE_FILE=/var/lib/kanban-sync/in-progress-state.json
       - KANBAN_WORKDIR=/root/.picoclaw/workspace
     volumes:
       - ../runtime/kanban-sync:/var/lib/kanban-sync

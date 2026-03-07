@@ -29,9 +29,10 @@ count_doing() {
   awk -F '\t' '
     NR==1 { next }
     {
-      k=$9
+      k=$8
       if (k=="") {
         if ($2=="done") k="done"
+        else if ($2=="doing") k="doing"
         else k="todo"
       }
       if (k=="doing") c++
@@ -52,9 +53,10 @@ due_items() {
     }
     NR==1 { next }
     {
-      k=$9
+      k=$8
       if (k=="") {
         if ($2=="done") k="done"
+        else if ($2=="doing") k="doing"
         else k="todo"
       }
       if (k!="doing") next
