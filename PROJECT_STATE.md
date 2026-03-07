@@ -30,7 +30,7 @@ Last updated: 2026-03-01
 
 ## Model/Auth
 - Provider: `openai` via OAuth
-- Model: `gpt-5.4`
+- Model: `gpt-5.1-codex-mini`
 - Auth file: `/home/jhein/picoclaw-gtnh/runtime/picoclaw/auth.json`
 
 ## DatHost bridge (v1)
