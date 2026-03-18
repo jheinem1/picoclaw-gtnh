@@ -113,9 +113,11 @@ Use task tracking commands from workspace root:
 - Board view (best for Discord): `sh gtnh_tasks board`
 - Board view wrapped for Discord code blocks: `sh gtnh_tasks board-code`
 - Board JSON (for automation/services): `sh gtnh_tasks board-json`
-- Add task: `sh gtnh_tasks add "Build MV EBF line" --priority high --area steel --status todo`
+- Add task: `sh gtnh_tasks add "Build MV EBF line" --priority high --area steel --status todo --owner Snow --owner Alice`
 - Move task column: `sh gtnh_tasks move 3 --status doing`
-- Reassign in-progress owner: `sh gtnh_tasks reassign 3 Snow`
+- Add owner(s): `sh gtnh_tasks assign 3 Snow Alice`
+- Remove owner(s): `sh gtnh_tasks unassign 3 Alice`
+- Reassign in-progress owner(s): `sh gtnh_tasks reassign 3 Snow Alice`
 - Pause task with reason: `sh gtnh_tasks pause 3 "Waiting on Industrial TNT (#2)"`
 - Unpause task: `sh gtnh_tasks unpause 3`
 - Set living description: `sh gtnh_tasks describe 3 "Need 12 titanium ingots and one nether star. Blocked on TNT chain."`
@@ -132,7 +134,7 @@ Use task tracking commands from workspace root:
 
 Task data is stored at `workspace/state/gtnh_tasks.tsv`.
 For Discord display consistency, prefer `board-code` and post output verbatim.
-Task schema now includes Kanban and metadata fields (`kanban_status`, `sort_key`, `owner`, `paused_reason`, `description`) with automatic migration for older TSV rows. Status-update history is stored separately in `workspace/state/gtnh_task_status_updates.json`.
+Task schema now includes Kanban and metadata fields (`kanban_status`, `sort_key`, `owner`, `paused_reason`, `description`) with automatic migration for older TSV rows. `owner` stores a comma-separated assignee list when a task has multiple people. Use `assign` and `unassign` to mutate that list incrementally. Status-update history is stored separately in `workspace/state/gtnh_task_status_updates.json`.
 
 ## Discord Kanban sync service
 `kanban-sync` supports two Discord outputs:

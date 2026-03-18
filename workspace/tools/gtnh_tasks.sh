@@ -9,14 +9,16 @@ STATUS_FILE="${GTNH_TASKS_STATUS_FILE:-state/gtnh_task_status_updates.json}"
 usage() {
   cat <<'USAGE'
 usage:
-  sh gtnh_tasks add "<title>" [--priority low|med|high] [--area <name>] [--status todo|doing|paused|done] [--owner <id>] [--paused-reason "<text>"] [--description "<text>"]
+  sh gtnh_tasks add "<title>" [--priority low|med|high] [--area <name>] [--status todo|doing|paused|done] [--owner <id> ...] [--paused-reason "<text>"] [--description "<text>"]
   sh gtnh_tasks list [--all|--open|--done] [--area <name>]
   sh gtnh_tasks board
   sh gtnh_tasks board-code
   sh gtnh_tasks board-json
   sh gtnh_tasks in-progress-json
-  sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id>] [--reason "<text>"]
-  sh gtnh_tasks reassign <id> <owner>
+  sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id> ...] [--reason "<text>"]
+  sh gtnh_tasks assign <id> <owner> [<owner> ...]
+  sh gtnh_tasks unassign <id> <owner> [<owner> ...]
+  sh gtnh_tasks reassign <id> <owner> [<owner> ...]
   sh gtnh_tasks pause <id> "<reason>"
   sh gtnh_tasks unpause <id>
   sh gtnh_tasks describe <id> "<description>"
@@ -36,6 +38,105 @@ now_utc() {
 
 sanitize() {
   printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/  */ /g; s/^ //; s/ $//'
+}
+
+append_owner() {
+  candidate="$(sanitize "$1")"
+  [ -n "$candidate" ] || return 0
+  if [ -n "${owner:-}" ]; then
+    owner="$owner, $candidate"
+  else
+    owner="$candidate"
+  fi
+}
+
+normalize_owner_list() {
+  input="$(sanitize "${1:-}")"
+  [ -n "$input" ] || return 0
+  printf '%s\n' "$input" | awk -F ',' '
+    function trim(s) {
+      sub(/^[[:space:]]+/, "", s)
+      sub(/[[:space:]]+$/, "", s)
+      return s
+    }
+    {
+      for (i = 1; i <= NF; i++) {
+        candidate = trim($i)
+        if (candidate != "" && !seen[candidate]++) {
+          out = out (out == "" ? "" : ", ") candidate
+        }
+      }
+      print out
+    }
+  '
+}
+
+owner_list_add() {
+  current="$(normalize_owner_list "${1:-}")"
+  shift || true
+  add=""
+  while [ "$#" -gt 0 ]; do
+    candidate="$(sanitize "$1")"
+    if [ -n "$candidate" ]; then
+      if [ -n "$add" ]; then
+        add="$add, $candidate"
+      else
+        add="$candidate"
+      fi
+    fi
+    shift
+  done
+  if [ -n "$add" ]; then
+    owner="$(normalize_owner_list "$current${current:+, }$add")"
+  else
+    owner="$current"
+  fi
+}
+
+owner_list_remove() {
+  current="$(normalize_owner_list "${1:-}")"
+  shift || true
+  remove=""
+  while [ "$#" -gt 0 ]; do
+    candidate="$(sanitize "$1")"
+    if [ -n "$candidate" ]; then
+      if [ -n "$remove" ]; then
+        remove="$remove, $candidate"
+      else
+        remove="$candidate"
+      fi
+    fi
+    shift
+  done
+  [ -n "$current" ] || {
+    owner=""
+    return 0
+  }
+  owner="$(printf '%s\n' "$current" | awk -v remove="$remove" '
+    function trim(s) {
+      sub(/^[[:space:]]+/, "", s)
+      sub(/[[:space:]]+$/, "", s)
+      return s
+    }
+    BEGIN {
+      n = split(remove, r, ",")
+      for (i = 1; i <= n; i++) {
+        candidate = trim(r[i])
+        if (candidate != "") del[candidate] = 1
+      }
+    }
+    {
+      n = split($0, p, ",")
+      for (i = 1; i <= n; i++) {
+        candidate = trim(p[i])
+        if (candidate == "" || del[candidate] || seen[candidate]++) {
+          continue
+        }
+        out = out (out == "" ? "" : ", ") candidate
+      }
+      print out
+    }
+  ')"
 }
 
 ensure_store() {
@@ -206,7 +307,7 @@ cmd_add() {
         ;;
       --owner)
         [ "$#" -ge 2 ] || usage
-        owner="$(sanitize "$2")"
+        append_owner "$2"
         shift 2
         ;;
       --paused-reason)
@@ -224,6 +325,8 @@ cmd_add() {
         ;;
     esac
   done
+
+  owner="$(normalize_owner_list "$owner")"
 
   case "$priority" in
     low|med|high) ;;
@@ -361,7 +464,7 @@ cmd_move() {
     case "${1:-}" in
       --owner)
         [ "$#" -ge 2 ] || usage
-        owner="$(sanitize "$2")"
+        append_owner "$2"
         shift 2
         ;;
       --reason)
@@ -374,6 +477,7 @@ cmd_move() {
         ;;
     esac
   done
+  owner="$(normalize_owner_list "$owner")"
   cmd_mark "$id" "$new_status" "$reason" "$owner"
 }
 
@@ -392,10 +496,16 @@ cmd_unpause() {
 }
 
 cmd_reassign() {
-  [ "$#" -eq 2 ] || usage
+  [ "$#" -ge 2 ] || usage
   id="$1"
-  owner="$(sanitize "$2")"
+  shift
   require_id "$id"
+  owner=""
+  while [ "$#" -gt 0 ]; do
+    append_owner "$1"
+    shift
+  done
+  owner="$(normalize_owner_list "$owner")"
   [ -n "$owner" ] || { echo "error: owner cannot be empty" >&2; exit 2; }
   row_exists "$id" || { echo "error: task #$id not found" >&2; exit 1; }
 
@@ -420,6 +530,70 @@ cmd_reassign() {
   mv "$tmp" "$TASKS_FILE"
   touch_updated
   echo "reassigned task #$id to $owner"
+}
+
+cmd_assign() {
+  [ "$#" -ge 2 ] || usage
+  id="$1"
+  shift
+  require_id "$id"
+  row_exists "$id" || { echo "error: task #$id not found" >&2; exit 1; }
+
+  current_owner="$(row_owner "$id" | tr -d '\r\n')"
+  owner_list_add "$current_owner" "$@"
+  [ -n "$owner" ] || { echo "error: owner cannot be empty" >&2; exit 2; }
+
+  ts="$(now_utc)"
+  tmp="$(mktemp)"
+  awk -F '\t' -v OFS='\t' -v id="$id" -v o="$owner" -v ts="$ts" '
+    NR==1 { print; next }
+    $1==id {
+      $10=o
+      $6=ts
+      print
+      next
+    }
+    { print }
+  ' "$TASKS_FILE" > "$tmp"
+  mv "$tmp" "$TASKS_FILE"
+  touch_updated
+  echo "assigned task #$id to $owner"
+}
+
+cmd_unassign() {
+  [ "$#" -ge 2 ] || usage
+  id="$1"
+  shift
+  require_id "$id"
+  row_exists "$id" || { echo "error: task #$id not found" >&2; exit 1; }
+
+  current_owner="$(row_owner "$id" | tr -d '\r\n')"
+  owner_list_remove "$current_owner" "$@"
+  kstatus="$(row_kanban_status "$id" | tr -d '\r\n')"
+  if [ "$kstatus" = "doing" ] && [ -z "$owner" ]; then
+    echo "error: task #$id is in doing and must keep at least one owner" >&2
+    exit 2
+  fi
+
+  ts="$(now_utc)"
+  tmp="$(mktemp)"
+  awk -F '\t' -v OFS='\t' -v id="$id" -v o="$owner" -v ts="$ts" '
+    NR==1 { print; next }
+    $1==id {
+      $10=o
+      $6=ts
+      print
+      next
+    }
+    { print }
+  ' "$TASKS_FILE" > "$tmp"
+  mv "$tmp" "$TASKS_FILE"
+  touch_updated
+  if [ -n "$owner" ]; then
+    echo "updated task #$id owners to $owner"
+  else
+    echo "removed all owners from task #$id"
+  fi
 }
 
 cmd_describe() {
@@ -839,6 +1013,8 @@ case "$cmd" in
   board-json) [ "$#" -eq 0 ] || usage; cmd_board_json ;;
   in-progress-json) [ "$#" -eq 0 ] || usage; cmd_in_progress_json ;;
   move) cmd_move "$@" ;;
+  assign) cmd_assign "$@" ;;
+  unassign) cmd_unassign "$@" ;;
   reassign) cmd_reassign "$@" ;;
   pause) cmd_pause "$@" ;;
   unpause) cmd_unpause "$@" ;;

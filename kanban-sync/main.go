@@ -322,17 +322,33 @@ func cut(s string, max int) string {
 	return string(r[:max-3]) + "..."
 }
 
+func formatOwners(owner string) string {
+	parts := strings.Split(owner, ",")
+	owners := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			owners = append(owners, trimmed)
+		}
+	}
+	switch len(owners) {
+	case 0:
+		return "unassigned"
+	case 1:
+		return owners[0]
+	case 2:
+		return owners[0] + " and " + owners[1]
+	default:
+		return strings.Join(owners[:len(owners)-1], ", ") + ", and " + owners[len(owners)-1]
+	}
+}
+
 func formatLine(t BoardTask) string {
 	pri := strings.ToLower(strings.TrimSpace(t.Priority))
 	if pri == "" {
 		pri = "med"
 	}
 	if strings.EqualFold(strings.TrimSpace(t.Status), "doing") {
-		owner := strings.TrimSpace(t.Owner)
-		if owner == "" {
-			owner = "unassigned"
-		}
-		return fmt.Sprintf("%d - \"%s\" [%s] (in progress: %s)", t.ID, cut(t.Title, 52), pri, cut(owner, 28))
+		return fmt.Sprintf("%d - \"%s\" [%s] (in progress: %s)", t.ID, cut(t.Title, 52), pri, cut(formatOwners(t.Owner), 28))
 	}
 	if strings.EqualFold(strings.TrimSpace(t.Status), "paused") {
 		reason := strings.TrimSpace(t.PausedReason)
@@ -441,10 +457,7 @@ func renderInProgressMessage(cfg InProgressConfig, task InProgressTask) DiscordM
 		description = "No description yet."
 	}
 
-	owner := strings.TrimSpace(task.Owner)
-	if owner == "" {
-		owner = "unassigned"
-	}
+	owner := formatOwners(task.Owner)
 	priority := strings.TrimSpace(task.Priority)
 	if priority == "" {
 		priority = "med"

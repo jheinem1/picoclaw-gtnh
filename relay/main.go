@@ -260,7 +260,10 @@ func askAgent(cfg Config, ev ConsoleEvent, session string, mustVerify bool) (str
 	if taskMutationIntentRe.MatchString(ev.Text) {
 		prompt += "\nIf this is a GTNH task-management request, you should execute the task command directly in workspace using sh gtnh_tasks, then reply with the command result."
 		prompt += "\nYou do have access to task tools. Do not claim you cannot run board commands."
-		prompt += "\nUseful commands: sh gtnh_tasks reassign <id> <owner>, sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id>] [--reason \"...\"], sh gtnh_tasks pause <id> \"...\", sh gtnh_tasks unpause <id>, sh gtnh_tasks describe <id> \"...\", sh gtnh_tasks status-update <id> \"...\"."
+		prompt += "\nUseful commands: sh gtnh_tasks assign <id> <owner> [<owner> ...], sh gtnh_tasks unassign <id> <owner> [<owner> ...], sh gtnh_tasks reassign <id> <owner> [<owner> ...], sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id> ...] [--reason \"...\"], sh gtnh_tasks pause <id> \"...\", sh gtnh_tasks unpause <id>, sh gtnh_tasks describe <id> \"...\", sh gtnh_tasks status-update <id> \"...\"."
+		prompt += "\nUse assign to add one or more owners without removing the existing ones."
+		prompt += "\nUse unassign to remove one or more owners while keeping any others that remain."
+		prompt += "\nUse reassign only when you want to replace the entire owner list."
 		prompt += "\nFor requests to add a progress update or status update to an existing task, use exactly: sh gtnh_tasks status-update <id> \"<update text>\"."
 		prompt += "\nDo not invent alternate task-update commands, and do not prepend cd or use shell chaining."
 	}

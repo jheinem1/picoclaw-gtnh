@@ -26,6 +26,21 @@ func TestColumnText_Truncates(t *testing.T) {
 	}
 }
 
+func TestFormatOwners(t *testing.T) {
+	cases := map[string]string{
+		"":                    "unassigned",
+		"Alice":               "Alice",
+		"Alice, Bob":          "Alice and Bob",
+		"Alice, Bob, Carol":   "Alice, Bob, and Carol",
+		"Alice, Bob, , Carol": "Alice, Bob, and Carol",
+	}
+	for input, want := range cases {
+		if got := formatOwners(input); got != want {
+			t.Fatalf("formatOwners(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestRenderBoardMessage_FieldNames(t *testing.T) {
 	cfg := BoardConfig{Title: "GTNH Kanban", MaxItemsPerColumn: 10}
 	board := BoardPayload{}
@@ -65,7 +80,7 @@ func TestRenderInProgressMessage_IncludesDescriptionAndPlaceholder(t *testing.T)
 	msg := renderInProgressMessage(cfg, InProgressTask{
 		ID:          7,
 		Title:       "Build quad purifier",
-		Owner:       "exx",
+		Owner:       "Alice, Bob",
 		Priority:    "high",
 		Area:        "steam",
 		UpdatedAt:   "2026-03-06T01:00:00Z",
@@ -80,6 +95,9 @@ func TestRenderInProgressMessage_IncludesDescriptionAndPlaceholder(t *testing.T)
 	}
 	if len(embed.Fields) < 5 {
 		t.Fatalf("expected metadata + updates fields, got %#v", embed.Fields)
+	}
+	if embed.Fields[0].Value != "Alice and Bob" {
+		t.Fatalf("unexpected owner formatting: %#v", embed.Fields[0])
 	}
 	if embed.Fields[4].Name != "Status Updates" {
 		t.Fatalf("unexpected updates field: %#v", embed.Fields)
