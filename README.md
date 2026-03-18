@@ -3,11 +3,12 @@
 Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, with DatHost Minecraft chat integration.
 
 ## What this repo contains
-- `deploy/compose.yaml`: PicoClaw gateway + DatHost bridge + MC relay + kanban-sync + inventory-sync services
+- `deploy/compose.yaml`: PicoClaw gateway + Discord slash commands + DatHost bridge + MC relay + kanban-sync + inventory-sync services
 - `deploy/config/picoclaw.config.template.json`: base PicoClaw config (OpenAI OAuth + Discord)
 - `deploy/env/picoclaw.env.template`: secret env template
 - `deploy/env/dathost-bridge.env.template`: DatHost bridge env template
 - `bridge/`: lightweight Go DatHost bridge (`/healthz`, `/mc/console`, `/mc/say`)
+- `discord-commands/`: Discord slash-command service that exposes the workspace tools directly in Discord
 - `relay/`: lightweight Go worker that polls bridge events and asks PicoClaw for MC replies
 - `kanban-sync/`: deterministic Discord embed renderer for GTNH Kanban board
 - `inventory-sync/`: deterministic DatHost file indexer for player inventories and chest coordinates
@@ -47,6 +48,8 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
    - `channels.discord.allow_from` to your Discord user ID
 7. `scripts/login_openai_oauth_on_pi.sh`
 8. `ssh jhein@192.168.1.59 'systemctl --user start picoclaw-gtnh.service'`
+
+Discord slash commands are provided by the separate `discord-commands` service in the compose stack. Global command registration can take a while to propagate; if you want fast iteration, set `DISCORD_GUILD_ID` in `deploy/env/picoclaw.env` to the target guild and redeploy.
 
 If OpenAI OAuth requests fail with `400 Bad Request` from `chatgpt.com/backend-api/codex/responses`, run:
 - `scripts/install_picoclaw_oauth_hotfix.sh`

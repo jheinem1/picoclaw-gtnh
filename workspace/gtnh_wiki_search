@@ -41,26 +41,10 @@ RAW="$(
     --data-urlencode "origin=*"
 )"
 
-MIN="$(printf '%s' "$RAW" | tr '\n\r' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
-TOTAL="$(printf '%s' "$MIN" | sed -n 's/.*"totalhits":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
-[ -n "$TOTAL" ] || TOTAL=0
-
+TOTAL="$(printf '%s' "$RAW" | jq -r '.query.searchinfo.totalhits // 0')"
 RESULTS="$(
-  printf '%s' "$MIN" | awk -v limit="$LIMIT" '
-    BEGIN { RS="\\{\"ns\":"; count=0 }
-    NR == 1 { next }
-    {
-      if (count >= limit) { next }
-      title = ""
-
-      if (match($0, /"title":"([^"]+)"/, m1)) { title = m1[1] }
-      if (title == "") { next }
-
-      count++
-      gsub(/\\\//, "/", title)
-      gsub(/\\"/, "\"", title)
-      printf("%s\n", title)
-    }
+  printf '%s' "$RAW" | jq -r --argjson limit "$LIMIT" '
+    (.query.search[:$limit] // [])[]?.title
   '
 )"
 

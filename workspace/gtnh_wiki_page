@@ -37,10 +37,9 @@ RAW="$(
     --data-urlencode "origin=*"
 )"
 
-MIN="$(printf '%s' "$RAW" | tr '\n\r' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
-PAGE_TITLE="$(printf '%s' "$MIN" | sed -n 's/.*"title":"\([^"]*\)".*/\1/p' | head -n1)"
-EXTRACT="$(printf '%s' "$MIN" | sed -n 's/.*"extract":"\([^"]*\)".*/\1/p' | head -n1)"
-FULLURL="$(printf '%s' "$MIN" | sed -n 's/.*"fullurl":"\([^"]*\)".*/\1/p' | head -n1)"
+PAGE_TITLE="$(printf '%s' "$RAW" | jq -r '.query.pages[]? | .title // empty' | head -n1)"
+EXTRACT="$(printf '%s' "$RAW" | jq -r '.query.pages[]? | .extract // empty' | head -n1)"
+FULLURL="$(printf '%s' "$RAW" | jq -r '.query.pages[]? | .fullurl // empty' | head -n1)"
 
 [ -n "$PAGE_TITLE" ] || fail "page not found"
 [ -n "$FULLURL" ] || FULLURL="https://wiki.gtnewhorizons.com/wiki/$(printf '%s' "$PAGE_TITLE" | sed 's/ /_/g')"

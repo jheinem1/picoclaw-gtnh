@@ -1,6 +1,6 @@
 # PicoClaw GTNH Project State
 
-Last updated: 2026-03-01
+Last updated: 2026-03-17
 
 ## Deployment target
 - Host: `jhein@192.168.1.59` (Raspberry Pi 3, Debian 13, aarch64)
@@ -12,6 +12,7 @@ Last updated: 2026-03-01
 - Binary override mounted at `/usr/local/bin/picoclaw` from:
   - `/home/jhein/picoclaw-gtnh/runtime/picoclaw/picoclaw.custom`
 - Reason: OAuth/Codex request behavior in stock image caused `400` failures; custom build resolved this.
+- Discord slash commands: `discord-commands` service in `deploy/compose.yaml` registers application commands and shells out to the workspace tools directly.
 - DatHost bridge service: `dathost-bridge` (Go HTTP service in `bridge/`)
 - Minecraft relay service: `mc-relay` (Go worker in `relay/`, uses `picoclaw agent`)
 - Kanban sync service: `kanban-sync` (Go worker in `kanban-sync/`, renders persistent Discord board embed)

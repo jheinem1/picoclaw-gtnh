@@ -33,6 +33,21 @@ services:
     depends_on:
       - dathost-bridge
 
+  discord-commands:
+    build:
+      context: ../discord-commands
+      dockerfile: Dockerfile
+    container_name: discord-commands
+    restart: unless-stopped
+    env_file:
+      - ./env/picoclaw.env
+    environment:
+      - DISCORD_CONFIG_PATH=/root/.picoclaw/config.json
+      - DISCORD_WORKSPACE=/root/.picoclaw/workspace
+    volumes:
+      - ../runtime/picoclaw/config.json:/root/.picoclaw/config.json:ro
+      - ../workspace:/root/.picoclaw/workspace
+
   kanban-sync:
     build:
       context: ../kanban-sync
