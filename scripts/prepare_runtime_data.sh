@@ -18,6 +18,11 @@ for f in item_index.tsv recipe_index.tsv; do
   cp -f "$SRC/index/$f" "$WS_DST/index/$f"
 done
 
+if [[ -f "$SRC/index/oredict_index.tsv" ]]; then
+  cp -f "$SRC/index/oredict_index.tsv" "$DST/index/oredict_index.tsv"
+  cp -f "$SRC/index/oredict_index.tsv" "$WS_DST/index/oredict_index.tsv"
+fi
+
 cat > "$DST/README.txt" <<'EOF'
 Runtime GTNH dataset for PicoClaw.
 
@@ -27,6 +32,7 @@ to prevent accidental full-file reads and OOM/restarts.
 Use indexed files under index/:
 - item_index.tsv
 - recipe_index.tsv
+- oredict_index.tsv (optional; only present after importing a real ore-dict dump)
 EOF
 
 cat > "$WS_DST/README.txt" <<'EOF'

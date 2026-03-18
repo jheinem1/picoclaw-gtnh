@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import json
 import pathlib
+import re
 import sqlite3
 import sys
 
 BASE = pathlib.Path(__file__).resolve().parents[2]
 DB_PATH = BASE / "data" / "gtnh" / "index" / "gtnh.db"
+OREDICT_INDEX_PATH = BASE / "data" / "gtnh" / "index" / "oredict_index.tsv"
 
 
 def fail(msg: str) -> int:
@@ -31,10 +34,68 @@ def row_to_item(row: sqlite3.Row) -> dict:
     }
 
 
+def compact_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def load_oredict_rows() -> list[dict]:
+    if not OREDICT_INDEX_PATH.exists():
+        raise FileNotFoundError(
+            f"missing ore dict index: {OREDICT_INDEX_PATH}; run workspace/tools/build_oredict_index.py after importing a real GTNH ore dict dump"
+        )
+
+    rows: list[dict] = []
+    with OREDICT_INDEX_PATH.open("r", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            rows.append(row)
+    return rows
+
+
 def cmd_find_item(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
     cur = conn.cursor()
-    q = "%" + args.text.lower() + "%"
     limit = max(1, min(args.limit, 50))
+
+    if args.oredict:
+        try:
+            rows = load_oredict_rows()
+        except FileNotFoundError as exc:
+            return fail(str(exc))
+
+        want = compact_text(args.text)
+        exact_rows: list[tuple[str, dict]] = []
+        partial_rows: list[tuple[int, str, dict]] = []
+        for row in rows:
+            ore_name = compact_text(row.get("ore_name", ""))
+            if not ore_name:
+                continue
+            if ore_name == want:
+                exact_rows.append((row.get("display_name") or "", row))
+            else:
+                if want and want in ore_name:
+                    partial_rows.append((100 + len(ore_name), row.get("display_name") or "", row))
+                else:
+                    continue
+        if exact_rows:
+            ranked = [(0, name, row) for name, row in exact_rows]
+        else:
+            ranked = partial_rows
+        ranked.sort(key=lambda item: (item[0], item[1].lower()))
+        out = [
+            {
+                "slug": row.get("slug", ""),
+                "id": row.get("reg_name", ""),
+                "display_name": row.get("display_name", ""),
+                "reg_name": row.get("reg_name", ""),
+                "name": row.get("name", ""),
+                "source": "gtnh-data/index/oredict_index.tsv",
+            }
+            for _, _, row in ranked[:limit]
+        ]
+        print(json.dumps({"ok": True, "count": len(out), "items": out, "oredict": True}, ensure_ascii=False))
+        return 0
+
+    q = "%" + args.text.lower() + "%"
 
     rows = cur.execute(
         """
@@ -55,7 +116,7 @@ def cmd_find_item(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
         (q, q, q, args.text, args.text, limit),
     ).fetchall()
 
-    print(json.dumps({"ok": True, "count": len(rows), "items": [row_to_item(r) for r in rows]}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "count": len(rows), "items": [row_to_item(r) for r in rows], "oredict": False}, ensure_ascii=False))
     return 0
 
 
@@ -195,6 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_find = sub.add_parser("find-item", help="Find items by text")
     p_find.add_argument("text")
     p_find.add_argument("--limit", type=int, default=10)
+    p_find.add_argument("--oredict", "--ore-dict", action="store_true")
 
     p_slug = sub.add_parser("item", help="Lookup exact item by slug")
     p_slug.add_argument("slug")
@@ -211,13 +273,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    if not DB_PATH.exists():
-        return fail(f"index database missing: {DB_PATH}; run workspace/tools/build_gtnh_db.py")
-
     parser = build_parser()
     args = parser.parse_args()
 
-    conn = connect()
+    if args.cmd == "find-item" and args.oredict:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+    else:
+        if not DB_PATH.exists():
+            return fail(f"index database missing: {DB_PATH}; run workspace/tools/build_gtnh_db.py")
+        conn = connect()
     try:
         if args.cmd == "find-item":
             return cmd_find_item(conn, args)

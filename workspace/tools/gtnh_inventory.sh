@@ -14,7 +14,7 @@ usage() {
 usage:
   sh gtnh_inventory status
   sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]
-  sh gtnh_inventory find-item --query "<name>" [--scope players|chests|both] [--limit <n>]
+  sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|both] [--limit <n>]
   sh gtnh_inventory player --name <player> | --uuid <uuid> [--all]
   sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]
   sh gtnh_inventory refresh [--players|--chests|--all]
@@ -227,7 +227,7 @@ next-step:
 - run exactly one inventory command (no cd/&& chaining):
   sh gtnh_inventory find --item <mod:name[:damage]> --scope both
   OR
-  sh gtnh_inventory find-item --query "<name>" --scope both
+  sh gtnh_inventory find-item --query "<name>" [--oredict] --scope both
 - if query is ambiguous, pick one exact mod:name[:damage] and rerun with --item.
 EOF
 }
@@ -518,6 +518,7 @@ cmd_find_item() {
   scope="both"
   limit="$DEFAULT_LIMIT"
   player_filter=""
+  use_oredict="0"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -525,6 +526,10 @@ cmd_find_item() {
         [ "$#" -ge 2 ] || usage
         query="$2"
         shift 2
+        ;;
+      --oredict|--ore-dict)
+        use_oredict="1"
+        shift
         ;;
       --scope)
         [ "$#" -ge 2 ] || usage
@@ -552,7 +557,11 @@ cmd_find_item() {
   esac
   limit="$(cap_limit "$limit")"
 
-  resolved_json="$(sh "$WORKSPACE_DIR/gtnh_find_item" "$query")"
+  if [ "$use_oredict" = "1" ]; then
+    resolved_json="$(sh "$WORKSPACE_DIR/gtnh_find_item" --oredict "$query")"
+  else
+    resolved_json="$(sh "$WORKSPACE_DIR/gtnh_find_item" "$query")"
+  fi
 
   candidate_count="$(printf '%s' "$resolved_json" | jq -r '
     if (.ok != true) then 0 else ((.items // []) | length) end

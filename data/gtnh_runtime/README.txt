@@ -6,3 +6,4 @@ to prevent accidental full-file reads and OOM/restarts.
 Use indexed files under index/:
 - item_index.tsv
 - recipe_index.tsv
+- oredict_index.tsv (optional; only present after importing a real ore-dict dump)

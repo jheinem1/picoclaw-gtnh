@@ -22,6 +22,9 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
 - `workspace/tools/search_gtnh.sh`: convenience wrapper for indexed item search
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
 - `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
+- `scripts/build_oredict_dump_mod.sh`: build a GTNH Forge mod that dumps the live ore dictionary
+- `scripts/install_oredict_dump_mod.sh`: install the dump mod into a local PrismLauncher GTNH instance
+- `scripts/import_oredict_dump.sh`: import a generated `picoclaw_oredict_dump.tsv` and build `oredict_index.tsv`
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
 - `scripts/deploy_to_pi.sh`: rsync project to Pi
@@ -48,10 +51,53 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
 If OpenAI OAuth requests fail with `400 Bad Request` from `chatgpt.com/backend-api/codex/responses`, run:
 - `scripts/install_picoclaw_oauth_hotfix.sh`
 
+## Pi access
+Deployment and operations target the Raspberry Pi at `jhein@192.168.1.59`.
+
+The repo scripts do not use plain `ssh jhein@192.168.1.59`. They expect the matching SSH key to be available through the 1Password SSH agent, and they select it by writing the public key to a temporary file and passing that file to `ssh -i`.
+
+Prerequisites:
+- 1Password desktop app installed and unlocked
+- 1Password SSH agent enabled
+- agent socket available at `$HOME/.1password/agent.sock`
+- the private key matching the repo's `PI_PUBKEY` loaded in that agent
+
+Minimal manual connection:
+
+```bash
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH' > "$tmp"
+ssh -o IdentitiesOnly=yes -o IdentityAgent="$HOME/.1password/agent.sock" -i "$tmp" jhein@192.168.1.59
+```
+
+One-off remote command:
+
+```bash
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH' > "$tmp"
+ssh -o IdentitiesOnly=yes -o IdentityAgent="$HOME/.1password/agent.sock" -i "$tmp" jhein@192.168.1.59 'hostname && pwd'
+```
+
+Why this matters:
+- plain `ssh` can fail with `Too many authentication failures` because the client offers unrelated keys first
+- the narrowed command above can still fail with `Permission denied (publickey,password)` if the matching key is not present or unlocked in 1Password
+
+Scripts that use this exact access pattern:
+- `scripts/setup_pi_runtime.sh`
+- `scripts/deploy_to_pi.sh`
+- `scripts/install_user_service.sh`
+- `scripts/login_openai_oauth_on_pi.sh`
+- `scripts/install_picoclaw_oauth_hotfix.sh`
+- `scripts/set_discord_token.sh`
+- `scripts/sync_gtnh_data.sh`
+
 ## GTNH query workflow
 Runtime mount is index-only (`data/gtnh_runtime`), intentionally excluding full raw JSON dumps.
 Use indexed queries:
 - Build/refresh indexes: `workspace/tools/build_item_index.py` and `workspace/tools/build_recipe_index.py`
+- Build ore-dict index after importing a real dump: `workspace/tools/build_oredict_index.py`
 - Prepare runtime dataset: `scripts/prepare_runtime_data.sh`
 - Find item: `sh gtnh_query find-item "copper nugget"`
 - Resolve item + recipes: `sh gtnh_query resolve-recipes "copper nugget"`
@@ -136,15 +182,38 @@ Index outputs written under workspace state:
 Commands from workspace root:
 - `sh gtnh_inventory status`
 - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]`
-- `sh gtnh_inventory find-item --query "<name>" [--scope players|chests|both] [--limit <n>]`
+- `sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|both] [--limit <n>]`
 - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
 - `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
 - `sh gtnh_inventory refresh [--players|--chests|--all]`
 
 Notes:
 - `find --id` remains as strict legacy mode and requires `--damage`.
+- `--oredict` uses a true GTNH ore-dictionary cache built from a live dump, not display-name heuristics.
+- If `gtnh_inventory find-item --query "<alias>" --oredict` fails with a missing ore-dict index, build/import a fresh dump first.
 - `player --all` includes nested container contents from inventory items (for example backpacks/toolboxes) as `src=nested`.
 - Custom item names are indexed from item NBT when present and shown in inventory/chest listings.
+
+## True Ore-Dict Cache Workflow
+To build a real GTNH ore-dictionary cache without checking large dumps into the runtime dataset:
+
+1. Build the dump mod:
+   - `scripts/build_oredict_dump_mod.sh`
+2. Install it into a local PrismLauncher GTNH instance:
+   - `scripts/install_oredict_dump_mod.sh "/path/to/instance/minecraft"`
+3. Launch that GTNH instance once. The mod writes:
+   - `dumps/picoclaw_oredict_dump.tsv`
+4. Import the dump into this repo and build the index:
+   - `scripts/import_oredict_dump.sh "/path/to/instance/minecraft/dumps/picoclaw_oredict_dump.tsv"`
+5. If needed, sync updated runtime data to the Pi:
+   - `scripts/sync_gtnh_data.sh DEPLOY_TO_PI=1`
+
+The imported runtime index is:
+- `data/gtnh/index/oredict_index.tsv`
+
+That file is copied into:
+- `data/gtnh_runtime/index/oredict_index.tsv`
+- `workspace/gtnh-data/index/oredict_index.tsv`
 
 Env vars in `deploy/env/picoclaw.env`:
 - `INVENTORY_SYNC_ENABLED`

@@ -52,6 +52,11 @@ done
 
 "$ROOT/workspace/tools/build_item_index.py"
 "$ROOT/workspace/tools/build_recipe_index.py"
+if [[ -f "$ROOT/data/gtnh/oredict_dump.tsv" ]]; then
+  "$ROOT/workspace/tools/build_oredict_index.py"
+else
+  echo "missing (skipped): $ROOT/data/gtnh/oredict_dump.tsv" >&2
+fi
 "$ROOT/scripts/prepare_runtime_data.sh"
 
 if [[ "$DEPLOY_TO_PI" == "1" ]]; then
