@@ -80,6 +80,19 @@ services:
       - ../runtime/inventory-sync:/var/lib/inventory-sync
       - ../workspace:/root/.picoclaw/workspace
 
+  questbook-sync:
+    build:
+      context: ../questbook-sync
+      dockerfile: Dockerfile
+    container_name: questbook-sync
+    restart: unless-stopped
+    env_file:
+      - ./env/picoclaw.env
+    environment:
+      - QUESTBOOK_WORKDIR=/root/.picoclaw/workspace
+    volumes:
+      - ../workspace:/root/.picoclaw/workspace
+
   picoclaw-gateway:
     build:
       context: ../gateway

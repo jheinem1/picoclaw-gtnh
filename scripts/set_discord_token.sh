@@ -9,7 +9,7 @@ fi
 TOKEN="$1"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/deploy/env/picoclaw.env"
-PI_HOST="${PI_HOST:-jhein@192.168.1.59}"
+PI_HOST="${PI_HOST:-jhein@192.168.1.41}"
 PI_PUBKEY="${PI_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH}"
 SSH_KEY_FILE="$(mktemp)"
 trap 'rm -f "$SSH_KEY_FILE"' EXIT

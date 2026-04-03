@@ -3,7 +3,7 @@
 Last updated: 2026-03-17
 
 ## Deployment target
-- Host: `jhein@192.168.1.59` (Raspberry Pi 3, Debian 13, aarch64)
+- Host: `jhein@192.168.1.41` (Raspberry Pi 3, Debian 13, aarch64)
 - Service: `systemctl --user picoclaw-gtnh`
 - Container runtime: rootless Podman + podman-compose
 
