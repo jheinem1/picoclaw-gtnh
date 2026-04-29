@@ -12,6 +12,9 @@ relay/picoclaw-gtnh-mc-relay
 workspace/tools/__pycache__/
 workspace/state/atmons-questbook-state.json
 workspace/state/atmons-questbook-sync.json
+.gradle-bin/
+mods/ftbquests-dump/.gradle/
+mods/ftbquests-dump/build/
 
 # Large GTNH source/index artifacts (tracked as compressed .xz only when needed)
 data/gtnh/recipes.json
