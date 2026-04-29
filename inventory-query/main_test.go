@@ -26,8 +26,10 @@ func writeTestWorkspace(t *testing.T) string {
 	}
 	idx := `{
 	  "version":2,
-	  "source":{"players_scan_at":"2026-04-28T12:00:00Z","chests_scan_at":"2026-04-28T11:00:00Z","me_scan_at":"2026-04-28T12:04:00Z"},
-	  "item_index":{"7437:11305":{"me":[{"label":"Main ME","dim":0,"pos":{"x":1,"y":2,"z":3},"total_count":128}]}}
+	  "source":{"players_scan_at":"2026-04-28T12:00:00Z","chests_scan_at":"2026-04-28T11:00:00Z","me_scan_at":"2026-04-28T12:04:00Z","blocks_scan_at":"2026-04-28T12:05:00Z"},
+	  "block_status":{"enabled":true,"registry_available":false,"reason":"block registry unavailable; numeric id/meta search only"},
+	  "item_index":{"7437:11305":{"me":[{"label":"Main ME","dim":0,"pos":{"x":1,"y":2,"z":3},"total_count":128}]}},
+	  "block_index":{"300:5":{"blocks":[{"dim":0,"x":35,"y":71,"z":-8,"id":300,"meta":5}]}}
 	}`
 	if err := os.WriteFile(filepath.Join(stateDir, "inventory_index.json"), []byte(idx), 0o644); err != nil {
 		t.Fatal(err)
@@ -76,5 +78,37 @@ func TestScopeSet_AllIncludesME(t *testing.T) {
 	}
 	if !players || !containers || !me {
 		t.Fatalf("expected all scopes true, got players=%t containers=%t me=%t", players, containers, me)
+	}
+}
+
+func TestResolveBlockKeys_Numeric(t *testing.T) {
+	idx := InventoryIndex{BlockIndex: map[string]BlockHits{}}
+	keys, label, err := resolveBlockKeys(idx, "", 300, 5)
+	if err != nil {
+		t.Fatalf("resolveBlockKeys failed: %v", err)
+	}
+	if len(keys) != 1 || keys[0] != "300:5" || label != "300:5" {
+		t.Fatalf("unexpected block resolution: keys=%#v label=%q", keys, label)
+	}
+}
+
+func TestResolveBlockKeys_RegistryUnavailable(t *testing.T) {
+	idx := InventoryIndex{BlockStatus: BlockIndexStatus{RegistryAvailable: false}}
+	_, _, err := resolveBlockKeys(idx, "minecraft:stone", 0, unsetDamage)
+	if err == nil {
+		t.Fatal("expected registry unavailable error")
+	}
+}
+
+func TestMergeBlockHits(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+	idx, err := loadIndex()
+	if err != nil {
+		t.Fatalf("loadIndex failed: %v", err)
+	}
+	hits := mergeBlockHits(idx, []string{"300:5"})
+	if len(hits) != 1 || hits[0].X != 35 || hits[0].Y != 71 || hits[0].Z != -8 {
+		t.Fatalf("unexpected block hits: %#v", hits)
 	}
 }

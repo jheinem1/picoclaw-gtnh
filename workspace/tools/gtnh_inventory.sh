@@ -20,7 +20,7 @@ fi
 
 if [ "${GTNH_INVENTORY_FORCE_LEGACY:-0}" != "1" ] && [ -n "$QUERY_BIN" ] && [ -x "$QUERY_BIN" ]; then
   case "${1:-}" in
-    status|find|find-item|refresh)
+    status|find|find-item|find-block|refresh)
       export GTNH_WORKSPACE="$WORKSPACE_DIR"
       exec "$QUERY_BIN" "$@"
       ;;
@@ -34,9 +34,10 @@ usage:
   sh gtnh_inventory status
   sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]
   sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]
+  sh gtnh_inventory find-block --id <num> --meta <num> [--limit <n>]
   sh gtnh_inventory player --name <player> | --uuid <uuid> [--all]
   sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]
-  sh gtnh_inventory refresh [--players|--chests|--containers|--me|--all]
+  sh gtnh_inventory refresh [--players|--chests|--containers|--me|--blocks|--all]
 USAGE
   exit 2
 }
@@ -263,12 +264,22 @@ cmd_status() {
     "Generated: " + (.generated_at // "(unknown)"),
     "Players scan: " + (.source.players_scan_at // "(never)"),
     "Chests scan: " + (.source.chests_scan_at // "(never)"),
+    "Blocks scan: " + (.source.blocks_scan_at // "(never)"),
     "DatHost sync: " + (.source.dathost_sync_at // "(unknown)"),
     "Players: " + ((.stats.player_count // 0)|tostring) +
       " | Containers: " + ((.stats.chest_count // 0)|tostring) +
-      " | Item keys: " + ((.stats.indexed_item_keys // 0)|tostring),
+      " | Item keys: " + ((.stats.indexed_item_keys // 0)|tostring) +
+      " | Blocks: " + ((.stats.block_count // 0)|tostring) +
+      " | Block keys: " + ((.stats.indexed_block_keys // 0)|tostring),
+    (if (.block_status.registry_available // false) then
+      "Block registry: available"
+     else
+      "Block registry: unavailable; numeric id/meta search only"
+     end),
+    (if ((.block_status.reason // "") | length) > 0 then "Block status: " + .block_status.reason else empty end),
     (if (.stale.players // false) then "WARNING: players data is stale (>30m)" else empty end),
     (if (.stale.chests // false) then "WARNING: chests data is stale (>24h)" else empty end),
+    (if (.stale.blocks // false) then "WARNING: blocks data is stale" else empty end),
     (if ((.errors // {}) | length) > 0 then
       "Errors:\n" + ((.errors | to_entries | map("- " + .key + ": " + (.value|tostring)) | join("\n")) )
      else
@@ -539,6 +550,57 @@ cmd_find() {
        else empty end)
   ' "$INDEX_FILE"
 }
+cmd_find_block() {
+  id=""
+  meta=""
+  limit="$DEFAULT_LIMIT"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --id)
+        [ "$#" -ge 2 ] || usage
+        id="$2"
+        shift 2
+        ;;
+      --meta)
+        [ "$#" -ge 2 ] || usage
+        meta="$2"
+        shift 2
+        ;;
+      --block)
+        echo "error: --block registry-name lookup requires gtnh_inventory_query and block registry data; use --id <num> --meta <num>" >&2
+        exit 2
+        ;;
+      --limit)
+        [ "$#" -ge 2 ] || usage
+        limit="$2"
+        shift 2
+        ;;
+      *) usage ;;
+    esac
+  done
+
+  [ -n "$id" ] && [ -n "$meta" ] || { echo "error: provide --id <num> --meta <num>" >&2; exit 2; }
+  is_int "$id" || { echo "error: --id must be numeric" >&2; exit 2; }
+  is_int "$meta" || { echo "error: --meta must be numeric" >&2; exit 2; }
+  limit="$(cap_limit "$limit")"
+  require_file "$INDEX_FILE"
+
+  key="$id:$meta"
+  echo "Block: $key"
+  jq -r --arg key "$key" --argjson limit "$limit" '
+    (if (.block_status.registry_available // false) then
+      "Block registry: available"
+     else
+      "Block registry: unavailable; numeric id/meta search only"
+     end),
+    (if ((.block_status.reason // "") | length) > 0 then "Block status: " + .block_status.reason else empty end),
+    ((.block_index[$key].blocks // []) | sort_by(.dim, .x, .y, .z) | .[:$limit]) as $hits
+    | if ($hits|length) == 0 then "(none)"
+      else $hits[] | "- " + ((.id // 0)|tostring) + ":" + ((.meta // 0)|tostring) + " at (" + ((.x // 0)|tostring) + "," + ((.y // 0)|tostring) + "," + ((.z // 0)|tostring) + ") dim=" + ((.dim // 0)|tostring)
+      end
+  ' "$INDEX_FILE"
+}
 cmd_find_item() {
   query=""
   scope="both"
@@ -759,6 +821,7 @@ cmd_refresh() {
       --chests) scope="chests"; shift ;;
       --containers) scope="chests"; shift ;;
       --me) scope="me"; shift ;;
+      --blocks) scope="blocks"; shift ;;
       --all) scope="all"; shift ;;
       *) usage ;;
     esac
@@ -778,6 +841,7 @@ case "$cmd" in
   status) cmd_status "$@" ;;
   find) cmd_find "$@" ;;
   find-item) cmd_find_item "$@" ;;
+  find-block) cmd_find_block "$@" ;;
   player) cmd_player "$@" ;;
   chest) cmd_chest "$@" ;;
   refresh) cmd_refresh "$@" ;;

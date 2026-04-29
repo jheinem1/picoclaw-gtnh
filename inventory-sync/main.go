@@ -34,10 +34,14 @@ type Config struct {
 	PlayersInterval    time.Duration
 	ChestsInterval     time.Duration
 	MEInterval         time.Duration
+	BlocksInterval     time.Duration
 	HTTPTimeout        time.Duration
 	MaxRegionFiles     int
 	ScanDims           []int
 	ChestBounds        *ChestBounds
+	BlockBounds        *BlockBounds
+	BlockAllowlist     map[string]bool
+	BlockRegistryFile  string
 	DefaultResultLimit int
 	MaxResults         int
 	LoopSleep          time.Duration
@@ -51,10 +55,21 @@ type ChestBounds struct {
 	MaxZ int
 }
 
+type BlockBounds struct {
+	Dim  int `json:"dim"`
+	MinX int `json:"min_x"`
+	MinY int `json:"min_y"`
+	MinZ int `json:"min_z"`
+	MaxX int `json:"max_x"`
+	MaxY int `json:"max_y"`
+	MaxZ int `json:"max_z"`
+}
+
 type RuntimeState struct {
 	LastPlayersScan string `json:"last_players_scan"`
 	LastChestsScan  string `json:"last_chests_scan"`
 	LastMEScan      string `json:"last_me_scan"`
+	LastBlocksScan  string `json:"last_blocks_scan"`
 }
 
 type RefreshRequest struct {
@@ -68,10 +83,12 @@ type SourceMeta struct {
 	PlayersScanAt  string `json:"players_scan_at"`
 	ChestsScanAt   string `json:"chests_scan_at"`
 	MEScanAt       string `json:"me_scan_at"`
+	BlocksScanAt   string `json:"blocks_scan_at,omitempty"`
 	DatHostSyncAt  string `json:"dathost_sync_at"`
 	PlayersVersion int    `json:"players_version"`
 	ChestsVersion  int    `json:"chests_version"`
 	MEVersion      int    `json:"me_version"`
+	BlocksVersion  int    `json:"blocks_version,omitempty"`
 }
 
 type IndexStats struct {
@@ -84,6 +101,9 @@ type IndexStats struct {
 	MENetworkCount     int `json:"me_network_count"`
 	MEStacks           int `json:"me_stacks"`
 	RegionFilesScanned int `json:"region_files_scanned"`
+	BlockCount         int `json:"block_count,omitempty"`
+	IndexedBlockKeys   int `json:"indexed_block_keys,omitempty"`
+	BlockRegionFiles   int `json:"block_region_files_scanned,omitempty"`
 }
 
 type ItemStack struct {
@@ -170,27 +190,66 @@ type MEHit struct {
 	TotalCount int      `json:"total_count"`
 }
 
+type BlockRecord struct {
+	Dimension int    `json:"dim"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	Z         int    `json:"z"`
+	ID        int    `json:"id"`
+	Meta      int    `json:"meta"`
+	RegName   string `json:"reg_name,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
+type BlockHit struct {
+	Dimension int    `json:"dim"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	Z         int    `json:"z"`
+	ID        int    `json:"id"`
+	Meta      int    `json:"meta"`
+	RegName   string `json:"reg_name,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
 type ItemHits struct {
 	Players []PlayerHit `json:"players"`
 	Chests  []ChestHit  `json:"chests"`
 	ME      []MEHit     `json:"me,omitempty"`
 }
 
+type BlockHits struct {
+	Blocks []BlockHit `json:"blocks"`
+}
+
+type BlockIndexStatus struct {
+	Enabled           bool         `json:"enabled"`
+	Reason            string       `json:"reason,omitempty"`
+	Bounds            *BlockBounds `json:"bounds,omitempty"`
+	Allowlist         []string     `json:"allowlist,omitempty"`
+	RegistryFile      string       `json:"registry_file,omitempty"`
+	RegistryAvailable bool         `json:"registry_available"`
+}
+
 type InventoryIndex struct {
-	Version     int                 `json:"version"`
-	GeneratedAt string              `json:"generated_at"`
-	Source      SourceMeta          `json:"source"`
-	Stats       IndexStats          `json:"stats"`
-	Players     []PlayerRecord      `json:"players"`
-	Chests      []ChestRecord       `json:"chests"`
-	ME          []MERecord          `json:"me,omitempty"`
-	ItemIndex   map[string]ItemHits `json:"item_index"`
+	Version     int                  `json:"version"`
+	GeneratedAt string               `json:"generated_at"`
+	Source      SourceMeta           `json:"source"`
+	Stats       IndexStats           `json:"stats"`
+	Players     []PlayerRecord       `json:"players"`
+	Chests      []ChestRecord        `json:"chests"`
+	ME          []MERecord           `json:"me,omitempty"`
+	Blocks      []BlockRecord        `json:"blocks,omitempty"`
+	ItemIndex   map[string]ItemHits  `json:"item_index"`
+	BlockIndex  map[string]BlockHits `json:"block_index,omitempty"`
+	BlockStatus BlockIndexStatus     `json:"block_status,omitempty"`
 }
 
 type InventoryStatus struct {
 	GeneratedAt string            `json:"generated_at"`
 	Source      SourceMeta        `json:"source"`
 	Stats       IndexStats        `json:"stats"`
+	BlockStatus BlockIndexStatus  `json:"block_status,omitempty"`
 	Stale       map[string]bool   `json:"stale"`
 	Errors      map[string]string `json:"errors"`
 }
@@ -254,10 +313,14 @@ func loadConfig() (Config, error) {
 		PlayersInterval:    time.Duration(max(60, getenvInt("INVENTORY_PLAYERS_INTERVAL_SECONDS", 600))) * time.Second,
 		ChestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_CHESTS_INTERVAL_SECONDS", 21600))) * time.Second,
 		MEInterval:         time.Duration(max(60, getenvInt("INVENTORY_ME_INTERVAL_SECONDS", 300))) * time.Second,
+		BlocksInterval:     time.Duration(max(300, getenvInt("INVENTORY_BLOCKS_INTERVAL_SECONDS", 86400))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
 		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1")),
 		ChestBounds:        parseChestBounds(strings.TrimSpace(os.Getenv("INVENTORY_CHEST_BOUNDS"))),
+		BlockBounds:        parseBlockBounds(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_BOUNDS"))),
+		BlockAllowlist:     parseBlockAllowlist(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_ALLOWLIST"))),
+		BlockRegistryFile:  getenv("GTNH_BLOCK_REGISTRY", filepath.Join(getenv("INVENTORY_WORKDIR", "/root/.greggpt/workspace"), "gtnh-data", "index", "block_registry.tsv")),
 		DefaultResultLimit: max(1, getenvInt("INVENTORY_DEFAULT_LIMIT", 20)),
 		MaxResults:         max(1, getenvInt("INVENTORY_MAX_RESULTS", 100)),
 		LoopSleep:          15 * time.Second,
@@ -330,6 +393,72 @@ func parseChestBounds(raw string) *ChestBounds {
 	}
 }
 
+func parseBlockBounds(raw string) *BlockBounds {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) != 7 {
+		return nil
+	}
+	vals := make([]int, 0, 7)
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil
+		}
+		vals = append(vals, n)
+	}
+	b := &BlockBounds{Dim: vals[0], MinX: vals[1], MinY: vals[2], MinZ: vals[3], MaxX: vals[4], MaxY: vals[5], MaxZ: vals[6]}
+	if b.MinX > b.MaxX {
+		b.MinX, b.MaxX = b.MaxX, b.MinX
+	}
+	if b.MinY > b.MaxY {
+		b.MinY, b.MaxY = b.MaxY, b.MinY
+	}
+	if b.MinZ > b.MaxZ {
+		b.MinZ, b.MaxZ = b.MaxZ, b.MinZ
+	}
+	return b
+}
+
+func parseBlockAllowlist(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, meta, ok := parseBlockKey(part)
+		if ok {
+			out[blockKey(id, meta)] = true
+		}
+	}
+	return out
+}
+
+func parseBlockKey(raw string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	id, err1 := strconv.Atoi(parts[0])
+	meta, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || id <= 0 || meta < 0 {
+		return 0, 0, false
+	}
+	return id, meta, true
+}
+
+func sortedBlockAllowlist(allow map[string]bool) []string {
+	out := make([]string, 0, len(allow))
+	for k := range allow {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func nowUTC() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
@@ -387,7 +516,7 @@ func saveRuntimeState(path string, st RuntimeState) {
 }
 
 func loadIndex(path string) InventoryIndex {
-	idx := InventoryIndex{Version: 1, ItemIndex: map[string]ItemHits{}}
+	idx := InventoryIndex{Version: 1, ItemIndex: map[string]ItemHits{}, BlockIndex: map[string]BlockHits{}}
 	if err := loadJSONFile(path, &idx); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			log.Printf("event=inventory_index_load_error file=%q err=%q", path, err.Error())
@@ -396,6 +525,9 @@ func loadIndex(path string) InventoryIndex {
 	}
 	if idx.ItemIndex == nil {
 		idx.ItemIndex = map[string]ItemHits{}
+	}
+	if idx.BlockIndex == nil {
+		idx.BlockIndex = map[string]BlockHits{}
 	}
 	return idx
 }
@@ -409,7 +541,7 @@ func loadRefreshRequest(path string) (RefreshRequest, bool) {
 		return RefreshRequest{}, false
 	}
 	s := strings.ToLower(strings.TrimSpace(req.Scope))
-	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "all" {
+	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "blocks" && s != "all" {
 		req.Scope = "all"
 	} else if s == "containers" {
 		req.Scope = "chests"
@@ -1309,11 +1441,213 @@ func parseMCAChests(raw []byte, dim int) ([]ChestRecord, error) {
 	return out, nil
 }
 
+type blockMeta struct {
+	RegName string
+	Name    string
+}
+
+func loadBlockRegistry(path string) (map[string]blockMeta, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	lines := strings.Split(string(raw), "\n")
+	out := map[string]blockMeta{}
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		cols := strings.Split(line, "\t")
+		if i == 0 && len(cols) > 0 && strings.Contains(strings.ToLower(cols[0]), "id") {
+			continue
+		}
+		if len(cols) < 3 {
+			continue
+		}
+		id, err1 := strconv.Atoi(strings.TrimSpace(cols[0]))
+		meta, err2 := strconv.Atoi(strings.TrimSpace(cols[1]))
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		m := blockMeta{RegName: strings.TrimSpace(cols[2])}
+		if len(cols) > 3 {
+			m.Name = strings.TrimSpace(cols[3])
+		}
+		out[blockKey(id, meta)] = m
+	}
+	return out, len(out) > 0
+}
+
+func blockKey(id, meta int) string {
+	return fmt.Sprintf("%d:%d", id, meta)
+}
+
+func blockAllowed(id, meta int, allow map[string]bool) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	return allow[blockKey(id, meta)]
+}
+
+func inBlockBounds(dim, x, y, z int, bounds *BlockBounds) bool {
+	if bounds == nil {
+		return true
+	}
+	return dim == bounds.Dim &&
+		x >= bounds.MinX && x <= bounds.MaxX &&
+		y >= bounds.MinY && y <= bounds.MaxY &&
+		z >= bounds.MinZ && z <= bounds.MaxZ
+}
+
+func nibbleGet(buf []byte, idx int) int {
+	if idx < 0 || idx>>1 >= len(buf) {
+		return 0
+	}
+	b := buf[idx>>1]
+	if idx&1 == 1 {
+		return int((b >> 4) & 0x0f)
+	}
+	return int(b & 0x0f)
+}
+
+func decodeSectionBlocks(section map[string]any, dim, chunkX, chunkZ int, bounds *BlockBounds, allow map[string]bool, registry map[string]blockMeta) []BlockRecord {
+	sectionY := numberToInt(section["Y"])
+	baseY := sectionY * 16
+	if bounds != nil && (dim != bounds.Dim || baseY > bounds.MaxY || baseY+15 < bounds.MinY) {
+		return nil
+	}
+	out := make([]BlockRecord, 0, 64)
+	blocks16, hasBlocks16 := section["Blocks16"].([]byte)
+	data16, _ := section["Data16"].([]byte)
+	blocks, hasBlocks := section["Blocks"].([]byte)
+	add, _ := section["Add"].([]byte)
+	data, _ := section["Data"].([]byte)
+	if hasBlocks16 {
+		if len(blocks16) < 8192 {
+			return nil
+		}
+		for idx := 0; idx < 4096; idx++ {
+			off := idx * 2
+			id := int(binary.BigEndian.Uint16(blocks16[off : off+2]))
+			meta := 0
+			if len(data16) >= off+2 {
+				meta = int(binary.BigEndian.Uint16(data16[off : off+2]))
+			}
+			if id == 0 || !blockAllowed(id, meta, allow) {
+				continue
+			}
+			lx, ly, lz := idx&15, (idx>>8)&15, (idx>>4)&15
+			x, y, z := chunkX*16+lx, baseY+ly, chunkZ*16+lz
+			if !inBlockBounds(dim, x, y, z, bounds) {
+				continue
+			}
+			rec := BlockRecord{Dimension: dim, X: x, Y: y, Z: z, ID: id, Meta: meta}
+			if m, ok := registry[blockKey(id, meta)]; ok {
+				rec.RegName, rec.Name = m.RegName, m.Name
+			}
+			out = append(out, rec)
+		}
+		return out
+	}
+	if !hasBlocks || len(blocks) < 4096 {
+		return nil
+	}
+	for idx := 0; idx < 4096; idx++ {
+		id := int(blocks[idx])
+		if len(add) >= 2048 {
+			id |= nibbleGet(add, idx) << 8
+		}
+		meta := 0
+		if len(data) >= 2048 {
+			meta = nibbleGet(data, idx)
+		}
+		if id == 0 || !blockAllowed(id, meta, allow) {
+			continue
+		}
+		lx, ly, lz := idx&15, (idx>>8)&15, (idx>>4)&15
+		x, y, z := chunkX*16+lx, baseY+ly, chunkZ*16+lz
+		if !inBlockBounds(dim, x, y, z, bounds) {
+			continue
+		}
+		rec := BlockRecord{Dimension: dim, X: x, Y: y, Z: z, ID: id, Meta: meta}
+		if m, ok := registry[blockKey(id, meta)]; ok {
+			rec.RegName, rec.Name = m.RegName, m.Name
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func parseMCABlocks(raw []byte, dim int, bounds *BlockBounds, allow map[string]bool, registry map[string]blockMeta) ([]BlockRecord, error) {
+	if len(raw) < 8192 {
+		return nil, fmt.Errorf("invalid mca size: %d", len(raw))
+	}
+	out := make([]BlockRecord, 0, 512)
+	for i := 0; i < 1024; i++ {
+		base := i * 4
+		off := int(raw[base])<<16 | int(raw[base+1])<<8 | int(raw[base+2])
+		sectors := int(raw[base+3])
+		if off == 0 || sectors == 0 {
+			continue
+		}
+		start := off * 4096
+		if start+5 > len(raw) {
+			continue
+		}
+		length := int(binary.BigEndian.Uint32(raw[start : start+4]))
+		if length <= 1 || start+4+length > len(raw) {
+			continue
+		}
+		compression := raw[start+4]
+		payload := raw[start+5 : start+4+length]
+		var chunkRaw []byte
+		switch compression {
+		case 1:
+			zr, err := gzip.NewReader(bytes.NewReader(payload))
+			if err != nil {
+				continue
+			}
+			chunkRaw, err = io.ReadAll(zr)
+			zr.Close()
+			if err != nil {
+				continue
+			}
+		case 2:
+			zr, err := zlib.NewReader(bytes.NewReader(payload))
+			if err != nil {
+				continue
+			}
+			chunkRaw, err = io.ReadAll(zr)
+			zr.Close()
+			if err != nil {
+				continue
+			}
+		default:
+			continue
+		}
+		root, err := parseNBTDocument(chunkRaw)
+		if err != nil {
+			continue
+		}
+		level := toMap(root["Level"])
+		if len(level) == 0 {
+			continue
+		}
+		chunkX := numberToInt(level["xPos"])
+		chunkZ := numberToInt(level["zPos"])
+		for _, row := range toList(level["Sections"]) {
+			out = append(out, decodeSectionBlocks(toMap(row), dim, chunkX, chunkZ, bounds, allow, registry)...)
+		}
+	}
+	return out, nil
+}
+
 func itemKey(id, damage int) string {
 	return fmt.Sprintf("%d:%d", id, damage)
 }
 
-func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, source SourceMeta, stats IndexStats) InventoryIndex {
+func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, blocks []BlockRecord, source SourceMeta, stats IndexStats, blockStatus BlockIndexStatus) InventoryIndex {
 	idx := InventoryIndex{
 		Version:     2,
 		GeneratedAt: nowUTC(),
@@ -1322,7 +1656,10 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, 
 		Players:     players,
 		Chests:      chests,
 		ME:          me,
+		Blocks:      blocks,
 		ItemIndex:   map[string]ItemHits{},
+		BlockIndex:  map[string]BlockHits{},
+		BlockStatus: blockStatus,
 	}
 
 	for _, p := range players {
@@ -1401,6 +1738,22 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, 
 		}
 	}
 
+	for _, b := range blocks {
+		k := blockKey(b.ID, b.Meta)
+		h := idx.BlockIndex[k]
+		h.Blocks = append(h.Blocks, BlockHit{
+			Dimension: b.Dimension,
+			X:         b.X,
+			Y:         b.Y,
+			Z:         b.Z,
+			ID:        b.ID,
+			Meta:      b.Meta,
+			RegName:   b.RegName,
+			Name:      b.Name,
+		})
+		idx.BlockIndex[k] = h
+	}
+
 	for k, h := range idx.ItemIndex {
 		sort.Slice(h.Players, func(i, j int) bool {
 			if h.Players[i].TotalCount == h.Players[j].TotalCount {
@@ -1431,7 +1784,24 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, 
 		})
 		idx.ItemIndex[k] = h
 	}
+	for k, h := range idx.BlockIndex {
+		sort.Slice(h.Blocks, func(i, j int) bool {
+			if h.Blocks[i].Dimension != h.Blocks[j].Dimension {
+				return h.Blocks[i].Dimension < h.Blocks[j].Dimension
+			}
+			if h.Blocks[i].X != h.Blocks[j].X {
+				return h.Blocks[i].X < h.Blocks[j].X
+			}
+			if h.Blocks[i].Y != h.Blocks[j].Y {
+				return h.Blocks[i].Y < h.Blocks[j].Y
+			}
+			return h.Blocks[i].Z < h.Blocks[j].Z
+		})
+		idx.BlockIndex[k] = h
+	}
 	idx.Stats.IndexedItemKeys = len(idx.ItemIndex)
+	idx.Stats.IndexedBlockKeys = len(idx.BlockIndex)
+	idx.Stats.BlockCount = len(idx.Blocks)
 	return idx
 }
 
@@ -1553,6 +1923,114 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 	return all, regionCount, chestStacks, nil
 }
 
+func parseRegionCoords(path string) (int, int, bool) {
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "r.") || !strings.HasSuffix(base, ".mca") {
+		return 0, 0, false
+	}
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(base, "r."), ".mca")
+	parts := strings.Split(trimmed, ".")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	rx, err1 := strconv.Atoi(parts[0])
+	rz, err2 := strconv.Atoi(parts[1])
+	return rx, rz, err1 == nil && err2 == nil
+}
+
+func regionIntersectsBlockBounds(dim int, regionPath string, bounds *BlockBounds) bool {
+	if bounds == nil {
+		return true
+	}
+	if dim != bounds.Dim {
+		return false
+	}
+	rx, rz, ok := parseRegionCoords(regionPath)
+	if !ok {
+		return true
+	}
+	minX, maxX := rx*512, rx*512+511
+	minZ, maxZ := rz*512, rz*512+511
+	return maxX >= bounds.MinX && minX <= bounds.MaxX && maxZ >= bounds.MinZ && minZ <= bounds.MaxZ
+}
+
+func blockScanStatus(cfg Config, registryAvailable bool) BlockIndexStatus {
+	status := BlockIndexStatus{
+		Enabled:           cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0,
+		Bounds:            cfg.BlockBounds,
+		Allowlist:         sortedBlockAllowlist(cfg.BlockAllowlist),
+		RegistryFile:      cfg.BlockRegistryFile,
+		RegistryAvailable: registryAvailable,
+	}
+	if !status.Enabled {
+		status.Reason = "block scan requires INVENTORY_BLOCK_BOUNDS or INVENTORY_BLOCK_ALLOWLIST"
+	} else if !registryAvailable {
+		status.Reason = "block registry unavailable; numeric id/meta search only"
+	}
+	return status
+}
+
+func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndexStatus, error) {
+	registry, registryAvailable := loadBlockRegistry(cfg.BlockRegistryFile)
+	status := blockScanStatus(cfg, registryAvailable)
+	if !status.Enabled {
+		return nil, 0, status, errors.New(status.Reason)
+	}
+
+	all := make([]BlockRecord, 0, 1024)
+	regionCount := 0
+	for _, dim := range cfg.ScanDims {
+		path, ok := dimPath(dim)
+		if !ok {
+			continue
+		}
+		entries, err := listFiles(client, cfg, path)
+		if err != nil {
+			log.Printf("event=inventory_block_region_list_error path=%q err=%q", path, err.Error())
+			continue
+		}
+		regionFiles := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if e.Deleted || !strings.HasSuffix(e.Path, ".mca") || !regionIntersectsBlockBounds(dim, e.Path, cfg.BlockBounds) {
+				continue
+			}
+			regionFiles = append(regionFiles, e.Path)
+		}
+		sort.Strings(regionFiles)
+		if cfg.MaxRegionFiles > 0 && len(regionFiles) > cfg.MaxRegionFiles {
+			regionFiles = regionFiles[:cfg.MaxRegionFiles]
+		}
+		for _, relPath := range regionFiles {
+			regionCount++
+			fullPath := path + filepath.Base(relPath)
+			raw, err := getFile(client, cfg, fullPath)
+			if err != nil {
+				log.Printf("event=inventory_block_region_file_error file=%q err=%q", fullPath, err.Error())
+				continue
+			}
+			blocks, err := parseMCABlocks(raw, dim, cfg.BlockBounds, cfg.BlockAllowlist, registry)
+			if err != nil {
+				log.Printf("event=inventory_block_region_parse_error file=%q err=%q", fullPath, err.Error())
+				continue
+			}
+			all = append(all, blocks...)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Dimension != all[j].Dimension {
+			return all[i].Dimension < all[j].Dimension
+		}
+		if all[i].X != all[j].X {
+			return all[i].X < all[j].X
+		}
+		if all[i].Y != all[j].Y {
+			return all[i].Y < all[j].Y
+		}
+		return all[i].Z < all[j].Z
+	})
+	return all, regionCount, status, nil
+}
+
 func scanME(client *http.Client, cfg Config) ([]MERecord, string, int, error) {
 	raw, err := getFile(client, cfg, "world/greggpt/me_index.json")
 	if err != nil {
@@ -1583,9 +2061,9 @@ func main() {
 	state := loadRuntimeState(stateFile)
 
 	if cfg.ChestBounds != nil {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s blocks_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlocksInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
 	} else {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s blocks_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlocksInterval)
 	}
 
 	for {
@@ -1598,6 +2076,7 @@ func main() {
 		playersDue := parseRFC3339(state.LastPlayersScan).IsZero() || now.Sub(parseRFC3339(state.LastPlayersScan)) >= cfg.PlayersInterval
 		chestsDue := parseRFC3339(state.LastChestsScan).IsZero() || now.Sub(parseRFC3339(state.LastChestsScan)) >= cfg.ChestsInterval
 		meDue := parseRFC3339(state.LastMEScan).IsZero() || now.Sub(parseRFC3339(state.LastMEScan)) >= cfg.MEInterval
+		blocksDue := (cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0) && (parseRFC3339(state.LastBlocksScan).IsZero() || now.Sub(parseRFC3339(state.LastBlocksScan)) >= cfg.BlocksInterval)
 
 		refreshReq, hasRefresh := loadRefreshRequest(refreshFile)
 		if hasRefresh {
@@ -1608,14 +2087,17 @@ func main() {
 				chestsDue = true
 			case "me":
 				meDue = true
+			case "blocks":
+				blocksDue = true
 			default:
 				playersDue = true
 				chestsDue = true
 				meDue = true
+				blocksDue = cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0
 			}
 		}
 
-		if !playersDue && !chestsDue && !meDue {
+		if !playersDue && !chestsDue && !meDue && !blocksDue {
 			time.Sleep(cfg.LoopSleep)
 			continue
 		}
@@ -1633,8 +2115,11 @@ func main() {
 		players := prev.Players
 		chests := prev.Chests
 		me := prev.ME
+		blocks := prev.Blocks
 		stats := prev.Stats
 		source := prev.Source
+		_, registryAvailable := loadBlockRegistry(cfg.BlockRegistryFile)
+		blockStatus := blockScanStatus(cfg, registryAvailable)
 		source.ServerID = cfg.DatHostServer
 		if syncAt != "" {
 			source.DatHostSyncAt = syncAt
@@ -1687,7 +2172,23 @@ func main() {
 			}
 		}
 
-		index := indexFromData(players, chests, me, source, stats)
+		if blocksDue {
+			b, regionCount, status, err := scanBlocks(client, cfg)
+			blockStatus = status
+			if err != nil {
+				errorsMap["blocks"] = err.Error()
+				log.Printf("event=inventory_blocks_scan_error err=%q", err.Error())
+			} else {
+				blocks = b
+				state.LastBlocksScan = nowUTC()
+				source.BlocksScanAt = state.LastBlocksScan
+				source.BlocksVersion++
+				stats.BlockRegionFiles = regionCount
+				stats.BlockCount = len(blocks)
+			}
+		}
+
+		index := indexFromData(players, chests, me, blocks, source, stats, blockStatus)
 		if err := atomicWriteJSON(indexFile, index); err != nil {
 			log.Printf("event=inventory_index_write_error file=%q err=%q", indexFile, err.Error())
 			errorsMap["index_write"] = err.Error()
@@ -1698,10 +2199,12 @@ func main() {
 			GeneratedAt: nowUTC(),
 			Source:      index.Source,
 			Stats:       index.Stats,
+			BlockStatus: index.BlockStatus,
 			Stale: map[string]bool{
 				"players": parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
 				"chests":  parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
 				"me":      parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
+				"blocks":  index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
 			},
 			Errors: errorsMap,
 		}
@@ -1714,7 +2217,7 @@ func main() {
 			clearRefreshRequest(refreshFile)
 		}
 
-		log.Printf("event=inventory_cycle_complete players=%d chests=%d me_networks=%d item_keys=%d", index.Stats.PlayerCount, index.Stats.ChestCount, index.Stats.MENetworkCount, index.Stats.IndexedItemKeys)
+		log.Printf("event=inventory_cycle_complete players=%d chests=%d me_networks=%d blocks=%d item_keys=%d block_keys=%d", index.Stats.PlayerCount, index.Stats.ChestCount, index.Stats.MENetworkCount, index.Stats.BlockCount, index.Stats.IndexedItemKeys, index.Stats.IndexedBlockKeys)
 		time.Sleep(cfg.LoopSleep)
 	}
 }
@@ -1730,10 +2233,12 @@ func writeOutputs(indexFile, statusFile string, index InventoryIndex, errorsMap 
 		GeneratedAt: nowUTC(),
 		Source:      index.Source,
 		Stats:       index.Stats,
+		BlockStatus: index.BlockStatus,
 		Stale: map[string]bool{
 			"players": parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
 			"chests":  parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
 			"me":      parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
+			"blocks":  index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
 		},
 		Errors: errorsMap,
 	}

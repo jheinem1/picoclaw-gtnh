@@ -244,7 +244,7 @@ func TestIndexFromData_IncludesMEHits(t *testing.T) {
 				{ID: 7437, Damage: 11305, Count: 2048, DisplayName: "Steel Ingot"},
 			},
 		},
-	}, SourceMeta{MEScanAt: "2026-04-28T12:00:00Z"}, IndexStats{})
+	}, nil, SourceMeta{MEScanAt: "2026-04-28T12:00:00Z"}, IndexStats{}, BlockIndexStatus{})
 
 	hits := index.ItemIndex["7437:11305"].ME
 	if len(hits) != 1 {
@@ -255,5 +255,76 @@ func TestIndexFromData_IncludesMEHits(t *testing.T) {
 	}
 	if index.Version != 2 {
 		t.Fatalf("expected index version 2, got %d", index.Version)
+	}
+}
+
+func setTestNibble(buf []byte, idx int, value int) {
+	off := idx >> 1
+	if idx&1 == 1 {
+		buf[off] = (buf[off] & 0x0f) | byte((value&0x0f)<<4)
+	} else {
+		buf[off] = (buf[off] & 0xf0) | byte(value&0x0f)
+	}
+}
+
+func TestDecodeSectionBlocks_BlocksDataAdd(t *testing.T) {
+	blocks := make([]byte, 4096)
+	data := make([]byte, 2048)
+	add := make([]byte, 2048)
+	idx := (7 << 8) | (8 << 4) | 3
+	blocks[idx] = byte(300 & 0xff)
+	setTestNibble(add, idx, 300>>8)
+	setTestNibble(data, idx, 5)
+
+	got := decodeSectionBlocks(map[string]any{
+		"Y":      int8(4),
+		"Blocks": blocks,
+		"Data":   data,
+		"Add":    add,
+	}, 0, 2, -1, &BlockBounds{Dim: 0, MinX: 30, MaxX: 40, MinY: 70, MaxY: 72, MinZ: -10, MaxZ: -5}, map[string]bool{"300:5": true}, nil)
+
+	if len(got) != 1 {
+		t.Fatalf("expected one decoded block, got %#v", got)
+	}
+	if got[0].ID != 300 || got[0].Meta != 5 || got[0].X != 35 || got[0].Y != 71 || got[0].Z != -8 {
+		t.Fatalf("unexpected decoded block: %#v", got[0])
+	}
+}
+
+func TestDecodeSectionBlocks_Blocks16Data16(t *testing.T) {
+	blocks16 := make([]byte, 8192)
+	data16 := make([]byte, 8192)
+	idx := (1 << 8) | (2 << 4) | 3
+	off := idx * 2
+	blocks16[off] = 0x10
+	blocks16[off+1] = 0x01
+	data16[off] = 0x01
+	data16[off+1] = 0x01
+
+	got := decodeSectionBlocks(map[string]any{
+		"Y":        int8(0),
+		"Blocks16": blocks16,
+		"Data16":   data16,
+	}, 1, 0, 0, nil, map[string]bool{"4097:257": true}, map[string]blockMeta{"4097:257": blockMeta{RegName: "mod:block", Name: "Block"}})
+
+	if len(got) != 1 {
+		t.Fatalf("expected one decoded Blocks16 block, got %#v", got)
+	}
+	if got[0].ID != 4097 || got[0].Meta != 257 || got[0].RegName != "mod:block" || got[0].Name != "Block" {
+		t.Fatalf("unexpected Blocks16 decoded block: %#v", got[0])
+	}
+}
+
+func TestIndexFromData_IncludesBlockHits(t *testing.T) {
+	index := indexFromData(nil, nil, nil, []BlockRecord{
+		{Dimension: 0, X: 1, Y: 64, Z: 2, ID: 300, Meta: 5},
+	}, SourceMeta{BlocksScanAt: "2026-04-28T12:00:00Z"}, IndexStats{}, BlockIndexStatus{Enabled: true})
+
+	hits := index.BlockIndex["300:5"].Blocks
+	if len(hits) != 1 {
+		t.Fatalf("expected one block hit, got %#v", hits)
+	}
+	if index.Stats.BlockCount != 1 || index.Stats.IndexedBlockKeys != 1 {
+		t.Fatalf("unexpected block stats: %#v", index.Stats)
 	}
 }

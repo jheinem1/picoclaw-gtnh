@@ -431,8 +431,13 @@ func inventoryCommand() *discordgo.ApplicationCommand {
 				integerOption("z", "Z coordinate", true),
 				integerOption("dim", "Dimension", false),
 			),
+			subcommand("find_block", "Find a placed block by numeric id/meta",
+				integerOption("id", "Numeric block id", true),
+				integerOption("meta", "Block metadata", true),
+				integerOption("limit", "Result limit", false),
+			),
 			subcommand("refresh", "Refresh inventory index",
-				stringChoice("scope", "Scope", false, "players", "chests", "containers", "me", "all"),
+				stringChoice("scope", "Scope", false, "players", "chests", "containers", "me", "blocks", "all"),
 			),
 		},
 	}
@@ -1174,6 +1179,12 @@ func (s *Service) dispatchInventory(ctx context.Context, opts []*discordgo.Appli
 			args = append(args, "--dim", fmt.Sprintf("%d", dim))
 		}
 		return s.run(ctx, args...)
+	case "find_block":
+		args := []string{"sh", "gtnh_inventory", "find-block", "--id", fmt.Sprintf("%d", optInt(subOpts, "id")), "--meta", fmt.Sprintf("%d", optInt(subOpts, "meta"))}
+		if limit := optInt(subOpts, "limit"); limit > 0 {
+			args = append(args, "--limit", fmt.Sprintf("%d", limit))
+		}
+		return s.run(ctx, args...)
 	case "refresh":
 		args := []string{"sh", "gtnh_inventory", "refresh"}
 		if scope := optString(subOpts, "scope"); scope != "" {
@@ -1186,6 +1197,8 @@ func (s *Service) dispatchInventory(ctx context.Context, opts []*discordgo.Appli
 				args = append(args, "--containers")
 			case "me":
 				args = append(args, "--me")
+			case "blocks":
+				args = append(args, "--blocks")
 			case "all":
 				args = append(args, "--all")
 			}

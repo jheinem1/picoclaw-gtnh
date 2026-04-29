@@ -22,6 +22,7 @@ type SourceMeta struct {
 	PlayersScanAt string `json:"players_scan_at"`
 	ChestsScanAt  string `json:"chests_scan_at"`
 	MEScanAt      string `json:"me_scan_at"`
+	BlocksScanAt  string `json:"blocks_scan_at"`
 	DatHostSyncAt string `json:"dathost_sync_at"`
 }
 
@@ -35,6 +36,9 @@ type IndexStats struct {
 	MENetworkCount     int `json:"me_network_count"`
 	MEStacks           int `json:"me_stacks"`
 	RegionFilesScanned int `json:"region_files_scanned"`
+	BlockCount         int `json:"block_count"`
+	IndexedBlockKeys   int `json:"indexed_block_keys"`
+	BlockRegionFiles   int `json:"block_region_files_scanned"`
 }
 
 type Position struct {
@@ -127,21 +131,70 @@ type ItemHits struct {
 	ME      []MEHit     `json:"me,omitempty"`
 }
 
+type BlockRecord struct {
+	Dimension int    `json:"dim"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	Z         int    `json:"z"`
+	ID        int    `json:"id"`
+	Meta      int    `json:"meta"`
+	RegName   string `json:"reg_name,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
+type BlockHit struct {
+	Dimension int    `json:"dim"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	Z         int    `json:"z"`
+	ID        int    `json:"id"`
+	Meta      int    `json:"meta"`
+	RegName   string `json:"reg_name,omitempty"`
+	Name      string `json:"name,omitempty"`
+}
+
+type BlockHits struct {
+	Blocks []BlockHit `json:"blocks"`
+}
+
+type BlockBounds struct {
+	Dim  int `json:"dim"`
+	MinX int `json:"min_x"`
+	MinY int `json:"min_y"`
+	MinZ int `json:"min_z"`
+	MaxX int `json:"max_x"`
+	MaxY int `json:"max_y"`
+	MaxZ int `json:"max_z"`
+}
+
+type BlockIndexStatus struct {
+	Enabled           bool         `json:"enabled"`
+	Reason            string       `json:"reason,omitempty"`
+	Bounds            *BlockBounds `json:"bounds,omitempty"`
+	Allowlist         []string     `json:"allowlist,omitempty"`
+	RegistryFile      string       `json:"registry_file,omitempty"`
+	RegistryAvailable bool         `json:"registry_available"`
+}
+
 type InventoryIndex struct {
-	Version     int                 `json:"version"`
-	GeneratedAt string              `json:"generated_at"`
-	Source      SourceMeta          `json:"source"`
-	Stats       IndexStats          `json:"stats"`
-	Players     []PlayerRecord      `json:"players"`
-	Chests      []ChestRecord       `json:"chests"`
-	ME          []MERecord          `json:"me,omitempty"`
-	ItemIndex   map[string]ItemHits `json:"item_index"`
+	Version     int                  `json:"version"`
+	GeneratedAt string               `json:"generated_at"`
+	Source      SourceMeta           `json:"source"`
+	Stats       IndexStats           `json:"stats"`
+	Players     []PlayerRecord       `json:"players"`
+	Chests      []ChestRecord        `json:"chests"`
+	ME          []MERecord           `json:"me,omitempty"`
+	Blocks      []BlockRecord        `json:"blocks,omitempty"`
+	ItemIndex   map[string]ItemHits  `json:"item_index"`
+	BlockIndex  map[string]BlockHits `json:"block_index,omitempty"`
+	BlockStatus BlockIndexStatus     `json:"block_status,omitempty"`
 }
 
 type InventoryStatus struct {
 	GeneratedAt string            `json:"generated_at"`
 	Source      SourceMeta        `json:"source"`
 	Stats       IndexStats        `json:"stats"`
+	BlockStatus BlockIndexStatus  `json:"block_status,omitempty"`
 	Stale       map[string]bool   `json:"stale"`
 	Errors      map[string]string `json:"errors"`
 }
@@ -209,10 +262,13 @@ func loadJSON(path string, out any) error {
 }
 
 func loadIndex() (InventoryIndex, error) {
-	idx := InventoryIndex{ItemIndex: map[string]ItemHits{}}
+	idx := InventoryIndex{ItemIndex: map[string]ItemHits{}, BlockIndex: map[string]BlockHits{}}
 	err := loadJSON(defaultIndexFile(), &idx)
 	if idx.ItemIndex == nil {
 		idx.ItemIndex = map[string]ItemHits{}
+	}
+	if idx.BlockIndex == nil {
+		idx.BlockIndex = map[string]BlockHits{}
 	}
 	return idx, err
 }
@@ -465,7 +521,7 @@ func ageText(ts string) string {
 }
 
 func freshness(meta SourceMeta) string {
-	return fmt.Sprintf("Freshness: players: %s | containers: %s | ME: %s", ageText(meta.PlayersScanAt), ageText(meta.ChestsScanAt), ageText(meta.MEScanAt))
+	return fmt.Sprintf("Freshness: players: %s | containers: %s | ME: %s | blocks: %s", ageText(meta.PlayersScanAt), ageText(meta.ChestsScanAt), ageText(meta.MEScanAt), ageText(meta.BlocksScanAt))
 }
 
 func cmdStatus() error {
@@ -476,8 +532,16 @@ func cmdStatus() error {
 	fmt.Println("Inventory Index Status")
 	fmt.Println("Generated:", valueOr(st.GeneratedAt, "(unknown)"))
 	fmt.Println(freshness(st.Source))
-	fmt.Printf("Players: %d | Containers: %d | ME networks: %d | Item keys: %d\n", st.Stats.PlayerCount, st.Stats.ChestCount, st.Stats.MENetworkCount, st.Stats.IndexedItemKeys)
-	for _, key := range []string{"players", "chests", "me"} {
+	fmt.Printf("Players: %d | Containers: %d | ME networks: %d | Item keys: %d | Blocks: %d | Block keys: %d\n", st.Stats.PlayerCount, st.Stats.ChestCount, st.Stats.MENetworkCount, st.Stats.IndexedItemKeys, st.Stats.BlockCount, st.Stats.IndexedBlockKeys)
+	if st.BlockStatus.RegistryAvailable {
+		fmt.Println("Block registry: available")
+	} else {
+		fmt.Println("Block registry: unavailable; numeric id/meta search only")
+	}
+	if st.BlockStatus.Reason != "" {
+		fmt.Println("Block status:", st.BlockStatus.Reason)
+	}
+	for _, key := range []string{"players", "chests", "me", "blocks"} {
 		if st.Stale[key] {
 			fmt.Printf("WARNING: %s data is stale\n", key)
 		}
@@ -794,6 +858,126 @@ func printME(rows []MEHit, limit int) {
 	}
 }
 
+func blockKey(id, meta int) string {
+	return fmt.Sprintf("%d:%d", id, meta)
+}
+
+func cmdFindBlock(args []string) error {
+	fs := flag.NewFlagSet("find-block", flag.ContinueOnError)
+	block := fs.String("block", "", "")
+	id := fs.Int("id", 0, "")
+	meta := fs.Int("meta", unsetDamage, "")
+	limit := fs.Int("limit", 20, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	idx, err := loadIndex()
+	if err != nil {
+		return err
+	}
+	keys, label, err := resolveBlockKeys(idx, *block, *id, *meta)
+	if err != nil {
+		return err
+	}
+	if *limit <= 0 {
+		*limit = 20
+	}
+	fmt.Println("Block:", label)
+	fmt.Println(freshness(idx.Source))
+	if !idx.BlockStatus.RegistryAvailable {
+		fmt.Println("Block registry: unavailable; numeric id/meta search only")
+	}
+	if idx.BlockStatus.Reason != "" {
+		fmt.Println("Block status:", idx.BlockStatus.Reason)
+	}
+	fmt.Printf("Block find keys=%d\n", len(keys))
+	hits := mergeBlockHits(idx, keys)
+	if len(hits) == 0 {
+		fmt.Println("(none)")
+		return nil
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Dimension != hits[j].Dimension {
+			return hits[i].Dimension < hits[j].Dimension
+		}
+		if hits[i].X != hits[j].X {
+			return hits[i].X < hits[j].X
+		}
+		if hits[i].Y != hits[j].Y {
+			return hits[i].Y < hits[j].Y
+		}
+		return hits[i].Z < hits[j].Z
+	})
+	for i, h := range hits {
+		if i >= *limit {
+			break
+		}
+		name := valueOr(h.Name, h.RegName)
+		if name != "" {
+			fmt.Printf("- %d:%d (%s) at (%d,%d,%d) dim=%d\n", h.ID, h.Meta, name, h.X, h.Y, h.Z, h.Dimension)
+		} else {
+			fmt.Printf("- %d:%d at (%d,%d,%d) dim=%d\n", h.ID, h.Meta, h.X, h.Y, h.Z, h.Dimension)
+		}
+	}
+	return nil
+}
+
+func resolveBlockKeys(idx InventoryIndex, block string, id, meta int) ([]string, string, error) {
+	block = strings.TrimSpace(block)
+	if block != "" {
+		if !idx.BlockStatus.RegistryAvailable {
+			return nil, "", errors.New("error: block registry data unavailable; use --id <num> --meta <num>")
+		}
+		base := block
+		explicitMeta := unsetDamage
+		parts := strings.Split(block, ":")
+		if len(parts) == 3 {
+			base = strings.Join(parts[:2], ":")
+			explicitMeta, _ = strconv.Atoi(parts[2])
+		}
+		keys := make([]string, 0)
+		for k, h := range idx.BlockIndex {
+			for _, b := range h.Blocks {
+				if strings.EqualFold(b.RegName, base) && (explicitMeta == unsetDamage || b.Meta == explicitMeta) {
+					keys = append(keys, k)
+					break
+				}
+			}
+		}
+		sort.Strings(keys)
+		keys = dedupeStrings(keys)
+		if len(keys) == 0 {
+			return nil, "", fmt.Errorf("error: no indexed blocks matched --block %s", block)
+		}
+		return keys, block, nil
+	}
+	if id <= 0 || meta == unsetDamage {
+		return nil, "", errors.New("error: provide --block <mod:name[:meta]> or --id with --meta")
+	}
+	return []string{blockKey(id, meta)}, blockKey(id, meta), nil
+}
+
+func dedupeStrings(in []string) []string {
+	out := in[:0]
+	last := ""
+	for _, s := range in {
+		if s == last {
+			continue
+		}
+		out = append(out, s)
+		last = s
+	}
+	return out
+}
+
+func mergeBlockHits(idx InventoryIndex, keys []string) []BlockHit {
+	out := make([]BlockHit, 0)
+	for _, k := range keys {
+		out = append(out, idx.BlockIndex[k].Blocks...)
+	}
+	return out
+}
+
 func cmdRefresh(args []string) error {
 	scope := "all"
 	for _, arg := range args {
@@ -804,6 +988,8 @@ func cmdRefresh(args []string) error {
 			scope = "chests"
 		case "--me":
 			scope = "me"
+		case "--blocks":
+			scope = "blocks"
 		case "--all":
 			scope = "all"
 		default:
@@ -823,7 +1009,7 @@ func cmdRefresh(args []string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|find-item|refresh ...")
+	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|find-item|find-block|refresh ...")
 	os.Exit(2)
 }
 
@@ -839,6 +1025,8 @@ func main() {
 		err = cmdFind(os.Args[2:])
 	case "find-item":
 		err = cmdFindItem(os.Args[2:])
+	case "find-block":
+		err = cmdFindBlock(os.Args[2:])
 	case "refresh":
 		err = cmdRefresh(os.Args[2:])
 	default:

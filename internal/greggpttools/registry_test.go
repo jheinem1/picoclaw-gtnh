@@ -71,6 +71,7 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"inventory_find_item", `{"query":"steel ingot","oredict":true,"scope":"me","limit":7}`, []string{"sh", "gtnh_inventory", "find-item", "--query", "steel ingot", "--oredict", "--scope", "me", "--limit", "7"}},
 		{"inventory_player", `{"name":"Snow","all":true}`, []string{"sh", "gtnh_inventory", "player", "--name", "Snow", "--all"}},
 		{"inventory_chest", `{"x":1,"y":64,"z":-2,"dim":-1}`, []string{"sh", "gtnh_inventory", "chest", "--x", "1", "--y", "64", "--z", "-2", "--dim", "-1"}},
+		{"inventory_find_block", `{"id":300,"meta":5,"limit":9}`, []string{"sh", "gtnh_inventory", "find-block", "--id", "300", "--meta", "5", "--limit", "9"}},
 		{"inventory_refresh", `{"scope":"containers"}`, []string{"sh", "gtnh_inventory", "refresh", "--containers"}},
 		{"task_board", `{}`, []string{"sh", "gtnh_tasks", "board"}},
 		{"task_board_json", `{}`, []string{"sh", "gtnh_tasks", "board-json"}},
