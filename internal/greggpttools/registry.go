@@ -1,6 +1,7 @@
 package greggpttools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -15,12 +16,14 @@ var (
 	priorityEnum     = []any{"low", "med", "high"}
 	listStatusEnum   = []any{"open", "done", "all"}
 	dimEnum          = []any{-1, 0, 1}
+	memoryScopeEnum  = []any{"global", "channel", "user"}
 )
 
 type Registry struct {
-	cfg   Config
-	tools map[string]Tool
-	names []string
+	cfg    Config
+	memory *MemoryStore
+	tools  map[string]Tool
+	names  []string
 }
 
 func NewRegistry(cfg Config) (*Registry, error) {
@@ -35,7 +38,10 @@ func NewRegistry(cfg Config) (*Registry, error) {
 	}
 
 	r := &Registry{cfg: cfg, tools: map[string]Tool{}}
-	for _, tool := range buildTools(cfg.ToolTimeout) {
+	if cfg.MemoryEnabled {
+		r.memory = NewMemoryStore(cfg.resolvedMemoryPath(), cfg.MemoryDefaultTTL)
+	}
+	for _, tool := range buildTools(cfg.ToolTimeout, r.memory) {
 		name := tool.definition.Name
 		if _, exists := r.tools[name]; exists {
 			return nil, fmt.Errorf("duplicate tool definition %q", name)
@@ -80,12 +86,12 @@ func (r *Registry) Validate(name string, raw json.RawMessage) error {
 	return err
 }
 
-func buildTools(defaultTimeout time.Duration) []Tool {
+func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
 	short := minDuration(defaultTimeout, 10*time.Second)
 	medium := minDuration(defaultTimeout, 20*time.Second)
 	network := minDuration(defaultTimeout, 30*time.Second)
 
-	return []Tool{
+	tools := []Tool{
 		tool("gtnh_find_item", GroupGTNHQuery, "Find GTNH items by text query.", medium, object(
 			required("query", stringSpec("Item name or search text.")),
 			optional("oredict", boolSpec("Search the ore dictionary cache.", false)),
@@ -298,6 +304,10 @@ func buildTools(defaultTimeout time.Duration) []Tool {
 			return []string{"sh", "mc_say", stringArg(a, "text")}, nil
 		}),
 	}
+	if memory != nil {
+		tools = append(tools, memoryTools(memory, short)...)
+	}
+	return tools
 }
 
 func tool(name string, group Group, description string, timeout time.Duration, schema JSONSchema, build func(Arguments) ([]string, error)) Tool {
@@ -311,6 +321,20 @@ func tool(name string, group Group, description string, timeout time.Duration, s
 		},
 		timeout:   timeout,
 		buildArgv: build,
+	}
+}
+
+func nativeTool(name string, group Group, description string, timeout time.Duration, schema JSONSchema, execute func(context.Context, Arguments) (Result, error)) Tool {
+	return Tool{
+		definition: ToolDefinition{
+			Name:        name,
+			Group:       group,
+			Description: description,
+			Parameters:  schema,
+			Timeout:     timeout.String(),
+		},
+		timeout: timeout,
+		execute: execute,
 	}
 }
 

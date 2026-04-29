@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
+
+	"greggpt-gtnh/internal/greggpttools"
 )
 
 const (
@@ -85,6 +88,12 @@ func NewRunner(cfg Config, client Client, registry Registry) *Runner {
 	if cfg.MaxToolCalls == 0 {
 		cfg.MaxToolCalls = DefaultMaxToolCalls
 	}
+	if cfg.MemoryMaxInjectedBytes == 0 {
+		cfg.MemoryMaxInjectedBytes = DefaultMemoryMaxBytes
+	}
+	if cfg.MemoryMaxInjectedItems == 0 {
+		cfg.MemoryMaxInjectedItems = DefaultMemoryMaxItems
+	}
 	return &Runner{
 		cfg:      cfg,
 		client:   client,
@@ -109,9 +118,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 		return "", err
 	}
 
+	content, err := r.requestContent(req)
+	if err != nil {
+		return "", err
+	}
 	input := []InputItem{{
 		Role:    roleUser,
-		Content: requestContent(req),
+		Content: content,
 	}}
 	toolCalls := 0
 
@@ -176,7 +189,7 @@ func (r *Runner) executeTool(ctx context.Context, call ToolCall) string {
 	return "tool error: " + err.Error()
 }
 
-func requestContent(req Request) string {
+func (r *Runner) requestContent(req Request) (string, error) {
 	var b strings.Builder
 	channel := req.Channel
 	if channel == "" {
@@ -196,7 +209,58 @@ func requestContent(req Request) string {
 			fmt.Fprintf(&b, "%s: %s\n", k, req.Context[k])
 		}
 	}
+	if r.cfg.MemoryEnabled {
+		memory, err := r.injectedMemory(req)
+		if err != nil {
+			return "", err
+		}
+		if memory != "" {
+			b.WriteString(memory)
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString("message:\n")
 	b.WriteString(strings.TrimSpace(req.Message))
-	return b.String()
+	return b.String(), nil
+}
+
+func (r *Runner) injectedMemory(req Request) (string, error) {
+	store := greggpttools.NewMemoryStore(r.memoryPath(), r.cfg.MemoryDefaultTTL)
+	channel := req.Channel
+	if channel == "" {
+		channel = ChannelMinecraft
+	}
+	scopes := []greggpttools.MemoryScope{greggpttools.MemoryScopeGlobal}
+	if channel != "" {
+		scopes = append(scopes, greggpttools.MemoryScopeChannel)
+	}
+	user := strings.TrimSpace(req.User)
+	if user != "" {
+		scopes = append(scopes, greggpttools.MemoryScopeUser)
+	}
+	items, err := store.List(greggpttools.MemorySelector{
+		Scopes:  scopes,
+		Channel: string(channel),
+		User:    user,
+		Limit:   r.cfg.MemoryMaxInjectedItems,
+	})
+	if err != nil {
+		return "", err
+	}
+	return greggpttools.FormatMemoriesForInjection(items, r.cfg.MemoryMaxInjectedItems, r.cfg.MemoryMaxInjectedBytes), nil
+}
+
+func (r *Runner) memoryPath() string {
+	path := strings.TrimSpace(r.cfg.MemoryPath)
+	if path == "" {
+		path = greggpttools.DefaultMemoryPath
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	workspace := r.cfg.Workspace
+	if workspace == "" {
+		workspace = DefaultWorkspace
+	}
+	return filepath.Join(workspace, path)
 }

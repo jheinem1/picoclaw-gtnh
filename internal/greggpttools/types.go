@@ -1,6 +1,9 @@
 package greggpttools
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Group string
 
@@ -9,6 +12,7 @@ const (
 	GroupInventory Group = "inventory"
 	GroupTask      Group = "task"
 	GroupMinecraft Group = "minecraft"
+	GroupMemory    Group = "memory"
 )
 
 type ToolDefinition struct {
@@ -52,6 +56,7 @@ type Tool struct {
 	definition ToolDefinition
 	timeout    time.Duration
 	buildArgv  func(Arguments) ([]string, error)
+	execute    func(context.Context, Arguments) (Result, error)
 }
 
 func (t Tool) Definition() ToolDefinition {

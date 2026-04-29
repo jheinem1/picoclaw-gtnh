@@ -133,6 +133,15 @@ Task data is stored at `workspace/state/gtnh_tasks.tsv`.
 For Discord display consistency, prefer `board-code` and post output verbatim.
 Task schema now includes Kanban and metadata fields (`kanban_status`, `sort_key`, `owner`, `paused_reason`, `description`) with automatic migration for older TSV rows. `owner` stores a comma-separated assignee list when a task has multiple people. Use `assign` and `unassign` to mutate that list incrementally. Status-update history is stored separately in `workspace/state/gtnh_task_status_updates.json`.
 
+## GregGPT persistent memory
+GregGPT can use a local JSON memory store when enabled:
+- Store path: `workspace/state/greggpt_memory.json` by default (`GREGGPT_MEMORY_PATH=state/greggpt_memory.json`)
+- Enable tools/injection: `GREGGPT_MEMORY_ENABLED=true`
+- Injection limits: `GREGGPT_MEMORY_MAX_INJECTED_BYTES` and `GREGGPT_MEMORY_MAX_INJECTED_ITEMS`
+- Optional default TTL: `GREGGPT_MEMORY_DEFAULT_TTL_SECONDS`
+
+Memory is selected by scope at request time: `global`, matching `channel`, and matching `user`. Writes are explicit through `memory_remember`; reads use `memory_search` or `memory_list`; deletes use `memory_forget` with a reason. The OpenAI response request still uses `Store=false`.
+
 ## Discord Kanban sync service
 `kanban-sync` supports two Discord outputs:
 - Board sync: one pinned board embed from `sh gtnh_tasks board-json`

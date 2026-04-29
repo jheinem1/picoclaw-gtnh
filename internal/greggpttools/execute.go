@@ -37,6 +37,9 @@ func (r *Registry) argvForTest(name string, raw json.RawMessage) ([]string, erro
 	if !ok {
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
+	if tool.buildArgv == nil {
+		return nil, fmt.Errorf("tool %q does not use argv", name)
+	}
 	args, err := parseArguments(tool.definition.Parameters, raw)
 	if err != nil {
 		return nil, err
@@ -45,6 +48,9 @@ func (r *Registry) argvForTest(name string, raw json.RawMessage) ([]string, erro
 }
 
 func (r *Registry) executeParsed(ctx context.Context, tool Tool, args Arguments) (Result, error) {
+	if tool.execute != nil {
+		return tool.execute(ctx, args)
+	}
 	argv, err := tool.buildArgv(args)
 	if err != nil {
 		return Result{}, err

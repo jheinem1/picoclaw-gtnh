@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"greggpt-gtnh/internal/greggpttools"
 )
 
 func TestRunnerFinalOnly(t *testing.T) {
@@ -171,6 +174,55 @@ func TestRunnerBackendErrorReturnsToCaller(t *testing.T) {
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected backend error, got %v", err)
+	}
+}
+
+func TestRunnerInjectsSelectedMemory(t *testing.T) {
+	workspace := t.TempDir()
+	memoryPath := filepath.Join(workspace, "state", "greggpt_memory.json")
+	store := greggpttools.NewMemoryStore(memoryPath, 0)
+	for _, entry := range []greggpttools.MemoryEntry{
+		{Scope: greggpttools.MemoryScopeGlobal, Key: "base", Value: "Steam age"},
+		{Scope: greggpttools.MemoryScopeChannel, Channel: "discord", Key: "channel_goal", Value: "Build EBF"},
+		{Scope: greggpttools.MemoryScopeChannel, Channel: "minecraft", Key: "other_channel", Value: "Do not inject"},
+		{Scope: greggpttools.MemoryScopeUser, User: "jhein", Key: "user_pref", Value: "Likes concise answers"},
+		{Scope: greggpttools.MemoryScopeUser, User: "someone_else", Key: "other_user", Value: "Do not inject"},
+	} {
+		if _, err := store.Remember(entry, nil); err != nil {
+			t.Fatalf("Remember returned error: %v", err)
+		}
+	}
+
+	client := &fakeClient{responses: []ModelResponse{{FinalText: "ok"}}}
+	runner := NewRunner(Config{
+		Workspace:              workspace,
+		MemoryEnabled:          true,
+		MemoryPath:             "state/greggpt_memory.json",
+		MemoryMaxInjectedItems: 8,
+		MemoryMaxInjectedBytes: 2000,
+	}, client, newFakeRegistry())
+
+	got, err := runner.Run(context.Background(), Request{
+		Channel: ChannelDiscord,
+		User:    "jhein",
+		Message: "what next?",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("unexpected final text: %q", got)
+	}
+	content := client.requests[0].Input[0].Content
+	for _, want := range []string{"memory:", "Steam age", "Build EBF", "Likes concise answers"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("request content missing %q: %s", want, content)
+		}
+	}
+	for _, unwanted := range []string{"Do not inject", "other_channel", "other_user"} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("request content included %q: %s", unwanted, content)
+		}
 	}
 }
 
