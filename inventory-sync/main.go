@@ -839,18 +839,54 @@ func parseItemList(list []any, source string) []ItemStack {
 		if len(m) == 0 {
 			continue
 		}
-		id := numberToInt(m["id"])
-		damage := numberToInt(m["Damage"])
-		count := numberToInt(m["Count"])
-		slot := numberToInt(m["Slot"])
-		if id == 0 || count <= 0 {
+		stack, ok := parseItemStackCompound(m, source, 0, nil)
+		if !ok {
 			continue
 		}
-		custom := extractCustomName(toMap(m["tag"]))
-		out = append(out, ItemStack{ID: id, Damage: damage, Count: count, Slot: slot, Source: source, Custom: custom})
-		nested := parseNestedStacks(m["tag"], source+":nested", slot, 0)
+		out = append(out, stack)
+		nested := parseNestedStacks(m["tag"], source+":nested", stack.Slot, 0)
 		if len(nested) > 0 {
 			out = append(out, nested...)
+		}
+	}
+	return out
+}
+
+func parseItemStackCompound(m map[string]any, source string, parentSlot int, countOverride any) (ItemStack, bool) {
+	id := numberToInt(m["id"])
+	count := numberToInt(countOverride)
+	if count <= 0 {
+		count = numberToInt(firstPresent(m, "Count", "count"))
+	}
+	if id == 0 || count <= 0 {
+		return ItemStack{}, false
+	}
+	slot := parentSlot
+	if _, ok := m["Slot"]; ok {
+		slot = numberToInt(m["Slot"])
+	} else if _, ok := m["slot"]; ok {
+		slot = numberToInt(m["slot"])
+	}
+	damage := numberToInt(firstPresent(m, "Damage", "damage"))
+	custom := extractCustomName(toMap(m["tag"]))
+	return ItemStack{ID: id, Damage: damage, Count: count, Slot: slot, Source: source, Custom: custom}, true
+}
+
+func parseDirectStackFields(m map[string]any, source string, parentSlot int) []ItemStack {
+	count := firstPresent(m, "mItemCount", "mItemCountLong", "mItemAmount", "mStoredItemCount", "mStoredCount")
+	if count == nil {
+		return nil
+	}
+	out := make([]ItemStack, 0, 2)
+	for _, key := range []string{"mItemStack", "mStoredItemStack"} {
+		stackMap := toMap(m[key])
+		if len(stackMap) == 0 {
+			continue
+		}
+		stack, ok := parseItemStackCompound(stackMap, source, parentSlot, count)
+		if ok {
+			out = append(out, stack)
+			out = append(out, parseNestedStacks(stackMap["tag"], source+":nested", stack.Slot, 0)...)
 		}
 	}
 	return out
@@ -863,18 +899,16 @@ func parseNestedStacks(v any, source string, parentSlot int, depth int) []ItemSt
 	out := make([]ItemStack, 0, 8)
 	switch t := v.(type) {
 	case map[string]any:
-		id := numberToInt(t["id"])
-		count := numberToInt(t["Count"])
-		if id != 0 && count > 0 {
-			damage := numberToInt(t["Damage"])
-			slot := parentSlot
-			if _, ok := t["Slot"]; ok {
-				slot = numberToInt(t["Slot"])
-			}
-			custom := extractCustomName(toMap(t["tag"]))
-			out = append(out, ItemStack{ID: id, Damage: damage, Count: count, Slot: slot, Source: source, Custom: custom})
+		if direct := parseDirectStackFields(t, source, parentSlot); len(direct) > 0 {
+			out = append(out, direct...)
 		}
-		for _, child := range t {
+		if stack, ok := parseItemStackCompound(t, source, parentSlot, nil); ok {
+			out = append(out, stack)
+		}
+		for key, child := range t {
+			if key == "mItemStack" || key == "mStoredItemStack" {
+				continue
+			}
 			out = append(out, parseNestedStacks(child, source, parentSlot, depth+1)...)
 		}
 	case []any:
@@ -1136,15 +1170,23 @@ func parseTileEntityItems(te map[string]any) []ItemStack {
 	}
 
 	out := make([]ItemStack, 0, 27)
+	parsedTopLevelKeys := map[string]bool{}
 	for _, k := range keys {
 		items := parseItemList(toList(te[k]), "tile")
 		if len(items) > 0 {
 			out = append(out, items...)
+			parsedTopLevelKeys[k] = true
 		}
 	}
 
+	if direct := parseDirectStackFields(te, "tile", 0); len(direct) > 0 {
+		out = append(out, direct...)
+		parsedTopLevelKeys["mItemStack"] = true
+		parsedTopLevelKeys["mStoredItemStack"] = true
+	}
+
 	if len(out) == 0 {
-		for _, v := range te {
+		for k, v := range te {
 			lst := toList(v)
 			if len(lst) == 0 {
 				continue
@@ -1155,12 +1197,20 @@ func parseTileEntityItems(te map[string]any) []ItemStack {
 			}
 			if _, hasID := first["id"]; hasID {
 				out = append(out, parseItemList(lst, "tile")...)
+				parsedTopLevelKeys[k] = true
 				continue
 			}
 			if _, hasCount := first["Count"]; hasCount {
 				out = append(out, parseItemList(lst, "tile")...)
+				parsedTopLevelKeys[k] = true
 			}
 		}
+	}
+	for k, v := range te {
+		if parsedTopLevelKeys[k] {
+			continue
+		}
+		out = append(out, parseNestedStacks(v, "tile:nested", 0, 0)...)
 	}
 
 	// De-dupe in case a TE mirrors the same list under multiple keys.

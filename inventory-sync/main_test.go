@@ -91,6 +91,67 @@ func TestParseNestedStacks_RecursesDeepItemsLists(t *testing.T) {
 	}
 }
 
+func TestParseTileEntityItems_GregTechDirectStackCount(t *testing.T) {
+	te := map[string]any{
+		"id":         "GT_MetaTileEntity_DigitalChest",
+		"mItemCount": int64(32768),
+		"mItemStack": map[string]any{
+			"id":     int16(7437),
+			"Count":  int8(1),
+			"Damage": int16(11305),
+		},
+	}
+
+	stacks := parseTileEntityItems(te)
+	if len(stacks) != 1 {
+		t.Fatalf("expected 1 direct stack, got %d: %#v", len(stacks), stacks)
+	}
+	if stacks[0].ID != 7437 || stacks[0].Damage != 11305 {
+		t.Fatalf("unexpected direct stack item: %#v", stacks[0])
+	}
+	if stacks[0].Count != 32768 {
+		t.Fatalf("expected mItemCount override 32768, got %d", stacks[0].Count)
+	}
+	if stacks[0].Source != "tile" {
+		t.Fatalf("expected source tile, got %q", stacks[0].Source)
+	}
+}
+
+func TestParseTileEntityItems_RecursesMachineInventoriesWithoutTopLevelDoubleCount(t *testing.T) {
+	te := map[string]any{
+		"id": "gregtech:machine",
+		"mInventory": []any{
+			map[string]any{
+				"id":     float64(50),
+				"Count":  float64(64),
+				"Damage": float64(0),
+				"Slot":   float64(2),
+			},
+		},
+		"machineState": map[string]any{
+			"fluidHatch": map[string]any{
+				"savedStack": map[string]any{
+					"id":     float64(7437),
+					"Count":  float64(3),
+					"Damage": float64(11305),
+					"Slot":   float64(7),
+				},
+			},
+		},
+	}
+
+	stacks := parseTileEntityItems(te)
+	if len(stacks) != 2 {
+		t.Fatalf("expected top-level and nested stacks without double count, got %d: %#v", len(stacks), stacks)
+	}
+	if stacks[0].ID != 50 || stacks[0].Count != 64 || stacks[0].Source != "tile" {
+		t.Fatalf("unexpected top-level stack: %#v", stacks[0])
+	}
+	if stacks[1].ID != 7437 || stacks[1].Count != 3 || stacks[1].Slot != 7 || stacks[1].Source != "tile:nested" {
+		t.Fatalf("unexpected nested stack: %#v", stacks[1])
+	}
+}
+
 func TestExtractCustomName_FallbackKeys(t *testing.T) {
 	tag := map[string]any{
 		"mItemName": "Renamed Backpack",
