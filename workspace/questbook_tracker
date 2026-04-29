@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-set -eu
-exec python3 tools/questbook_tracker.py "$@"

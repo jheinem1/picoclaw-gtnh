@@ -25,8 +25,6 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
 - `scripts/build_oredict_dump_mod.sh`: build a GTNH Forge mod that dumps the live ore dictionary
 - `scripts/install_oredict_dump_mod.sh`: install the dump mod into a local PrismLauncher GTNH instance
-- `scripts/build_ftbquests_dump_mod.sh`: build a NeoForge client mod that dumps live FTB Quests state
-- `scripts/install_ftbquests_dump_mod.sh`: install the FTB Quests dump mod into a local PrismLauncher ATMons instance
 - `scripts/import_oredict_dump.sh`: import a generated `greggpt_oredict_dump.tsv` and build `oredict_index.tsv`
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
@@ -231,20 +229,6 @@ The imported runtime index is:
 That file is copied into:
 - `data/gtnh_runtime/index/oredict_index.tsv`
 
-## ATMons FTB Quests Dump Workflow
-To dump exact live FTB Quests progress from a running ATMons client:
-
-1. Build the dump mod:
-   - `scripts/build_ftbquests_dump_mod.sh`
-2. Install it into the PrismLauncher ATMons instance:
-   - `scripts/install_ftbquests_dump_mod.sh "/var/home/jhein/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/All the Mons - ATMons/minecraft"`
-3. Restart the ATMons client and join the server.
-4. The mod writes snapshot files under the instance:
-   - `dumps/greggpt_ftbquests_snapshot.json`
-   - `dumps/greggpt_ftbquests_completed.json`
-   - `dumps/greggpt_ftbquests_dump.log`
-5. You can also force an immediate client-side dump with:
-   - `/greggptquestsdump`
 - `workspace/gtnh-data/index/oredict_index.tsv`
 
 Env vars in `deploy/env/greggpt.env`:

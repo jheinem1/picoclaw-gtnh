@@ -80,16 +80,3 @@ services:
     volumes:
       - ../runtime/inventory-sync:/var/lib/inventory-sync
       - ../workspace:/root/.greggpt/workspace
-
-  questbook-sync:
-    build:
-      context: ../questbook-sync
-      dockerfile: Dockerfile
-    container_name: questbook-sync
-    restart: unless-stopped
-    env_file:
-      - ./env/greggpt.env
-    environment:
-      - QUESTBOOK_WORKDIR=/root/.greggpt/workspace
-    volumes:
-      - ../workspace:/root/.greggpt/workspace

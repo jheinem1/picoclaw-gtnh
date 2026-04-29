@@ -27,14 +27,8 @@ type Config struct {
 	CommandTimeout time.Duration
 	ReplyLimit     int
 	AllowedUsers   map[string]struct{}
-	Questbook      QuestbookConfig
 	MentionAgent   bool
 	Agent          AgentConfig
-}
-
-type QuestbookConfig struct {
-	ChannelID     string
-	SyncStateFile string
 }
 
 type AgentConfig struct {
@@ -186,10 +180,6 @@ func loadConfig() (Config, error) {
 		Agent: AgentConfig{
 			Config: agentCfg,
 		},
-		Questbook: QuestbookConfig{
-			ChannelID:     strings.TrimSpace(os.Getenv("QUESTBOOK_CHANNEL_ID")),
-			SyncStateFile: getenv("QUESTBOOK_SYNC_STATE_FILE", "state/atmons-questbook-sync.json"),
-		},
 	}
 	if cfg.ReplyLimit < 200 {
 		cfg.ReplyLimit = 200
@@ -290,7 +280,6 @@ func (s *Service) registerCommands(appID string) error {
 		queryCommand(),
 		minecraftCommand(),
 		checkinCommand(),
-		questbookCommand(),
 	}
 	if s.cfg.GuildID != "" {
 		_, err := s.s.ApplicationCommandBulkOverwrite(appID, s.cfg.GuildID, cmds)
@@ -462,31 +451,6 @@ func checkinCommand() *discordgo.ApplicationCommand {
 		Options: []*discordgo.ApplicationCommandOption{
 			subcommand("check", "Run the pending check-in"),
 			subcommand("mark_sent", "Mark the reminder as sent"),
-		},
-	}
-}
-
-func questbookCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "questbook",
-		Description: "ATMons questbook tracker",
-		Options: []*discordgo.ApplicationCommandOption{
-			subcommand("status", "Show tracker status"),
-			subcommand("find", "Find a quest by id or title",
-				stringOption("query", "Quest id or title text", true),
-			),
-			subcommand("show", "Show quest details",
-				stringOption("query", "Quest id or title text", true),
-			),
-			subcommand("complete", "Mark a quest completed",
-				stringOption("query", "Quest id or title text", true),
-				stringOption("by", "Completed by", false),
-				stringOption("note", "Optional note", false),
-			),
-			subcommand("reopen", "Mark a quest open again",
-				stringOption("query", "Quest id or title text", true),
-			),
-			subcommand("sync", "Force a channel sync now"),
 		},
 	}
 }
@@ -933,8 +897,6 @@ func (s *Service) dispatch(ctx context.Context, data discordgo.ApplicationComman
 		return s.dispatchMinecraft(ctx, data.Options)
 	case "checkin":
 		return s.dispatchCheckin(ctx, data.Options)
-	case "questbook":
-		return s.dispatchQuestbook(ctx, data.Options)
 	default:
 		return "", fmt.Errorf("unknown command %q", data.Name)
 	}
@@ -1154,45 +1116,6 @@ func (s *Service) dispatchCheckin(ctx context.Context, opts []*discordgo.Applica
 		return s.run(ctx, "sh", "gtnh_task_checkin", "mark-sent")
 	default:
 		return "", fmt.Errorf("unknown checkin subcommand %q", sub)
-	}
-}
-
-func (s *Service) dispatchQuestbook(ctx context.Context, opts []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
-	sub, subOpts := firstSubcommand(opts)
-	switch sub {
-	case "status":
-		return s.run(ctx, "sh", "questbook_tracker", "status")
-	case "find":
-		return s.run(ctx, "sh", "questbook_tracker", "find", optString(subOpts, "query"))
-	case "show":
-		return s.run(ctx, "sh", "questbook_tracker", "show", optString(subOpts, "query"))
-	case "complete":
-		args := []string{"sh", "questbook_tracker", "complete", optString(subOpts, "query")}
-		if by := optString(subOpts, "by"); by != "" {
-			args = append(args, "--by", by)
-		}
-		if note := optString(subOpts, "note"); note != "" {
-			args = append(args, "--note", note)
-		}
-		return s.run(ctx, args...)
-	case "reopen":
-		return s.run(ctx, "sh", "questbook_tracker", "reopen", optString(subOpts, "query"))
-	case "sync":
-		if s.cfg.Questbook.ChannelID == "" {
-			return "", errors.New("QUESTBOOK_CHANNEL_ID is not configured")
-		}
-		return s.run(
-			ctx,
-			"sh",
-			"questbook_tracker",
-			"sync-channel",
-			"--channel-id",
-			s.cfg.Questbook.ChannelID,
-			"--sync-state-file",
-			s.cfg.Questbook.SyncStateFile,
-		)
-	default:
-		return "", fmt.Errorf("unknown questbook subcommand %q", sub)
 	}
 }
 
