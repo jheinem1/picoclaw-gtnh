@@ -16,6 +16,43 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
+func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
+	req, err := toResponseRequest(ModelRequest{
+		Model: "gpt-5",
+		Tools: []ToolDefinition{{
+			Name:        "gtnh_find_item",
+			Description: "Find GTNH items by text query.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("toResponseRequest() error = %v", err)
+	}
+
+	if len(req.Tools) != 2 {
+		t.Fatalf("len(Tools) = %d, want 2", len(req.Tools))
+	}
+	webSearch := req.Tools[0].OfWebSearch
+	if webSearch == nil {
+		t.Fatalf("first tool is not web_search: %+v", req.Tools[0])
+	}
+	if webSearch.Type != responses.WebSearchToolTypeWebSearch {
+		t.Fatalf("web_search type = %q, want %q", webSearch.Type, responses.WebSearchToolTypeWebSearch)
+	}
+	if webSearch.SearchContextSize != responses.WebSearchToolSearchContextSizeMedium {
+		t.Fatalf("search context size = %q, want medium", webSearch.SearchContextSize)
+	}
+	if got := webSearch.Filters.AllowedDomains; len(got) != 1 || got[0] != gtnhWikiSearchDomain {
+		t.Fatalf("allowed domains = %#v, want [%q]", got, gtnhWikiSearchDomain)
+	}
+	if len(req.Include) != 1 || req.Include[0] != responses.ResponseIncludableWebSearchCallActionSources {
+		t.Fatalf("Include = %#v, want web search action sources", req.Include)
+	}
+	if req.Tools[1].OfFunction == nil || req.Tools[1].OfFunction.Name != "gtnh_find_item" {
+		t.Fatalf("second tool is not original function tool: %+v", req.Tools[1])
+	}
+}
+
 func TestCodexClientSelectsAccountIDHeader(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -315,11 +315,9 @@ func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, m
 		prompt += "\nMinecraft coordinate format: use JourneyMap-style tags like [x:<num>, y:<num>, z:<num>, dim:<num>] and include count=<num> outside the brackets when relevant."
 	}
 	if mustVerify {
-		prompt += "\nVerification is required for this question. Prefer web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use local gtnh_query data as fallback/cross-check."
-		prompt += "\nRun lookup commands directly (for example `sh gtnh_wiki_search \"<query>\"`), without `cd` or command chaining."
-		prompt += "\nBefore answering, you must execute at least one lookup command and base the reply on its output."
+		prompt += "\nVerification is required for this question. Prefer hosted web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use local gtnh_query data as fallback/cross-check."
+		prompt += "\nBefore answering, you must use either hosted web search or one concrete local lookup command and base the reply on that output."
 		prompt += "\nUse the command that matches user intent:"
-		prompt += "\n- general wiki topic lookup: sh gtnh_wiki_search \"<query>\""
 		prompt += "\n- specific wiki page summary: sh gtnh_wiki_page \"<title>\""
 		prompt += "\n- fuzzy item lookup: sh gtnh_find_item \"<query>\""
 		prompt += "\n- recipe search across close matches: sh gtnh_search_recipes \"<query>\""
@@ -356,42 +354,6 @@ func workspaceCommand(ctx context.Context, cfg Config, name string, args ...stri
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = cfg.Workspace
 	return cmd
-}
-
-func directWikiReply(cfg Config, question string) (string, error) {
-	terms := extractCandidateTerms(question)
-	if len(terms) == 0 {
-		return "", errors.New("no candidate terms")
-	}
-	query := terms[0]
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	cmd := workspaceCommand(ctx, cfg, "sh", "gtnh_wiki_search", query)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("gtnh_wiki_search failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	var payload struct {
-		OK      bool `json:"ok"`
-		Results []struct {
-			Title string `json:"title"`
-			URL   string `json:"url"`
-		} `json:"results"`
-		TotalHits int `json:"total_hits"`
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
-		return "", err
-	}
-	if !payload.OK {
-		return "", errors.New("wiki search returned not ok")
-	}
-	if len(payload.Results) == 0 {
-		return "I checked the GTNH wiki and couldn’t find a direct page match for that wording. Try the exact item/block name and I’ll rerun it.", nil
-	}
-	first := payload.Results[0]
-	return trimChars(fmt.Sprintf("Top wiki match for '%s': %s (%s)", query, first.Title, first.URL), cfg.ReplyMaxChars), nil
 }
 
 func sessionForEvent(cfg Config, eventID string) string {
@@ -744,14 +706,6 @@ func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner)
 			fallbackCount++
 			log.Printf("event=agent_error event_id=%q player=%q err=%q", id, ev.Player, err.Error())
 			reply = fallbackReply(cfg, ev)
-		}
-		if mustVerify && safetyGuardReplyRe.MatchString(reply) {
-			if verified, vErr := directWikiReply(cfg, ev.Text); vErr == nil && strings.TrimSpace(verified) != "" {
-				log.Printf("event=verify_override event_id=%q player=%q reason=%q", id, ev.Player, "safety_guard_claim")
-				reply = verified
-			} else if vErr != nil {
-				log.Printf("event=verify_override_error event_id=%q player=%q err=%q", id, ev.Player, vErr.Error())
-			}
 		}
 		reply = enrichUnresolvedReply(cfg, ev, reply)
 		reply = formatCoordinatesForMC(reply)

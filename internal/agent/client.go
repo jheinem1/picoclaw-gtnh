@@ -17,6 +17,8 @@ import (
 const (
 	DefaultCodexBaseURL = "https://chatgpt.com/backend-api/codex"
 
+	gtnhWikiSearchDomain = "wiki.gtnewhorizons.com"
+
 	codexOriginatorHeader  = "originator"
 	codexOriginatorValue   = "codex_cli_rs"
 	openAIBetaHeader       = "OpenAI-Beta"
@@ -222,7 +224,16 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 		}
 	}
 
-	tools := make([]responses.ToolUnionParam, 0, len(request.Tools))
+	tools := make([]responses.ToolUnionParam, 0, len(request.Tools)+1)
+	tools = append(tools, responses.ToolUnionParam{
+		OfWebSearch: &responses.WebSearchToolParam{
+			Type: responses.WebSearchToolTypeWebSearch,
+			Filters: responses.WebSearchToolFiltersParam{
+				AllowedDomains: []string{gtnhWikiSearchDomain},
+			},
+			SearchContextSize: responses.WebSearchToolSearchContextSizeMedium,
+		},
+	})
 	for _, tool := range request.Tools {
 		parameters := map[string]any{}
 		if len(tool.Parameters) != 0 {
@@ -248,6 +259,7 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 			OfInputItemList: input,
 		},
 		Tools:             tools,
+		Include:           []responses.ResponseIncludable{responses.ResponseIncludableWebSearchCallActionSources},
 		ParallelToolCalls: openai.Bool(true),
 	}
 	if request.PreviousResponseID != "" {

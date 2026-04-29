@@ -16,7 +16,6 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `workspace/tools/build_item_index.py`: builds search index from `recipes_stacks.json`
 - `workspace/tools/build_recipe_index.py`: builds recipe index TSV from `recipes.json`
 - `workspace/gtnh_query`: runtime GTNH query API (shell + awk/grep, no Python dependency in container)
-- `workspace/gtnh_wiki_search`: GTNH wiki search API (MediaWiki-backed shell command)
 - `workspace/gtnh_find_item`, `workspace/gtnh_resolve_recipes`, `workspace/gtnh_search_recipes`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
 - `workspace/gtnh_inventory`: inventory/chest lookup API for GregGPT prompts
@@ -99,7 +98,7 @@ Use indexed queries:
 - Prepare runtime dataset: `scripts/prepare_runtime_data.sh`
 - Find item: `sh gtnh_query find-item "copper nugget"`
 - Resolve item + recipes: `sh gtnh_query resolve-recipes "copper nugget"`
-- Search wiki pages: `sh gtnh_wiki_search "steam fluid pipe throughput"`
+- Wiki topic verification uses the hosted OpenAI web search tool restricted to `wiki.gtnewhorizons.com`.
 - Focused commands:
   - `sh gtnh_find_item "copper nugget"`
   - `sh gtnh_search_recipes "potin fluid pipe"`

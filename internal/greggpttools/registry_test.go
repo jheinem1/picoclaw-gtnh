@@ -65,7 +65,6 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"gtnh_item", `{"slug":"7437d11305"}`, []string{"sh", "gtnh_item", "7437d11305"}},
 		{"gtnh_resolve_recipes", `{"item":"bronze fluid pipe"}`, []string{"sh", "gtnh_resolve_recipes", "bronze fluid pipe"}},
 		{"gtnh_search_recipes", `{"query":"potin fluid pipe"}`, []string{"sh", "gtnh_search_recipes", "potin fluid pipe"}},
-		{"gtnh_wiki_search", `{"query":"steam machines"}`, []string{"sh", "gtnh_wiki_search", "steam machines"}},
 		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
 		{"inventory_find", `{"item":"gregtech:gt.metaitem.01:11305","any_damage":true,"player":"Snow","scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01:11305", "--any-damage", "--player", "Snow", "--scope", "players", "--limit", "5"}},

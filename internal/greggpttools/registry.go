@@ -111,11 +111,6 @@ func buildTools(defaultTimeout time.Duration) []Tool {
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_search_recipes", stringArg(a, "query")}, nil
 		}),
-		tool("gtnh_wiki_search", GroupGTNHQuery, "Search the GTNH wiki.", network, object(
-			required("query", stringSpec("Wiki search text.")),
-		), func(a Arguments) ([]string, error) {
-			return []string{"sh", "gtnh_wiki_search", stringArg(a, "query")}, nil
-		}),
 		tool("gtnh_wiki_page", GroupGTNHQuery, "Fetch a GTNH wiki page summary.", network, object(
 			required("title", stringSpec("Wiki page title.")),
 		), func(a Arguments) ([]string, error) {

@@ -416,9 +416,6 @@ func queryCommand() *discordgo.ApplicationCommand {
 			subcommand("search_recipes", "Search recipes",
 				stringOption("query", "Recipe query", true),
 			),
-			subcommand("wiki_search", "Search the GTNH wiki",
-				stringOption("query", "Search text", true),
-			),
 			subcommand("wiki_page", "Show a GTNH wiki page",
 				stringOption("title", "Page title", true),
 			),
@@ -1074,9 +1071,6 @@ func (s *Service) dispatchQuery(ctx context.Context, opts []*discordgo.Applicati
 		return s.run(ctx, "sh", "gtnh_resolve_recipes", optString(subOpts, "item"))
 	case "search_recipes":
 		return s.run(ctx, "sh", "gtnh_search_recipes", optString(subOpts, "query"))
-	case "wiki_search":
-		out, err := s.run(ctx, "sh", "gtnh_wiki_search", optString(subOpts, "query"))
-		return formatWikiSearchOutput(out), err
 	case "wiki_page":
 		out, err := s.run(ctx, "sh", "gtnh_wiki_page", optString(subOpts, "title"))
 		return formatWikiPageOutput(out), err
