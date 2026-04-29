@@ -199,13 +199,13 @@ func loadConfig() Config {
 
 	token := strings.TrimSpace(os.Getenv("KANBAN_DISCORD_TOKEN"))
 	if token == "" {
-		token = strings.TrimSpace(os.Getenv("PICOCLAW_CHANNELS_DISCORD_TOKEN"))
+		token = strings.TrimSpace(os.Getenv("GREGGPT_DISCORD_TOKEN"))
 	}
 
 	return Config{
 		DiscordToken: token,
 		PollInterval: time.Duration(poll) * time.Second,
-		WorkDir:      getenv("KANBAN_WORKDIR", "/root/.picoclaw/workspace"),
+		WorkDir:      getenv("KANBAN_WORKDIR", "/root/.greggpt/workspace"),
 		HTTPTimeout:  time.Duration(getenvInt("KANBAN_HTTP_TIMEOUT_SECONDS", 15)) * time.Second,
 		Board: BoardConfig{
 			Enabled:           getenvBool("KANBAN_ENABLED", false),
@@ -503,7 +503,7 @@ func newRequest(ctx context.Context, method, url, token string, body []byte) (*h
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bot "+token)
-	req.Header.Set("User-Agent", "picoclaw-gtnh-kanban-sync/1.0")
+	req.Header.Set("User-Agent", "greggpt-gtnh-kanban-sync/1.0")
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -776,7 +776,7 @@ func main() {
 		}
 	}
 	if cfg.DiscordToken == "" {
-		log.Fatalf("missing Discord bot token: set KANBAN_DISCORD_TOKEN or PICOCLAW_CHANNELS_DISCORD_TOKEN")
+		log.Fatalf("missing Discord bot token: set KANBAN_DISCORD_TOKEN or GREGGPT_DISCORD_TOKEN")
 	}
 	if cfg.Board.Enabled && cfg.Board.ChannelID == "" {
 		log.Fatalf("missing KANBAN_CHANNEL_ID")

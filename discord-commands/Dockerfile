@@ -1,14 +1,12 @@
 FROM docker.io/golang:1.22-alpine AS builder
-WORKDIR /src/discord-commands
-COPY discord-commands/go.mod ./
-COPY discord-commands/go.sum ./
+WORKDIR /src
+COPY go.mod go.sum ./
 RUN go mod download
-COPY discord-commands/main.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/discord-commands ./main.go
-WORKDIR /src/inventory-query
-COPY inventory-query/go.mod ./
-COPY inventory-query/main.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gtnh_inventory_query .
+COPY internal ./internal
+COPY discord-commands ./discord-commands
+COPY inventory-query ./inventory-query
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/discord-commands ./discord-commands
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gtnh_inventory_query ./inventory-query
 
 FROM docker.io/alpine:3.20
 RUN apk add --no-cache ca-certificates jq curl python3

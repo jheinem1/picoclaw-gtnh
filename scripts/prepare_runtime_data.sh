@@ -24,7 +24,7 @@ if [[ -f "$SRC/index/oredict_index.tsv" ]]; then
 fi
 
 cat > "$DST/README.txt" <<'EOF'
-Runtime GTNH dataset for PicoClaw.
+Runtime GTNH dataset for GregGPT.
 
 This directory intentionally excludes large raw dumps (recipes.json, recipes_stacks.json)
 to prevent accidental full-file reads and OOM/restarts.

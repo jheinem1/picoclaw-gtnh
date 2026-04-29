@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/scripts/me_export/PicoClawMEExportMod.java"
+SRC="$ROOT/scripts/me_export/GregGPTMEExportMod.java"
 BUILD_DIR="$ROOT/build/me-export-mod"
 CLASSES_DIR="$BUILD_DIR/classes"
-OUT_JAR="$BUILD_DIR/picoclaw-me-export-1.0.0.jar"
+OUT_JAR="$BUILD_DIR/greggpt-me-export-1.0.0.jar"
 FORGE_JAR="${FORGE_JAR:-$HOME/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/libraries/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10-universal.jar}"
 JAVAC_BIN="${JAVAC_BIN:-$HOME/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/java/java-runtime-gamma/bin/javac}"
 JAR_BIN="${JAR_BIN:-$HOME/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/java/java-runtime-gamma/bin/jar}"

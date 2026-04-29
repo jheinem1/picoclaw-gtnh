@@ -6,7 +6,7 @@ DUMP_SOURCE="${1:-}"
 DUMP_DEST="$ROOT/data/gtnh/oredict_dump.tsv"
 
 if [[ -z "$DUMP_SOURCE" ]]; then
-  echo "usage: scripts/import_oredict_dump.sh <path-to-picoclaw_oredict_dump.tsv>" >&2
+  echo "usage: scripts/import_oredict_dump.sh <path-to-greggpt_oredict_dump.tsv>" >&2
   exit 1
 fi
 if [[ ! -f "$DUMP_SOURCE" ]]; then

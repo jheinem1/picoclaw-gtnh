@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"greggpt-gtnh/internal/agent"
+
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -26,7 +28,8 @@ type Config struct {
 	ReplyLimit     int
 	AllowedUsers   map[string]struct{}
 	Questbook      QuestbookConfig
-	MentionInventory bool
+	MentionAgent   bool
+	Agent          AgentConfig
 }
 
 type QuestbookConfig struct {
@@ -34,10 +37,19 @@ type QuestbookConfig struct {
 	SyncStateFile string
 }
 
-type picoclawConfig struct {
+type AgentConfig struct {
+	Config agent.Config
+}
+
+type greggptConfig struct {
+	Discord struct {
+		AllowFrom    []string `json:"allow_from"`
+		AllowedUsers []string `json:"allowed_users"`
+	} `json:"discord"`
 	Channels struct {
 		Discord struct {
-			AllowFrom []string `json:"allow_from"`
+			AllowFrom    []string `json:"allow_from"`
+			AllowedUsers []string `json:"allowed_users"`
 		} `json:"discord"`
 	} `json:"channels"`
 }
@@ -65,14 +77,60 @@ type wikiPageResponse struct {
 }
 
 type Service struct {
-	cfg Config
-	s   *discordgo.Session
+	cfg    Config
+	s      *discordgo.Session
+	runner DiscordAgentRunner
 }
 
-var discordInventoryIntentRe = regexp.MustCompile(`(?i)\b(how\s+much|how\s+many|do we have|where (?:is|are)|who has|which chest|in storage|inventory|stored|in me|me system)\b`)
+var legacyInventoryIntentRe = regexp.MustCompile(`(?i)\b(how\s+much|how\s+many|do we have|where (?:is|are)|who has|which chest|in storage|inventory|stored|in me|me system)\b`)
 var mentionCleanupRe = regexp.MustCompile(`<@!?\d+>`)
 var discordRetryRe = regexp.MustCompile(`(?i)\b(try (that )?again|retry|run (that|it) again|same query)\b`)
 var inventoryCommandQueryRe = regexp.MustCompile(`(?i)gtnh_inventory\s+find-item\s+--query\s+"([^"]+)"(?:.*--scope\s+([a-z]+))?`)
+var inventoryScopeRe = regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`)
+
+type DiscordAgentRunner interface {
+	Run(ctx context.Context, req DiscordAgentRequest) (DiscordAgentResponse, error)
+}
+
+type DiscordAgentRequest struct {
+	Channel          agent.Channel   `json:"channel"`
+	Text             string          `json:"text"`
+	UserID           string          `json:"user_id"`
+	Username         string          `json:"username,omitempty"`
+	DiscordChannelID string          `json:"discord_channel_id"`
+	MessageID        string          `json:"message_id"`
+	RetryInventory   *InventoryRetry `json:"retry_inventory,omitempty"`
+}
+
+type InventoryRetry struct {
+	Query string `json:"query"`
+	Scope string `json:"scope"`
+}
+
+type DiscordAgentResponse struct {
+	Reply string `json:"reply"`
+}
+
+type commandAgentRunner struct {
+	cfg    AgentConfig
+	runner *agent.Runner
+	err    error
+}
+
+type discordMentionMessage struct {
+	Content     string
+	AuthorID    string
+	AuthorName  string
+	ChannelID   string
+	MessageID   string
+	MentionsBot bool
+}
+
+type mentionProcessResult struct {
+	Handled bool
+	Reply   string
+	Reason  string
+}
 
 func getenv(key, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -94,24 +152,40 @@ func getenvInt(key string, fallback int) int {
 	return n
 }
 
+func getenvDurationSeconds(key string, fallback time.Duration) time.Duration {
+	seconds := getenvInt(key, int(fallback/time.Second))
+	return time.Duration(seconds) * time.Second
+}
+
 func loadConfig() (Config, error) {
 	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 	if token == "" {
-		token = strings.TrimSpace(os.Getenv("PICOCLAW_CHANNELS_DISCORD_TOKEN"))
+		token = strings.TrimSpace(os.Getenv("GREGGPT_DISCORD_TOKEN"))
 	}
 	if token == "" {
-		return Config{}, errors.New("missing Discord bot token; set DISCORD_BOT_TOKEN or PICOCLAW_CHANNELS_DISCORD_TOKEN")
+		return Config{}, errors.New("missing Discord bot token; set DISCORD_BOT_TOKEN or GREGGPT_DISCORD_TOKEN")
+	}
+
+	agentCfg := agent.Config{
+		Model:        getenv(agent.EnvModel, agent.DefaultModel),
+		Workspace:    getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
+		AuthFile:     getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
+		Timeout:      getenvDurationSeconds(agent.EnvAgentTimeout, 90*time.Second),
+		MaxToolCalls: getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
 	}
 
 	cfg := Config{
 		Token:          token,
-		Workspace:      getenv("DISCORD_WORKSPACE", "/root/.picoclaw/workspace"),
-		ConfigPath:     getenv("DISCORD_CONFIG_PATH", "/root/.picoclaw/config.json"),
+		Workspace:      getenv("DISCORD_WORKSPACE", agentCfg.Workspace),
+		ConfigPath:     getenv("GREGGPT_CONFIG_PATH", "/root/.greggpt/config.json"),
 		GuildID:        strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID")),
 		CommandTimeout: time.Duration(getenvInt("DISCORD_COMMAND_TIMEOUT_SECONDS", 45)) * time.Second,
 		ReplyLimit:     getenvInt("DISCORD_REPLY_LIMIT", 1900),
 		AllowedUsers:   map[string]struct{}{},
-		MentionInventory: getenv("DISCORD_MENTION_INVENTORY_ENABLED", "true") != "false",
+		MentionAgent:   getenv("GREGGPT_DISCORD_MENTIONS_ENABLED", "true") != "false",
+		Agent: AgentConfig{
+			Config: agentCfg,
+		},
 		Questbook: QuestbookConfig{
 			ChannelID:     strings.TrimSpace(os.Getenv("QUESTBOOK_CHANNEL_ID")),
 			SyncStateFile: getenv("QUESTBOOK_SYNC_STATE_FILE", "state/atmons-questbook-sync.json"),
@@ -129,22 +203,38 @@ func loadConfig() (Config, error) {
 }
 
 func loadAllowedUsers(path string) (map[string]struct{}, error) {
+	if envAllow := strings.TrimSpace(os.Getenv("GREGGPT_DISCORD_ALLOW_FROM")); envAllow != "" {
+		return userSet(splitNames(envAllow)), nil
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read discord config: %w", err)
+		if os.IsNotExist(err) {
+			return map[string]struct{}{}, nil
+		}
+		return nil, fmt.Errorf("read GregGPT config: %w", err)
 	}
-	var cfg picoclawConfig
+	var cfg greggptConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parse discord config: %w", err)
+		return nil, fmt.Errorf("parse GregGPT config: %w", err)
 	}
+	ids := make([]string, 0, len(cfg.Discord.AllowFrom)+len(cfg.Discord.AllowedUsers)+len(cfg.Channels.Discord.AllowFrom)+len(cfg.Channels.Discord.AllowedUsers))
+	ids = append(ids, cfg.Discord.AllowFrom...)
+	ids = append(ids, cfg.Discord.AllowedUsers...)
+	ids = append(ids, cfg.Channels.Discord.AllowFrom...)
+	ids = append(ids, cfg.Channels.Discord.AllowedUsers...)
+	return userSet(ids), nil
+}
+
+func userSet(ids []string) map[string]struct{} {
 	out := map[string]struct{}{}
-	for _, id := range cfg.Channels.Discord.AllowFrom {
+	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id != "" {
 			out[id] = struct{}{}
 		}
 	}
-	return out, nil
+	return out
 }
 
 func main() {
@@ -159,7 +249,7 @@ func main() {
 	}
 	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
 
-	svc := &Service{cfg: cfg, s: session}
+	svc := &Service{cfg: cfg, s: session, runner: newCommandAgentRunner(cfg.Agent)}
 	session.AddHandler(svc.onInteractionCreate)
 	session.AddHandler(svc.onMessageCreate)
 
@@ -498,50 +588,49 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 		}
 		return
 	}
-	if !s.cfg.MentionInventory || !s.mentionsBot(m) {
+	msg := discordMentionMessage{
+		Content:     m.Content,
+		AuthorID:    m.Author.ID,
+		AuthorName:  m.Author.Username,
+		ChannelID:   m.ChannelID,
+		MessageID:   m.ID,
+		MentionsBot: s.mentionsBot(m),
+	}
+	if !s.cfg.MentionAgent || !msg.MentionsBot {
 		return
 	}
-	if !s.allowedMessageUser(m) {
-		log.Printf("message_inventory_skip reason=not_allowed user_id=%s channel_id=%s", m.Author.ID, m.ChannelID)
+	if !s.allowedDiscordUser(msg.AuthorID) {
+		log.Printf("message_agent_skip reason=not_allowed user_id=%s channel_id=%s", m.Author.ID, m.ChannelID)
 		return
 	}
-	text := strings.TrimSpace(mentionCleanupRe.ReplaceAllString(m.Content, ""))
-	if !discordInventoryIntentRe.MatchString(text) {
-		if !discordRetryRe.MatchString(text) {
-			log.Printf("message_inventory_skip reason=no_intent user_id=%s channel_id=%s content_len=%d", m.Author.ID, m.ChannelID, len(m.Content))
-			return
-		}
-		retryQuery, retryScope := s.resolveRetryInventoryQuery(dg, m)
-		if retryQuery == "" {
-			log.Printf("message_inventory_skip reason=retry_no_query user_id=%s channel_id=%s content_len=%d", m.Author.ID, m.ChannelID, len(m.Content))
-			_, _ = dg.ChannelMessageSendReply(m.ChannelID, "I could not find the previous inventory query to retry. Ask the item question again and I will run it directly.", m.Reference())
-			return
-		}
-		text = retryQuery
-		if retryScope != "" {
-			text += " in " + retryScope
-		}
+	log.Printf("message_agent_start user_id=%s channel_id=%s message_id=%s content_len=%d", m.Author.ID, m.ChannelID, m.ID, len(m.Content))
+
+	var history []string
+	if isInventoryRetryRequest(cleanMentionText(m.Content)) {
+		history = s.resolveRetryInventoryHistory(dg, m)
 	}
-	query := inventoryQueryFromDiscordText(text)
-	if query == "" {
-		log.Printf("message_inventory_skip reason=empty_query user_id=%s channel_id=%s content=%q", m.Author.ID, m.ChannelID, m.Content)
-		return
-	}
-	scope := "all"
-	if regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`).MatchString(text) {
-		scope = "me"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.CommandTimeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Agent.Config.Timeout)
 	defer cancel()
 	stopTyping := s.startTyping(dg, m.ChannelID, ctx)
 	defer stopTyping()
-	log.Printf("message_inventory_lookup user_id=%s channel_id=%s query=%q scope=%s", m.Author.ID, m.ChannelID, query, scope)
-	out, err := s.run(ctx, "sh", "gtnh_inventory", "find-item", "--query", query, "--scope", scope, "--limit", "100")
-	reply := formatInventoryMentionReply(query, scope, out, err)
+
+	result := s.processGregGPTMention(ctx, msg, history)
+	if !result.Handled {
+		log.Printf("message_agent_skip reason=%s user_id=%s channel_id=%s content_len=%d", result.Reason, m.Author.ID, m.ChannelID, len(m.Content))
+		return
+	}
+	if result.Reply == "" {
+		log.Printf("message_agent_empty_reply reason=%s user_id=%s channel_id=%s message_id=%s", result.Reason, m.Author.ID, m.ChannelID, m.ID)
+		return
+	}
+	reply := result.Reply
 	reply = truncate(reply, s.cfg.ReplyLimit)
 	if _, sendErr := dg.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); sendErr != nil {
-		log.Printf("message_inventory_reply_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, sendErr.Error())
+		log.Printf("message_agent_reply_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, sendErr.Error())
+		return
 	}
+	log.Printf("message_agent_reply_ok reason=%s user_id=%s channel_id=%s message_id=%s reply_len=%d", result.Reason, m.Author.ID, m.ChannelID, m.ID, len(reply))
 }
 
 func (s *Service) startTyping(dg *discordgo.Session, channelID string, ctx context.Context) func() {
@@ -571,21 +660,20 @@ func (s *Service) startTyping(dg *discordgo.Session, channelID string, ctx conte
 	}
 }
 
-func (s *Service) resolveRetryInventoryQuery(dg *discordgo.Session, m *discordgo.MessageCreate) (string, string) {
+func (s *Service) resolveRetryInventoryHistory(dg *discordgo.Session, m *discordgo.MessageCreate) []string {
 	msgs, err := dg.ChannelMessages(m.ChannelID, 25, m.ID, "", "")
 	if err != nil {
 		log.Printf("message_inventory_retry_history_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, err.Error())
-		return "", ""
+		return nil
 	}
+	history := make([]string, 0, len(msgs))
 	for _, msg := range msgs {
 		if msg == nil {
 			continue
 		}
-		if q, scope := inventoryQueryFromText(msg.Content); q != "" {
-			return q, scope
-		}
+		history = append(history, msg.Content)
 	}
-	return "", ""
+	return history
 }
 
 func inventoryQueryFromText(text string) (string, string) {
@@ -597,9 +685,9 @@ func inventoryQueryFromText(text string) (string, string) {
 		return strings.TrimSpace(m[1]), scope
 	}
 	clean := strings.TrimSpace(mentionCleanupRe.ReplaceAllString(text, ""))
-	if discordInventoryIntentRe.MatchString(clean) {
+	if legacyInventoryIntentRe.MatchString(clean) {
 		scope := "all"
-		if regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`).MatchString(clean) {
+		if inventoryScopeRe.MatchString(clean) {
 			scope = "me"
 		}
 		return inventoryQueryFromDiscordText(clean), scope
@@ -607,12 +695,100 @@ func inventoryQueryFromText(text string) (string, string) {
 	return "", ""
 }
 
-func (s *Service) allowedMessageUser(m *discordgo.MessageCreate) bool {
+func (s *Service) allowedDiscordUser(userID string) bool {
 	if len(s.cfg.AllowedUsers) == 0 {
 		return true
 	}
-	_, ok := s.cfg.AllowedUsers[m.Author.ID]
+	_, ok := s.cfg.AllowedUsers[userID]
 	return ok
+}
+
+func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionMessage, history []string) mentionProcessResult {
+	if !s.cfg.MentionAgent {
+		return mentionProcessResult{Reason: "disabled"}
+	}
+	if !msg.MentionsBot {
+		return mentionProcessResult{Reason: "not_mentioned"}
+	}
+	if !s.allowedDiscordUser(msg.AuthorID) {
+		return mentionProcessResult{Handled: true, Reason: "not_allowed"}
+	}
+
+	text := cleanMentionText(msg.Content)
+	if text == "" {
+		return mentionProcessResult{Reason: "empty_text"}
+	}
+
+	var retry *InventoryRetry
+	if isInventoryRetryRequest(text) {
+		query, scope := resolveRetryInventoryQueryFromHistory(history)
+		if query == "" {
+			return mentionProcessResult{
+				Handled: true,
+				Reply:   "I could not find the previous inventory query to retry. Ask the item question again and I will run it directly.",
+				Reason:  "retry_no_query",
+			}
+		}
+		retry = &InventoryRetry{Query: query, Scope: scope}
+		text = inventoryRetryPrompt(query, scope)
+	}
+
+	runner := s.runner
+	if runner == nil {
+		runner = newCommandAgentRunner(s.cfg.Agent)
+	}
+	resp, err := runner.Run(ctx, DiscordAgentRequest{
+		Channel:          agent.ChannelDiscord,
+		Text:             text,
+		UserID:           msg.AuthorID,
+		Username:         msg.AuthorName,
+		DiscordChannelID: msg.ChannelID,
+		MessageID:        msg.MessageID,
+		RetryInventory:   retry,
+	})
+	if err != nil {
+		reply := strings.TrimSpace(resp.Reply)
+		if reply != "" {
+			reply += "\n\n"
+		}
+		reply += "GregGPT could not handle that: " + err.Error()
+		return mentionProcessResult{Handled: true, Reply: reply, Reason: "agent_error"}
+	}
+	reply := strings.TrimSpace(resp.Reply)
+	if reply == "" {
+		reply = "(no response)"
+	}
+	return mentionProcessResult{Handled: true, Reply: reply, Reason: "ok"}
+}
+
+func cleanMentionText(text string) string {
+	return strings.TrimSpace(mentionCleanupRe.ReplaceAllString(text, ""))
+}
+
+func isInventoryRetryRequest(text string) bool {
+	text = strings.TrimSpace(text)
+	if !discordRetryRe.MatchString(text) {
+		return false
+	}
+	remainder := strings.TrimSpace(discordRetryRe.ReplaceAllString(text, ""))
+	remainder = strings.Trim(remainder, " \t\r\n.,:;!?")
+	return remainder == ""
+}
+
+func resolveRetryInventoryQueryFromHistory(history []string) (string, string) {
+	for _, text := range history {
+		if q, scope := inventoryQueryFromText(text); q != "" {
+			return q, scope
+		}
+	}
+	return "", ""
+}
+
+func inventoryRetryPrompt(query, scope string) string {
+	if scope == "" {
+		scope = "all"
+	}
+	return fmt.Sprintf("Retry the previous inventory lookup: find %s in %s.", query, scope)
 }
 
 func (s *Service) mentionsBot(m *discordgo.MessageCreate) bool {
@@ -1119,6 +1295,55 @@ func splitNames(raw string) []string {
 		}
 	}
 	return out
+}
+
+func newCommandAgentRunner(cfg AgentConfig) *commandAgentRunner {
+	runner, err := agent.NewDefaultRunner(cfg.Config)
+	return &commandAgentRunner{cfg: cfg, runner: runner, err: err}
+}
+
+func (r *commandAgentRunner) Run(ctx context.Context, req DiscordAgentRequest) (DiscordAgentResponse, error) {
+	if r.err != nil {
+		return DiscordAgentResponse{}, r.err
+	}
+	if r.runner == nil {
+		return DiscordAgentResponse{}, errors.New("agent runner is nil")
+	}
+	user := req.Username
+	if strings.TrimSpace(user) == "" {
+		user = req.UserID
+	}
+	contextValues := map[string]string{
+		"discord_user_id":    req.UserID,
+		"discord_channel_id": req.DiscordChannelID,
+		"discord_message_id": req.MessageID,
+	}
+	if req.RetryInventory != nil {
+		contextValues["retry_inventory_query"] = req.RetryInventory.Query
+		contextValues["retry_inventory_scope"] = req.RetryInventory.Scope
+	}
+	text, err := r.runner.Run(ctx, agent.Request{
+		Channel: req.Channel,
+		User:    user,
+		Message: req.Text,
+		Context: contextValues,
+	})
+	if err != nil {
+		return DiscordAgentResponse{}, err
+	}
+	return DiscordAgentResponse{Reply: text}, nil
+}
+
+func parseAgentResponse(text string) DiscordAgentResponse {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return DiscordAgentResponse{}
+	}
+	var resp DiscordAgentResponse
+	if err := json.Unmarshal([]byte(text), &resp); err == nil && strings.TrimSpace(resp.Reply) != "" {
+		return resp
+	}
+	return DiscordAgentResponse{Reply: text}
 }
 
 func (s *Service) run(ctx context.Context, args ...string) (string, error) {

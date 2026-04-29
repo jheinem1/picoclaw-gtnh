@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestParseItemList_ExtractsNestedAndCustomNames(t *testing.T) {
 	list := []any{
@@ -125,6 +131,44 @@ func TestParseMEExport_Networks(t *testing.T) {
 	}
 	if records[0].Label != "Main ME" || records[0].Items[0].Count != 2048 {
 		t.Fatalf("unexpected ME record: %#v", records[0])
+	}
+}
+
+func TestScanMEFetchesGregGPTPathOnly(t *testing.T) {
+	var requested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		if r.URL.Path != "/game-servers/server-1/files/world/greggpt/me_index.json" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"generated_at":"2026-04-28T12:00:00Z","networks":[]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		DatHostBase:   server.URL,
+		DatHostServer: "server-1",
+		DatHostToken:  "token",
+		HTTPTimeout:   time.Second,
+	}
+
+	records, generatedAt, stackCount, err := scanME(server.Client(), cfg)
+	if err != nil {
+		t.Fatalf("scanME failed: %v", err)
+	}
+	if len(records) != 0 || stackCount != 0 {
+		t.Fatalf("expected empty ME export, got records=%#v stackCount=%d", records, stackCount)
+	}
+	if generatedAt != "2026-04-28T12:00:00Z" {
+		t.Fatalf("unexpected generated_at: %q", generatedAt)
+	}
+	if len(requested) != 1 {
+		t.Fatalf("expected exactly one ME fetch with no fallback, got %d requests: %#v", len(requested), requested)
+	}
+	if !strings.Contains(requested[0], "greggpt") {
+		t.Fatalf("scanME requested unexpected ME export path: %q", requested[0])
 	}
 }
 

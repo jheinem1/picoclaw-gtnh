@@ -88,15 +88,12 @@ You are a GTNH assistant bot for Discord and Minecraft communities.
 - If `sh gtnh_query ...` fails twice, stop tool retries and ask the user to rephrase, instead of reading large files.
 
 ## Operational Lessons From Inventory/ME Deployment
-- Discord public mentions are not an internal PicoClaw execution channel. If a Discord user asks an inventory question and the answer says `exec is restricted to internal channels`, the wrong service answered it: `picoclaw-gateway` handled the mention instead of `discord-commands`.
-- Natural-language Discord inventory mentions should be handled by `discord-commands`, not by PicoClaw gateway. The gateway may still run health endpoints and agents, but its Discord channel must stay disabled when deterministic mention handling is active.
-- On the Pi, `podman restart picoclaw-gateway` does not pick up changed env files. If `PICOCLAW_CHANNELS_DISCORD_ENABLED` changes, recreate the container (`podman rm -f picoclaw-gateway` then `podman-compose -f compose.yaml up -d picoclaw-gateway`) and verify inside the container with `env`.
-- A healthy disabled gateway logs `Warning: No channels enabled`. If gateway logs `Channels enabled: [discord]`, it can still intercept Discord mentions and produce public-channel exec failures.
+- Discord public mentions route through `discord-commands`, which now calls the shared GregGPT agent runner directly for natural-language requests.
 - `discord-commands` needs Discord message content intent for natural-language mention handling. Slash commands can work even when mention handling does not, so verify mention handling separately from slash command registration.
-- For Discord mention debugging, check `podman logs discord-commands` for `message_inventory_lookup` / `message_inventory_skip` lines. If those lines are absent after a mention, the message did not reach the deterministic handler.
+- For Discord mention debugging, check `podman logs discord-commands` for `message_agent_skip` and agent error lines. If those lines are absent after a mention, the message did not reach the handler.
 - Do not ask users to run bot-host commands and paste output in Discord for inventory lookups. The bot host already has the data; this indicates routing/configuration is broken and should be fixed server-side.
 - ME export has two independent success criteria:
-  - The server-side mod writes `world/picoclaw/me_index.json` with a fresh `generated_at`.
+  - The server-side mod writes `world/greggpt/me_index.json` with a fresh `generated_at`.
   - `inventory-sync` ingests it and `sh gtnh_inventory status` reports fresh `ME:` plus `ME networks: <n>`.
 - A fresh ME file with `networks: []` means the exporter is running but no AE grid was discovered at that moment. A network with `items: []` can mean the AE storage chunks are not loaded yet, or the AE storage monitor is empty.
 - In Forge/AE2 1.7.10, grid discovery must support `getGridNode(ForgeDirection)`. Using only no-arg `getGridNode()` is not enough for many AE2 grid hosts.

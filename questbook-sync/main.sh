@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-WORKDIR="${QUESTBOOK_WORKDIR:-/root/.picoclaw/workspace}"
+WORKDIR="${QUESTBOOK_WORKDIR:-/root/.greggpt/workspace}"
 DATA_FILE="${QUESTBOOK_DATA_FILE:-questbooks/atmons-0.14.1-beta.json}"
 STATE_FILE="${QUESTBOOK_STATE_FILE:-state/atmons-questbook-state.json}"
 SYNC_STATE_FILE="${QUESTBOOK_SYNC_STATE_FILE:-state/atmons-questbook-sync.json}"

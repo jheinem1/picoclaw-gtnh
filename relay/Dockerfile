@@ -1,16 +1,16 @@
 FROM docker.io/golang:1.22-alpine AS builder
-WORKDIR /src/relay
-COPY relay/go.mod ./
-COPY relay/main.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mc-relay ./main.go
-WORKDIR /src/inventory-query
-COPY inventory-query/go.mod ./
-COPY inventory-query/main.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gtnh_inventory_query .
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY internal ./internal
+COPY relay ./relay
+COPY inventory-query ./inventory-query
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mc-relay ./relay
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gtnh_inventory_query ./inventory-query
 
-FROM docker.io/sipeed/picoclaw:latest
+FROM docker.io/alpine:3.20
 COPY --from=builder /out/mc-relay /usr/local/bin/mc-relay
 COPY --from=builder /out/gtnh_inventory_query /usr/local/bin/gtnh_inventory_query
-RUN apk add --no-cache jq curl python3
-RUN mkdir -p /var/lib/mc-relay
+RUN apk add --no-cache ca-certificates jq curl python3
+RUN mkdir -p /var/lib/mc-relay /root/.greggpt/workspace
+ENV GREGGPT_WORKSPACE=/root/.greggpt/workspace
 ENTRYPOINT ["/usr/local/bin/mc-relay"]

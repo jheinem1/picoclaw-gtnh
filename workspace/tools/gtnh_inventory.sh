@@ -425,7 +425,7 @@ cmd_find() {
 
     # Strict mode: prevent incorrect numeric-only calls like --id 11305.
     [ -n "$damage" ] || {
-      echo "error: --id requires --damage; use --item modname:name[:damage] (use sh gtnh_find_item '<query>' to pick one) for PicoClaw requests" >&2
+      echo "error: --id requires --damage; use --item modname:name[:damage] (use sh gtnh_find_item '<query>' to pick one) for GregGPT requests" >&2
       print_inventory_process_hint
       exit 2
     }
