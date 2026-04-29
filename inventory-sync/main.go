@@ -35,6 +35,8 @@ type Config struct {
 	ChestsInterval     time.Duration
 	MEInterval         time.Duration
 	MEExportPaths      []string
+	BlockInvInterval   time.Duration
+	BlockInvPaths      []string
 	BlocksInterval     time.Duration
 	HTTPTimeout        time.Duration
 	MaxRegionFiles     int
@@ -67,10 +69,11 @@ type BlockBounds struct {
 }
 
 type RuntimeState struct {
-	LastPlayersScan string `json:"last_players_scan"`
-	LastChestsScan  string `json:"last_chests_scan"`
-	LastMEScan      string `json:"last_me_scan"`
-	LastBlocksScan  string `json:"last_blocks_scan"`
+	LastPlayersScan  string `json:"last_players_scan"`
+	LastChestsScan   string `json:"last_chests_scan"`
+	LastMEScan       string `json:"last_me_scan"`
+	LastBlockInvScan string `json:"last_block_inventories_scan"`
+	LastBlocksScan   string `json:"last_blocks_scan"`
 }
 
 type RefreshRequest struct {
@@ -80,16 +83,18 @@ type RefreshRequest struct {
 }
 
 type SourceMeta struct {
-	ServerID       string `json:"server_id"`
-	PlayersScanAt  string `json:"players_scan_at"`
-	ChestsScanAt   string `json:"chests_scan_at"`
-	MEScanAt       string `json:"me_scan_at"`
-	BlocksScanAt   string `json:"blocks_scan_at,omitempty"`
-	DatHostSyncAt  string `json:"dathost_sync_at"`
-	PlayersVersion int    `json:"players_version"`
-	ChestsVersion  int    `json:"chests_version"`
-	MEVersion      int    `json:"me_version"`
-	BlocksVersion  int    `json:"blocks_version,omitempty"`
+	ServerID        string `json:"server_id"`
+	PlayersScanAt   string `json:"players_scan_at"`
+	ChestsScanAt    string `json:"chests_scan_at"`
+	MEScanAt        string `json:"me_scan_at"`
+	BlockInvScanAt  string `json:"block_inventories_scan_at,omitempty"`
+	BlocksScanAt    string `json:"blocks_scan_at,omitempty"`
+	DatHostSyncAt   string `json:"dathost_sync_at"`
+	PlayersVersion  int    `json:"players_version"`
+	ChestsVersion   int    `json:"chests_version"`
+	MEVersion       int    `json:"me_version"`
+	BlockInvVersion int    `json:"block_inventories_version,omitempty"`
+	BlocksVersion   int    `json:"blocks_version,omitempty"`
 }
 
 type IndexStats struct {
@@ -101,6 +106,8 @@ type IndexStats struct {
 	ChestStacks        int `json:"chest_stacks"`
 	MENetworkCount     int `json:"me_network_count"`
 	MEStacks           int `json:"me_stacks"`
+	BlockInvCount      int `json:"block_inventory_count,omitempty"`
+	BlockInvStacks     int `json:"block_inventory_stacks,omitempty"`
 	RegionFilesScanned int `json:"region_files_scanned"`
 	BlockCount         int `json:"block_count,omitempty"`
 	IndexedBlockKeys   int `json:"indexed_block_keys,omitempty"`
@@ -137,6 +144,7 @@ type ChestRecord struct {
 	Y         int         `json:"y"`
 	Z         int         `json:"z"`
 	Type      string      `json:"type"`
+	Source    string      `json:"source,omitempty"`
 	Items     []ItemStack `json:"items"`
 }
 
@@ -315,6 +323,8 @@ func loadConfig() (Config, error) {
 		ChestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_CHESTS_INTERVAL_SECONDS", 21600))) * time.Second,
 		MEInterval:         time.Duration(max(60, getenvInt("INVENTORY_ME_INTERVAL_SECONDS", 300))) * time.Second,
 		MEExportPaths:      parseCSV(getenv("INVENTORY_ME_EXPORT_PATHS", "world/greggpt/me_index.json,world/picoclaw/me_index.json")),
+		BlockInvInterval:   time.Duration(max(60, getenvInt("INVENTORY_BLOCK_INVENTORIES_INTERVAL_SECONDS", 300))) * time.Second,
+		BlockInvPaths:      parseCSV(getenv("INVENTORY_BLOCK_INVENTORY_EXPORT_PATHS", "world/picoclaw/block_inventories.json,world/greggpt/block_inventories.json")),
 		BlocksInterval:     time.Duration(max(300, getenvInt("INVENTORY_BLOCKS_INTERVAL_SECONDS", 86400))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
@@ -555,10 +565,12 @@ func loadRefreshRequest(path string) (RefreshRequest, bool) {
 		return RefreshRequest{}, false
 	}
 	s := strings.ToLower(strings.TrimSpace(req.Scope))
-	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "blocks" && s != "all" {
+	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "block-inventories" && s != "block_inventories" && s != "blocks" && s != "all" {
 		req.Scope = "all"
 	} else if s == "containers" {
 		req.Scope = "chests"
+	} else if s == "block_inventories" {
+		req.Scope = "block-inventories"
 	} else {
 		req.Scope = s
 	}
@@ -1255,6 +1267,97 @@ func parseMEExport(raw []byte) ([]MERecord, string, int, error) {
 		return strings.ToLower(records[i].Label) < strings.ToLower(records[j].Label)
 	})
 	return records, generatedAt, stackCount, nil
+}
+
+func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string, int, error) {
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil, nil, "", 0, err
+	}
+	generatedAt := firstNonEmptyString(root["generated_at"], root["generatedAt"], root["timestamp"])
+	rows := toList(firstPresent(root, "inventories", "containers", "blocks"))
+	chests := make([]ChestRecord, 0, len(rows))
+	blocks := make([]BlockRecord, 0, len(rows))
+	stackCount := 0
+	for _, row := range rows {
+		m := toMap(row)
+		if len(m) == 0 {
+			continue
+		}
+		items := parseExportedBlockInventoryItems(toList(m["items"]), firstNonEmptyString(m["source"], m["inventory_type"], m["inventoryType"]))
+		label := firstNonEmptyString(m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["block_reg_name"], m["blockRegName"], m["tile_id"], m["tileId"], m["tile_class"], m["tileClass"])
+		chests = append(chests, ChestRecord{
+			Dimension: numberToInt(firstPresent(m, "dim", "dimension")),
+			X:         numberToInt(m["x"]),
+			Y:         numberToInt(m["y"]),
+			Z:         numberToInt(m["z"]),
+			Type:      tileEntityType(label),
+			Source:    "block_export",
+			Items:     items,
+		})
+		stackCount += len(items)
+
+		id := numberToInt(firstPresent(m, "block_id", "blockId", "id"))
+		meta := numberToInt(firstPresent(m, "block_meta", "blockMeta", "meta", "damage"))
+		if id > 0 {
+			blocks = append(blocks, BlockRecord{
+				Dimension: numberToInt(firstPresent(m, "dim", "dimension")),
+				X:         numberToInt(m["x"]),
+				Y:         numberToInt(m["y"]),
+				Z:         numberToInt(m["z"]),
+				ID:        id,
+				Meta:      meta,
+				RegName:   firstNonEmptyString(m["block_reg_name"], m["blockRegName"], m["reg_name"], m["registry_name"]),
+				Name:      firstNonEmptyString(m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["name"]),
+			})
+		}
+	}
+	sort.Slice(chests, func(i, j int) bool {
+		if chests[i].Dimension != chests[j].Dimension {
+			return chests[i].Dimension < chests[j].Dimension
+		}
+		if chests[i].X != chests[j].X {
+			return chests[i].X < chests[j].X
+		}
+		if chests[i].Y != chests[j].Y {
+			return chests[i].Y < chests[j].Y
+		}
+		return chests[i].Z < chests[j].Z
+	})
+	sort.Slice(blocks, func(i, j int) bool {
+		if blocks[i].Dimension != blocks[j].Dimension {
+			return blocks[i].Dimension < blocks[j].Dimension
+		}
+		if blocks[i].X != blocks[j].X {
+			return blocks[i].X < blocks[j].X
+		}
+		if blocks[i].Y != blocks[j].Y {
+			return blocks[i].Y < blocks[j].Y
+		}
+		return blocks[i].Z < blocks[j].Z
+	})
+	return chests, blocks, generatedAt, stackCount, nil
+}
+
+func parseExportedBlockInventoryItems(rows []any, defaultSource string) []ItemStack {
+	out := make([]ItemStack, 0, len(rows))
+	if defaultSource == "" {
+		defaultSource = "block_export"
+	}
+	for _, row := range rows {
+		m := toMap(row)
+		if len(m) == 0 {
+			continue
+		}
+		source := firstNonEmptyString(m["source"], defaultSource)
+		stack, ok := parseItemStackCompound(m, source, 0, nil)
+		if !ok {
+			continue
+		}
+		stack.Custom = firstNonEmptyString(m["custom_name"], m["customName"], stack.Custom)
+		out = append(out, stack)
+	}
+	return out
 }
 
 func firstPresent(m map[string]any, keys ...string) any {
@@ -2076,6 +2179,104 @@ func scanME(client *http.Client, cfg Config) ([]MERecord, string, int, error) {
 	return nil, "", 0, errors.New("no ME export paths configured")
 }
 
+func scanBlockInventories(client *http.Client, cfg Config) ([]ChestRecord, []BlockRecord, string, int, error) {
+	paths := cfg.BlockInvPaths
+	if len(paths) == 0 {
+		paths = []string{"world/picoclaw/block_inventories.json", "world/greggpt/block_inventories.json"}
+	}
+	var lastErr error
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		raw, err := getFile(client, cfg, path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		chests, blocks, generatedAt, stackCount, err := parseBlockInventoryExport(raw)
+		if err != nil {
+			return nil, nil, "", 0, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if generatedAt == "" {
+			generatedAt = nowUTC()
+		}
+		return chests, blocks, generatedAt, stackCount, nil
+	}
+	if lastErr != nil {
+		return nil, nil, "", 0, lastErr
+	}
+	return nil, nil, "", 0, errors.New("no block inventory export paths configured")
+}
+
+func mergeChestRecords(existing, replacement []ChestRecord, source string) []ChestRecord {
+	out := make([]ChestRecord, 0, len(existing)+len(replacement))
+	for _, c := range existing {
+		if chestSource(c) == source {
+			continue
+		}
+		out = append(out, c)
+	}
+	out = append(out, replacement...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Dimension != out[j].Dimension {
+			return out[i].Dimension < out[j].Dimension
+		}
+		if out[i].X != out[j].X {
+			return out[i].X < out[j].X
+		}
+		if out[i].Y != out[j].Y {
+			return out[i].Y < out[j].Y
+		}
+		return out[i].Z < out[j].Z
+	})
+	return out
+}
+
+func mergeBlockRecords(existing, replacement []BlockRecord) []BlockRecord {
+	out := make([]BlockRecord, 0, len(existing)+len(replacement))
+	replaceAt := map[string]bool{}
+	for _, b := range replacement {
+		replaceAt[fmt.Sprintf("%d:%d:%d:%d", b.Dimension, b.X, b.Y, b.Z)] = true
+	}
+	for _, b := range existing {
+		if replaceAt[fmt.Sprintf("%d:%d:%d:%d", b.Dimension, b.X, b.Y, b.Z)] {
+			continue
+		}
+		out = append(out, b)
+	}
+	out = append(out, replacement...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Dimension != out[j].Dimension {
+			return out[i].Dimension < out[j].Dimension
+		}
+		if out[i].X != out[j].X {
+			return out[i].X < out[j].X
+		}
+		if out[i].Y != out[j].Y {
+			return out[i].Y < out[j].Y
+		}
+		return out[i].Z < out[j].Z
+	})
+	return out
+}
+
+func chestSource(c ChestRecord) string {
+	if c.Source != "" {
+		return c.Source
+	}
+	return "region"
+}
+
+func countChestStacks(chests []ChestRecord) int {
+	n := 0
+	for _, c := range chests {
+		n += len(c.Items)
+	}
+	return n
+}
+
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -2091,9 +2292,9 @@ func main() {
 	state := loadRuntimeState(stateFile)
 
 	if cfg.ChestBounds != nil {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s blocks_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlocksInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s block_inventory_interval=%s blocks_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlockInvInterval, cfg.BlocksInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
 	} else {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s blocks_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlocksInterval)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s block_inventory_interval=%s blocks_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlockInvInterval, cfg.BlocksInterval)
 	}
 
 	for {
@@ -2106,6 +2307,7 @@ func main() {
 		playersDue := parseRFC3339(state.LastPlayersScan).IsZero() || now.Sub(parseRFC3339(state.LastPlayersScan)) >= cfg.PlayersInterval
 		chestsDue := parseRFC3339(state.LastChestsScan).IsZero() || now.Sub(parseRFC3339(state.LastChestsScan)) >= cfg.ChestsInterval
 		meDue := parseRFC3339(state.LastMEScan).IsZero() || now.Sub(parseRFC3339(state.LastMEScan)) >= cfg.MEInterval
+		blockInvDue := parseRFC3339(state.LastBlockInvScan).IsZero() || now.Sub(parseRFC3339(state.LastBlockInvScan)) >= cfg.BlockInvInterval
 		blocksDue := (cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0) && (parseRFC3339(state.LastBlocksScan).IsZero() || now.Sub(parseRFC3339(state.LastBlocksScan)) >= cfg.BlocksInterval)
 
 		refreshReq, hasRefresh := loadRefreshRequest(refreshFile)
@@ -2117,17 +2319,20 @@ func main() {
 				chestsDue = true
 			case "me":
 				meDue = true
+			case "block-inventories":
+				blockInvDue = true
 			case "blocks":
 				blocksDue = true
 			default:
 				playersDue = true
 				chestsDue = true
 				meDue = true
+				blockInvDue = true
 				blocksDue = cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0
 			}
 		}
 
-		if !playersDue && !chestsDue && !meDue && !blocksDue {
+		if !playersDue && !chestsDue && !meDue && !blockInvDue && !blocksDue {
 			time.Sleep(cfg.LoopSleep)
 			continue
 		}
@@ -2177,13 +2382,17 @@ func main() {
 				errorsMap["chests"] = err.Error()
 				log.Printf("event=inventory_chests_scan_error err=%q", err.Error())
 			} else {
-				chests = c
+				for i := range c {
+					c[i].Source = "region"
+				}
+				chests = mergeChestRecords(chests, c, "region")
 				state.LastChestsScan = nowUTC()
 				source.ChestsScanAt = state.LastChestsScan
 				source.ChestsVersion++
 				stats.ChestCount = len(chests)
-				stats.ChestStacks = chestStacks
+				stats.ChestStacks = countChestStacks(chests)
 				stats.RegionFilesScanned = regionCount
+				_ = chestStacks
 			}
 		}
 
@@ -2218,6 +2427,28 @@ func main() {
 			}
 		}
 
+		if blockInvDue {
+			c, b, blockInvScanAt, blockInvStacks, err := scanBlockInventories(client, cfg)
+			if err != nil {
+				errorsMap["block_inventories"] = err.Error()
+				log.Printf("event=inventory_block_inventories_scan_error err=%q", err.Error())
+			} else {
+				chests = mergeChestRecords(chests, c, "block_export")
+				blocks = mergeBlockRecords(blocks, b)
+				state.LastBlockInvScan = blockInvScanAt
+				source.BlockInvScanAt = state.LastBlockInvScan
+				source.BlockInvVersion++
+				stats.BlockInvCount = len(c)
+				stats.BlockInvStacks = blockInvStacks
+				stats.ChestCount = len(chests)
+				stats.ChestStacks = countChestStacks(chests)
+				stats.BlockCount = len(blocks)
+				if len(b) > 0 && blockStatus.Reason == "block scan requires INVENTORY_BLOCK_BOUNDS or INVENTORY_BLOCK_ALLOWLIST" {
+					blockStatus.Reason = "block scan disabled; using exported inventory block positions"
+				}
+			}
+		}
+
 		index := indexFromData(players, chests, me, blocks, source, stats, blockStatus)
 		if err := atomicWriteJSON(indexFile, index); err != nil {
 			log.Printf("event=inventory_index_write_error file=%q err=%q", indexFile, err.Error())
@@ -2231,10 +2462,11 @@ func main() {
 			Stats:       index.Stats,
 			BlockStatus: index.BlockStatus,
 			Stale: map[string]bool{
-				"players": parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
-				"chests":  parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
-				"me":      parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
-				"blocks":  index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
+				"players":           parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
+				"chests":            parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
+				"me":                parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
+				"block_inventories": parseRFC3339(index.Source.BlockInvScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlockInvScanAt)) > 10*time.Minute,
+				"blocks":            index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
 			},
 			Errors: errorsMap,
 		}
@@ -2265,10 +2497,11 @@ func writeOutputs(indexFile, statusFile string, index InventoryIndex, errorsMap 
 		Stats:       index.Stats,
 		BlockStatus: index.BlockStatus,
 		Stale: map[string]bool{
-			"players": parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
-			"chests":  parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
-			"me":      parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
-			"blocks":  index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
+			"players":           parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
+			"chests":            parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
+			"me":                parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
+			"block_inventories": parseRFC3339(index.Source.BlockInvScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlockInvScanAt)) > 10*time.Minute,
+			"blocks":            index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
 		},
 		Errors: errorsMap,
 	}

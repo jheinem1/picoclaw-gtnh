@@ -20,7 +20,7 @@ fi
 
 if [ "${GTNH_INVENTORY_FORCE_LEGACY:-0}" != "1" ] && [ -n "$QUERY_BIN" ] && [ -x "$QUERY_BIN" ]; then
   case "${1:-}" in
-    status|find|find-item|find-block|refresh)
+    status|find|find-item|find-block|chest|refresh)
       export GTNH_WORKSPACE="$WORKSPACE_DIR"
       exec "$QUERY_BIN" "$@"
       ;;
@@ -34,10 +34,10 @@ usage:
   sh gtnh_inventory status
   sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]
   sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]
-  sh gtnh_inventory find-block --id <num> --meta <num> [--limit <n>]
+  sh gtnh_inventory find-block --block "<name>" | --id <num> --meta <num> [--limit <n>]
   sh gtnh_inventory player --name <player> | --uuid <uuid> [--all]
   sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]
-  sh gtnh_inventory refresh [--players|--chests|--containers|--me|--blocks|--all]
+  sh gtnh_inventory refresh [--players|--chests|--containers|--me|--block-inventories|--blocks|--all]
 USAGE
   exit 2
 }

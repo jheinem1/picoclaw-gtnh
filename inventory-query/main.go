@@ -19,11 +19,12 @@ import (
 const unsetDamage = -1 << 31
 
 type SourceMeta struct {
-	PlayersScanAt string `json:"players_scan_at"`
-	ChestsScanAt  string `json:"chests_scan_at"`
-	MEScanAt      string `json:"me_scan_at"`
-	BlocksScanAt  string `json:"blocks_scan_at"`
-	DatHostSyncAt string `json:"dathost_sync_at"`
+	PlayersScanAt  string `json:"players_scan_at"`
+	ChestsScanAt   string `json:"chests_scan_at"`
+	MEScanAt       string `json:"me_scan_at"`
+	BlockInvScanAt string `json:"block_inventories_scan_at,omitempty"`
+	BlocksScanAt   string `json:"blocks_scan_at"`
+	DatHostSyncAt  string `json:"dathost_sync_at"`
 }
 
 type IndexStats struct {
@@ -35,6 +36,8 @@ type IndexStats struct {
 	ChestStacks        int `json:"chest_stacks"`
 	MENetworkCount     int `json:"me_network_count"`
 	MEStacks           int `json:"me_stacks"`
+	BlockInvCount      int `json:"block_inventory_count"`
+	BlockInvStacks     int `json:"block_inventory_stacks"`
 	RegionFilesScanned int `json:"region_files_scanned"`
 	BlockCount         int `json:"block_count"`
 	IndexedBlockKeys   int `json:"indexed_block_keys"`
@@ -80,6 +83,7 @@ type ChestRecord struct {
 	Y         int         `json:"y"`
 	Z         int         `json:"z"`
 	Type      string      `json:"type"`
+	Source    string      `json:"source,omitempty"`
 	Items     []ItemStack `json:"items"`
 }
 
@@ -521,7 +525,7 @@ func ageText(ts string) string {
 }
 
 func freshness(meta SourceMeta) string {
-	return fmt.Sprintf("Freshness: players: %s | containers: %s | ME: %s | blocks: %s", ageText(meta.PlayersScanAt), ageText(meta.ChestsScanAt), ageText(meta.MEScanAt), ageText(meta.BlocksScanAt))
+	return fmt.Sprintf("Freshness: players: %s | containers: %s | block inventories: %s | ME: %s | blocks: %s", ageText(meta.PlayersScanAt), ageText(meta.ChestsScanAt), ageText(meta.BlockInvScanAt), ageText(meta.MEScanAt), ageText(meta.BlocksScanAt))
 }
 
 func cmdStatus() error {
@@ -532,7 +536,7 @@ func cmdStatus() error {
 	fmt.Println("Inventory Index Status")
 	fmt.Println("Generated:", valueOr(st.GeneratedAt, "(unknown)"))
 	fmt.Println(freshness(st.Source))
-	fmt.Printf("Players: %d | Containers: %d | ME networks: %d | Item keys: %d | Blocks: %d | Block keys: %d\n", st.Stats.PlayerCount, st.Stats.ChestCount, st.Stats.MENetworkCount, st.Stats.IndexedItemKeys, st.Stats.BlockCount, st.Stats.IndexedBlockKeys)
+	fmt.Printf("Players: %d | Containers: %d | Exported block inventories: %d | ME networks: %d | Item keys: %d | Blocks: %d | Block keys: %d\n", st.Stats.PlayerCount, st.Stats.ChestCount, st.Stats.BlockInvCount, st.Stats.MENetworkCount, st.Stats.IndexedItemKeys, st.Stats.BlockCount, st.Stats.IndexedBlockKeys)
 	if st.BlockStatus.RegistryAvailable {
 		fmt.Println("Block registry: available")
 	} else {
@@ -541,7 +545,7 @@ func cmdStatus() error {
 	if st.BlockStatus.Reason != "" {
 		fmt.Println("Block status:", st.BlockStatus.Reason)
 	}
-	for _, key := range []string{"players", "chests", "me", "blocks"} {
+	for _, key := range []string{"players", "chests", "block_inventories", "me", "blocks"} {
 		if st.Stale[key] {
 			fmt.Printf("WARNING: %s data is stale\n", key)
 		}
@@ -858,6 +862,71 @@ func printME(rows []MEHit, limit int) {
 	}
 }
 
+func cmdChest(args []string) error {
+	fs := flag.NewFlagSet("chest", flag.ContinueOnError)
+	x := fs.Int("x", 0, "")
+	y := fs.Int("y", 0, "")
+	z := fs.Int("z", 0, "")
+	dim := fs.Int("dim", 0, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	idx, err := loadIndex()
+	if err != nil {
+		return err
+	}
+	var found *ChestRecord
+	for i := range idx.Chests {
+		c := &idx.Chests[i]
+		if c.Dimension == *dim && c.X == *x && c.Y == *y && c.Z == *z {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		fmt.Printf("Container at (%d,%d,%d) dim=%d\n", *x, *y, *z, *dim)
+		fmt.Println(freshness(idx.Source))
+		fmt.Println("(none)")
+		return nil
+	}
+	fmt.Printf("Container at (%d,%d,%d) dim=%d type=%s", found.X, found.Y, found.Z, found.Dimension, valueOr(found.Type, "container"))
+	if found.Source != "" {
+		fmt.Printf(" source=%s", found.Source)
+	}
+	fmt.Println()
+	fmt.Println(freshness(idx.Source))
+	if len(found.Items) == 0 {
+		fmt.Println("(empty)")
+		return nil
+	}
+	_, byKey, _ := loadItems()
+	items := append([]ItemStack(nil), found.Items...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Slot != items[j].Slot {
+			return items[i].Slot < items[j].Slot
+		}
+		if items[i].ID != items[j].ID {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Damage < items[j].Damage
+	})
+	for _, it := range items {
+		label := fmt.Sprintf("%d:%d", it.ID, it.Damage)
+		if meta, ok := byKey[itemKey(it.ID, it.Damage)]; ok {
+			label = valueOr(meta.DisplayName, meta.RegName)
+		}
+		fmt.Printf("- slot=%d count=%d item=%s id=%d damage=%d", it.Slot, it.Count, label, it.ID, it.Damage)
+		if it.Source != "" {
+			fmt.Printf(" src=%s", it.Source)
+		}
+		if it.Custom != "" {
+			fmt.Printf(" name=%q", it.Custom)
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
 func blockKey(id, meta int) string {
 	return fmt.Sprintf("%d:%d", id, meta)
 }
@@ -885,7 +954,7 @@ func cmdFindBlock(args []string) error {
 	fmt.Println("Block:", label)
 	fmt.Println(freshness(idx.Source))
 	if !idx.BlockStatus.RegistryAvailable {
-		fmt.Println("Block registry: unavailable; numeric id/meta search only")
+		fmt.Println("Block registry: unavailable; using exported block names when present, otherwise numeric id/meta search only")
 	}
 	if idx.BlockStatus.Reason != "" {
 		fmt.Println("Block status:", idx.BlockStatus.Reason)
@@ -925,9 +994,6 @@ func cmdFindBlock(args []string) error {
 func resolveBlockKeys(idx InventoryIndex, block string, id, meta int) ([]string, string, error) {
 	block = strings.TrimSpace(block)
 	if block != "" {
-		if !idx.BlockStatus.RegistryAvailable {
-			return nil, "", errors.New("error: block registry data unavailable; use --id <num> --meta <num>")
-		}
 		base := block
 		explicitMeta := unsetDamage
 		parts := strings.Split(block, ":")
@@ -935,10 +1001,11 @@ func resolveBlockKeys(idx InventoryIndex, block string, id, meta int) ([]string,
 			base = strings.Join(parts[:2], ":")
 			explicitMeta, _ = strconv.Atoi(parts[2])
 		}
+		queryNorm := normalize(base)
 		keys := make([]string, 0)
 		for k, h := range idx.BlockIndex {
 			for _, b := range h.Blocks {
-				if strings.EqualFold(b.RegName, base) && (explicitMeta == unsetDamage || b.Meta == explicitMeta) {
+				if blockRecordMatches(b, base, queryNorm) && (explicitMeta == unsetDamage || b.Meta == explicitMeta) {
 					keys = append(keys, k)
 					break
 				}
@@ -955,6 +1022,16 @@ func resolveBlockKeys(idx InventoryIndex, block string, id, meta int) ([]string,
 		return nil, "", errors.New("error: provide --block <mod:name[:meta]> or --id with --meta")
 	}
 	return []string{blockKey(id, meta)}, blockKey(id, meta), nil
+}
+
+func blockRecordMatches(b BlockHit, base, queryNorm string) bool {
+	if strings.EqualFold(b.RegName, base) || strings.EqualFold(b.Name, base) {
+		return true
+	}
+	if queryNorm == "" {
+		return false
+	}
+	return normalize(b.RegName) == queryNorm || normalize(b.Name) == queryNorm
 }
 
 func dedupeStrings(in []string) []string {
@@ -988,6 +1065,8 @@ func cmdRefresh(args []string) error {
 			scope = "chests"
 		case "--me":
 			scope = "me"
+		case "--block-inventories", "--block_inventories":
+			scope = "block-inventories"
 		case "--blocks":
 			scope = "blocks"
 		case "--all":
@@ -1009,7 +1088,7 @@ func cmdRefresh(args []string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|find-item|find-block|refresh ...")
+	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|find-item|find-block|chest|refresh ...")
 	os.Exit(2)
 }
 
@@ -1027,6 +1106,8 @@ func main() {
 		err = cmdFindItem(os.Args[2:])
 	case "find-block":
 		err = cmdFindBlock(os.Args[2:])
+	case "chest":
+		err = cmdChest(os.Args[2:])
 	case "refresh":
 		err = cmdRefresh(os.Args[2:])
 	default:

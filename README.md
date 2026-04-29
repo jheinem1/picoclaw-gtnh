@@ -183,6 +183,7 @@ The bot workspace policy (`workspace/AGENTS.md`) is configured to prefer this AP
   - `world/DIM-1/region/*.mca` (Nether)
   - `world/DIM1/region/*.mca` (End)
 - ME network contents from `world/greggpt/me_index.json`
+- loaded modded block inventories from `world/picoclaw/block_inventories.json` with `world/greggpt/block_inventories.json` as fallback
 
 Index outputs written under workspace state:
 - `state/inventory_index.json`
@@ -193,14 +194,16 @@ Commands from workspace root:
 - `sh gtnh_inventory status`
 - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
 - `sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]`
+- `sh gtnh_inventory find-block --block "<name>" [--limit <n>]`
 - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
 - `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
-- `sh gtnh_inventory refresh [--players|--chests|--containers|--me|--all]`
+- `sh gtnh_inventory refresh [--players|--chests|--containers|--me|--block-inventories|--all]`
 
 Notes:
-- Lookup output includes a `Freshness:` line for players, containers, and ME data.
+- Lookup output includes a `Freshness:` line for players, containers, block inventories, and ME data.
 - `chests` is kept as a compatibility alias for world containers.
 - `all` is the default lookup scope when the compiled `gtnh_inventory_query` helper is installed.
+- Super Chest and GregTech machine contents use the live block-inventory export when fresh, with MCA/NBT scanning as fallback.
 - `find --id` remains as strict legacy mode and requires `--damage`.
 - `--oredict` uses a true GTNH ore-dictionary cache built from a live dump, not display-name heuristics.
 - If `gtnh_inventory find-item --query "<alias>" --oredict` fails with a missing ore-dict index, build/import a fresh dump first.
@@ -217,6 +220,11 @@ To provide exact AE2/ME contents, install the GregGPT ME export mod on the GTNH 
 3. Restart the server. The mod writes:
    - `world/greggpt/me_index.json`
 The exporter runs periodically and `inventory-sync` marks ME data stale if this file is missing or old.
+
+The same mod also writes loaded tile-entity inventories to:
+- `world/picoclaw/block_inventories.json`
+
+`inventory-sync` merges those records into Containers and uses their block names for `find-block --block "<name>"`.
 
 ## True Ore-Dict Cache Workflow
 To build a real GTNH ore-dictionary cache without checking large dumps into the runtime dataset:

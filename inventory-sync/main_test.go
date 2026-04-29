@@ -195,6 +195,44 @@ func TestParseMEExport_Networks(t *testing.T) {
 	}
 }
 
+func TestParseBlockInventoryExport_SuperChest(t *testing.T) {
+	raw := []byte(`{
+	  "generated_at":"2026-04-29T22:00:00Z",
+	  "inventories":[{
+	    "dim":0,
+	    "x":100,
+	    "y":64,
+	    "z":-25,
+	    "tile_class":"gregtech.common.tileentities.storage.GT_MetaTileEntity_DigitalChest",
+	    "block_id":2442,
+	    "block_meta":135,
+	    "block_reg_name":"gregtech:gt.blockmachines",
+	    "block_display_name":"Super Chest I",
+	    "source":"gregtech-direct",
+	    "items":[
+	      {"id":7437,"damage":11305,"count":32768,"slot":0,"source":"gregtech-direct","display_name":"Steel Ingot"}
+	    ]
+	  }]
+	}`)
+
+	chests, blocks, generatedAt, stackCount, err := parseBlockInventoryExport(raw)
+	if err != nil {
+		t.Fatalf("parseBlockInventoryExport failed: %v", err)
+	}
+	if generatedAt != "2026-04-29T22:00:00Z" || stackCount != 1 {
+		t.Fatalf("unexpected export metadata: generatedAt=%q stackCount=%d", generatedAt, stackCount)
+	}
+	if len(chests) != 1 || chests[0].Source != "block_export" || chests[0].Type != "Super Chest I" {
+		t.Fatalf("unexpected chest records: %#v", chests)
+	}
+	if chests[0].Items[0].ID != 7437 || chests[0].Items[0].Count != 32768 || chests[0].Items[0].Source != "gregtech-direct" {
+		t.Fatalf("unexpected exported stack: %#v", chests[0].Items[0])
+	}
+	if len(blocks) != 1 || blocks[0].RegName != "gregtech:gt.blockmachines" || blocks[0].Name != "Super Chest I" {
+		t.Fatalf("unexpected block records: %#v", blocks)
+	}
+}
+
 func TestScanMEFetchesConfiguredPath(t *testing.T) {
 	var requested []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +251,7 @@ func TestScanMEFetchesConfiguredPath(t *testing.T) {
 		DatHostServer: "server-1",
 		DatHostToken:  "token",
 		HTTPTimeout:   time.Second,
-		MEExportPaths:  []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"},
+		MEExportPaths: []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"},
 	}
 
 	records, generatedAt, stackCount, err := scanME(server.Client(), cfg)
@@ -252,7 +290,7 @@ func TestScanMEFallsBackToPicoClawPath(t *testing.T) {
 		DatHostServer: "server-1",
 		DatHostToken:  "token",
 		HTTPTimeout:   time.Second,
-		MEExportPaths:  []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"},
+		MEExportPaths: []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"},
 	}
 
 	records, generatedAt, stackCount, err := scanME(server.Client(), cfg)
@@ -295,6 +333,31 @@ func TestIndexFromData_IncludesMEHits(t *testing.T) {
 	}
 	if index.Version != 2 {
 		t.Fatalf("expected index version 2, got %d", index.Version)
+	}
+}
+
+func TestIndexFromData_IncludesExportedBlockInventoryContainersAndBlocks(t *testing.T) {
+	index := indexFromData(nil, []ChestRecord{
+		{
+			Dimension: 0,
+			X:         100,
+			Y:         64,
+			Z:         -25,
+			Type:      "Super Chest I",
+			Source:    "block_export",
+			Items:     []ItemStack{{ID: 7437, Damage: 11305, Count: 32768, Slot: 0, Source: "gregtech-direct"}},
+		},
+	}, nil, []BlockRecord{
+		{Dimension: 0, X: 100, Y: 64, Z: -25, ID: 2442, Meta: 135, RegName: "gregtech:gt.blockmachines", Name: "Super Chest I"},
+	}, SourceMeta{BlockInvScanAt: "2026-04-29T22:00:00Z"}, IndexStats{}, BlockIndexStatus{})
+
+	hits := index.ItemIndex["7437:11305"].Chests
+	if len(hits) != 1 || hits[0].TotalCount != 32768 || hits[0].Type != "Super Chest I" {
+		t.Fatalf("expected exported block inventory item hit, got %#v", hits)
+	}
+	blockHits := index.BlockIndex["2442:135"].Blocks
+	if len(blockHits) != 1 || blockHits[0].Name != "Super Chest I" {
+		t.Fatalf("expected exported block location hit, got %#v", blockHits)
 	}
 }
 

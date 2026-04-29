@@ -13,9 +13,13 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.TimeZone;
 
 @Mod(
@@ -71,6 +75,16 @@ public final class GregGPTMEExportMod {
   }
 
   private static void writeDump(Object server) throws Exception {
+    writeMEDump(server);
+    try {
+      writeBlockInventoryDump(server);
+    } catch (Throwable t) {
+      System.out.println("[PICOCLAW-BLOCKINV] export failed: " + t);
+      t.printStackTrace(System.out);
+    }
+  }
+
+  private static void writeMEDump(Object server) throws Exception {
     if (server == null) {
       return;
     }
@@ -123,10 +137,211 @@ public final class GregGPTMEExportMod {
     System.out.println("[GREGGPT-ME] wrote " + out.getAbsolutePath());
   }
 
+  private static void writeBlockInventoryDump(Object server) throws Exception {
+    if (server == null) {
+      return;
+    }
+    File out = blockInventoryOutputFile(server);
+    File tmp = new File(out.getParentFile(), out.getName() + ".tmp");
+    if (!out.getParentFile().exists() && !out.getParentFile().mkdirs()) {
+      throw new IllegalStateException("failed to create " + out.getParentFile());
+    }
+
+    int recordCount = 0;
+    int itemCount = 0;
+    PrintWriter w = new PrintWriter(new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8));
+    try {
+      w.print("{\"generated_at\":\"");
+      w.print(escape(nowUTC()));
+      w.print("\",\"inventories\":[");
+      boolean firstRecord = true;
+      Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
+      for (Object world : worlds) {
+        if (world == null) {
+          continue;
+        }
+        Object loaded = getField(world, "loadedTileEntityList", "field_147482_g");
+        if (!(loaded instanceof Iterable)) {
+          continue;
+        }
+        for (Object te : (Iterable<?>) loaded) {
+          List<String> items = collectBlockInventoryItems(te);
+          if (items.isEmpty() && !isInventoryTile(te)) {
+            continue;
+          }
+          if (!firstRecord) {
+            w.print(',');
+          }
+          firstRecord = false;
+          writeBlockInventoryRecord(w, te, items);
+          recordCount++;
+          itemCount += items.size();
+        }
+      }
+      w.print("]}");
+    } finally {
+      w.close();
+    }
+    if (!tmp.renameTo(out)) {
+      throw new IllegalStateException("failed to rename " + tmp + " to " + out);
+    }
+    System.out.println("[PICOCLAW-BLOCKINV] wrote " + out.getAbsolutePath() + " count=" + recordCount + " items=" + itemCount);
+  }
+
   private static File outputFile(Object server) throws Exception {
     String folder = String.valueOf(invokeAny(server, new String[] {"getFolderName", "func_71270_I"}, new Class[0], new Object[0]));
     File worldDir = (File) invokeAny(server, new String[] {"getFile", "func_71209_f"}, new Class[] {String.class}, new Object[] {folder});
     return new File(new File(worldDir, "greggpt"), "me_index.json");
+  }
+
+  private static File blockInventoryOutputFile(Object server) throws Exception {
+    String folder = String.valueOf(invokeAny(server, new String[] {"getFolderName", "func_71270_I"}, new Class[0], new Object[0]));
+    File worldDir = (File) invokeAny(server, new String[] {"getFile", "func_71209_f"}, new Class[] {String.class}, new Object[] {folder});
+    return new File(new File(worldDir, "picoclaw"), "block_inventories.json");
+  }
+
+  private static void writeBlockInventoryRecord(PrintWriter w, Object te, List<String> itemRows) {
+    int x = intField(te, "xCoord", "field_145851_c");
+    int y = intField(te, "yCoord", "field_145848_d");
+    int z = intField(te, "zCoord", "field_145849_e");
+    int dim = dimensionID(te);
+    Object world = invokeQuiet(te, new String[] {"getWorldObj", "func_145831_w"}, new Class[0], new Object[0]);
+    Object block = blockAt(world, x, y, z);
+    int meta = blockMetaAt(world, x, y, z);
+    Object uid = uniqueIdentifierForBlock(block);
+    String reg = "";
+    if (uid != null) {
+      reg = String.valueOf(getFieldQuiet(uid, "modId")) + ":" + String.valueOf(getFieldQuiet(uid, "name"));
+    }
+    String displayName = blockDisplayName(block);
+    String source = inventorySource(te);
+
+    w.print("{\"dim\":");
+    w.print(dim);
+    w.print(",\"x\":");
+    w.print(x);
+    w.print(",\"y\":");
+    w.print(y);
+    w.print(",\"z\":");
+    w.print(z);
+    w.print(",\"tile_class\":\"");
+    w.print(escape(te.getClass().getName()));
+    w.print("\",\"tile_id\":\"");
+    w.print(escape(firstNonEmptyString(getFieldQuiet(te, "id"), invokeQuiet(te, new String[] {"getClassName"}, new Class[0], new Object[0]))));
+    w.print("\",\"block_id\":");
+    w.print(blockID(block));
+    w.print(",\"block_meta\":");
+    w.print(meta);
+    w.print(",\"block_reg_name\":\"");
+    w.print(escape(reg));
+    w.print("\",\"block_display_name\":\"");
+    w.print(escape(displayName));
+    w.print("\",\"source\":\"");
+    w.print(escape(source));
+    w.print("\",\"items\":[");
+    for (int i = 0; i < itemRows.size(); i++) {
+      if (i > 0) {
+        w.print(',');
+      }
+      w.print(itemRows.get(i));
+    }
+    w.print("]}");
+  }
+
+  private static List<String> collectBlockInventoryItems(Object te) {
+    List<String> out = new ArrayList<String>();
+    Set<String> seen = new LinkedHashSet<String>();
+
+    try {
+      Class<?> iinv = Class.forName("net.minecraft.inventory.IInventory");
+      if (iinv.isInstance(te)) {
+        int size = intInvoke(te, "getSizeInventory", "func_70302_i_");
+        for (int slot = 0; slot < size; slot++) {
+          Object stack = invokeQuiet(te, new String[] {"getStackInSlot", "func_70301_a"}, new Class[] {int.class}, new Object[] {Integer.valueOf(slot)});
+          addStackJson(out, seen, stack, slot, inventorySource(te));
+        }
+      }
+    } catch (Throwable ignored) {
+    }
+
+    addDirectGregTechStack(out, seen, te);
+    collectStackContainer(out, seen, getFieldQuiet(te, "mInventory"), "field:mInventory");
+    collectStackContainer(out, seen, getFieldQuiet(te, "mInventoryItems"), "field:mInventoryItems");
+    collectStackContainer(out, seen, getFieldQuiet(te, "mInputItems"), "field:mInputItems");
+    collectStackContainer(out, seen, getFieldQuiet(te, "mOutputItems"), "field:mOutputItems");
+    collectStackContainer(out, seen, getFieldQuiet(te, "Inventory"), "field:Inventory");
+    collectStackContainer(out, seen, getFieldQuiet(te, "Items"), "field:Items");
+    collectStackContainer(out, seen, getFieldQuiet(te, "inventory"), "field:inventory");
+    collectStackContainer(out, seen, getFieldQuiet(te, "contents"), "field:contents");
+    return out;
+  }
+
+  private static boolean isInventoryTile(Object te) {
+    try {
+      Class<?> iinv = Class.forName("net.minecraft.inventory.IInventory");
+      if (iinv.isInstance(te)) {
+        return true;
+      }
+    } catch (Throwable ignored) {
+    }
+    return getFieldQuiet(te, "mInventory") != null
+        || getFieldQuiet(te, "mInventoryItems") != null
+        || getFieldQuiet(te, "mInputItems") != null
+        || getFieldQuiet(te, "mOutputItems") != null
+        || getFieldQuiet(te, "Inventory") != null
+        || getFieldQuiet(te, "Items") != null
+        || getFieldQuiet(te, "inventory") != null
+        || getFieldQuiet(te, "contents") != null;
+  }
+
+  private static void addDirectGregTechStack(List<String> out, Set<String> seen, Object te) {
+    Object stack = firstNonNull(
+        getFieldQuiet(te, "mItemStack"),
+        getFieldQuiet(te, "mStoredItemStack"),
+        getFieldQuiet(te, "mStoredStack"),
+        getFieldQuiet(te, "storedItem"));
+    if (stack == null) {
+      return;
+    }
+    long count = longField(te, "mItemCount", "mItemCountLong", "mItemAmount", "mStoredItemCount", "mStoredCount");
+    if (count <= 0L) {
+      count = intField(stack, "stackSize", "field_77994_a");
+    }
+    Object copy = copyStackWithCount(stack, count);
+    addStackJson(out, seen, copy, -1, "gregtech-direct");
+  }
+
+  private static void collectStackContainer(List<String> out, Set<String> seen, Object container, String source) {
+    if (container == null) {
+      return;
+    }
+    Class<?> c = container.getClass();
+    if (c.isArray()) {
+      int len = java.lang.reflect.Array.getLength(container);
+      for (int i = 0; i < len; i++) {
+        addStackJson(out, seen, java.lang.reflect.Array.get(container, i), i, source);
+      }
+      return;
+    }
+    if (container instanceof Iterable) {
+      int slot = 0;
+      for (Object row : (Iterable<?>) container) {
+        addStackJson(out, seen, row, slot, source);
+        slot++;
+      }
+      return;
+    }
+    addStackJson(out, seen, container, -1, source);
+  }
+
+  private static void addStackJson(List<String> out, Set<String> seen, Object stack, int slot, String source) {
+    if (!isPositiveItemStack(stack)) {
+      return;
+    }
+    String row = itemJson(stack, slot, source);
+    if (seen.add(row)) {
+      out.add(row);
+    }
   }
 
   private static Object findGrid(Object te) {
@@ -244,6 +459,14 @@ public final class GregGPTMEExportMod {
     return out.toString();
   }
 
+  private static String itemJson(Object stack, int slot, String source) {
+    StringWriter out = new StringWriter();
+    PrintWriter w = new PrintWriter(out);
+    writeItem(w, stack, slot, source);
+    w.flush();
+    return out.toString();
+  }
+
   private static Object toItemStack(Object aeStack) {
     try {
       Object stack = invokeAny(aeStack, new String[] {"getItemStack"}, new Class[0], new Object[0]);
@@ -262,6 +485,10 @@ public final class GregGPTMEExportMod {
   }
 
   private static void writeItem(PrintWriter w, Object stack) {
+    writeItem(w, stack, Integer.MIN_VALUE, "");
+  }
+
+  private static void writeItem(PrintWriter w, Object stack, int slot, String source) {
     Object item = invokeQuiet(stack, new String[] {"getItem", "func_77973_b"}, new Class[0], new Object[0]);
     Object uid = uniqueIdentifier(item);
     String reg = "";
@@ -274,6 +501,15 @@ public final class GregGPTMEExportMod {
     w.print(intInvoke(stack, "getItemDamage", "func_77960_j"));
     w.print(",\"count\":");
     w.print(intField(stack, "stackSize", "field_77994_a"));
+    if (slot != Integer.MIN_VALUE) {
+      w.print(",\"slot\":");
+      w.print(slot);
+    }
+    if (source != null && source.length() > 0) {
+      w.print(",\"source\":\"");
+      w.print(escape(source));
+      w.print("\"");
+    }
     w.print(",\"reg_name\":\"");
     w.print(escape(reg));
     w.print("\",\"display_name\":\"");
@@ -287,6 +523,29 @@ public final class GregGPTMEExportMod {
     } catch (Throwable ignored) {
     }
     w.print("\"}");
+  }
+
+  private static boolean isPositiveItemStack(Object stack) {
+    if (stack == null) {
+      return false;
+    }
+    Object item = invokeQuiet(stack, new String[] {"getItem", "func_77973_b"}, new Class[0], new Object[0]);
+    return item != null && intField(stack, "stackSize", "field_77994_a") > 0;
+  }
+
+  private static Object copyStackWithCount(Object stack, long count) {
+    Object copy = invokeQuiet(stack, new String[] {"copy", "func_77946_l"}, new Class[0], new Object[0]);
+    if (copy == null) {
+      copy = stack;
+    }
+    if (count > Integer.MAX_VALUE) {
+      count = Integer.MAX_VALUE;
+    }
+    try {
+      setField(copy, Integer.valueOf((int) count), "stackSize", "field_77994_a");
+    } catch (Throwable ignored) {
+    }
+    return copy;
   }
 
   private static Object invokeAny(Object target, String[] names, Class[] types, Object[] args) throws Exception {
@@ -358,6 +617,11 @@ public final class GregGPTMEExportMod {
     return v instanceof Number ? ((Number) v).intValue() : 0;
   }
 
+  private static long longField(Object target, String... names) {
+    Object v = getFieldQuiet(target, names);
+    return v instanceof Number ? ((Number) v).longValue() : 0L;
+  }
+
   private static int intInvoke(Object target, String... names) {
     Object v = invokeQuiet(target, names, new Class[0], new Object[0]);
     return v instanceof Number ? ((Number) v).intValue() : 0;
@@ -384,6 +648,17 @@ public final class GregGPTMEExportMod {
     }
   }
 
+  private static Object uniqueIdentifierForBlock(Object block) {
+    try {
+      Class<?> blockClass = Class.forName("net.minecraft.block.Block");
+      Class<?> registry = Class.forName("cpw.mods.fml.common.registry.GameRegistry");
+      Method m = registry.getMethod("findUniqueIdentifierFor", blockClass);
+      return m.invoke(null, block);
+    } catch (Throwable ignored) {
+      return null;
+    }
+  }
+
   private static int itemID(Object item) {
     try {
       Class<?> itemClass = Class.forName("net.minecraft.item.Item");
@@ -398,6 +673,89 @@ public final class GregGPTMEExportMod {
     } catch (Throwable ignored) {
       return 0;
     }
+  }
+
+  private static Object blockAt(Object world, int x, int y, int z) {
+    if (world == null) {
+      return null;
+    }
+    return invokeQuiet(world, new String[] {"getBlock", "func_147439_a"}, new Class[] {int.class, int.class, int.class}, new Object[] {Integer.valueOf(x), Integer.valueOf(y), Integer.valueOf(z)});
+  }
+
+  private static int blockMetaAt(Object world, int x, int y, int z) {
+    Object v = world == null ? null : invokeQuiet(world, new String[] {"getBlockMetadata", "func_72805_g"}, new Class[] {int.class, int.class, int.class}, new Object[] {Integer.valueOf(x), Integer.valueOf(y), Integer.valueOf(z)});
+    return v instanceof Number ? ((Number) v).intValue() : 0;
+  }
+
+  private static int blockID(Object block) {
+    if (block == null) {
+      return 0;
+    }
+    try {
+      Class<?> blockClass = Class.forName("net.minecraft.block.Block");
+      Method m;
+      try {
+        m = blockClass.getMethod("getIdFromBlock", blockClass);
+      } catch (NoSuchMethodException ignored) {
+        m = blockClass.getMethod("func_149682_b", blockClass);
+      }
+      Object v = m.invoke(null, block);
+      return v instanceof Number ? ((Number) v).intValue() : 0;
+    } catch (Throwable ignored) {
+      return 0;
+    }
+  }
+
+  private static String blockDisplayName(Object block) {
+    if (block == null) {
+      return "";
+    }
+    Object v = invokeQuiet(block, new String[] {"getLocalizedName", "func_149732_F"}, new Class[0], new Object[0]);
+    if (v != null && String.valueOf(v).length() > 0) {
+      return String.valueOf(v);
+    }
+    v = invokeQuiet(block, new String[] {"getUnlocalizedName", "func_149739_a"}, new Class[0], new Object[0]);
+    return v != null ? String.valueOf(v) : "";
+  }
+
+  private static String inventorySource(Object te) {
+    try {
+      Class<?> sided = Class.forName("net.minecraft.inventory.ISidedInventory");
+      if (sided.isInstance(te)) {
+        return "ISidedInventory";
+      }
+    } catch (Throwable ignored) {
+    }
+    try {
+      Class<?> inv = Class.forName("net.minecraft.inventory.IInventory");
+      if (inv.isInstance(te)) {
+        return "IInventory";
+      }
+    } catch (Throwable ignored) {
+    }
+    return "tile-fields";
+  }
+
+  private static Object firstNonNull(Object... values) {
+    for (Object v : values) {
+      if (v != null) {
+        return v;
+      }
+    }
+    return null;
+  }
+
+  private static String firstNonEmptyString(Object... values) {
+    for (Object v : values) {
+      if (v == null) {
+        continue;
+      }
+      String s = String.valueOf(v).trim();
+      if (s.length() > 0 && !"<nil>".equals(s)) {
+        return s;
+      }
+    }
+    return "";
   }
 
   private static String nowUTC() {
