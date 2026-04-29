@@ -45,14 +45,14 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 6. Edit Pi-side `/home/jhein/greggpt-gtnh/deploy/env/greggpt.env`:
    - `GREGGPT_DISCORD_ALLOW_FROM` to your Discord user ID
 7. `scripts/login_greggpt_oauth_on_pi.sh`
-8. `ssh jhein@192.168.1.41 'systemctl --user start greggpt-gtnh.service'`
+8. `ssh jhein@100.84.87.81 'systemctl --user start greggpt-gtnh.service'`
 
 Discord slash commands are provided by the separate `discord-commands` service in the compose stack. Global command registration can take a while to propagate; if you want fast iteration, set `DISCORD_GUILD_ID` in `deploy/env/greggpt.env` to the target guild and redeploy.
 
 ## Pi access
-Deployment and operations target the Raspberry Pi at `jhein@192.168.1.41`.
+Deployment and operations target the Raspberry Pi over Tailscale at `jhein@100.84.87.81`.
 
-The repo scripts do not use plain `ssh jhein@192.168.1.41`. They expect the matching SSH key to be available through the 1Password SSH agent, and they select it by writing the public key to a temporary file and passing that file to `ssh -i`.
+The repo scripts do not use plain LAN SSH. They expect the matching SSH key to be available through the 1Password SSH agent, and they select it by writing the public key to a temporary file and passing that file to `ssh -i`.
 
 Prerequisites:
 - 1Password desktop app installed and unlocked
@@ -66,7 +66,7 @@ Minimal manual connection:
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH' > "$tmp"
-ssh -o IdentitiesOnly=yes -o IdentityAgent="$HOME/.1password/agent.sock" -i "$tmp" jhein@192.168.1.41
+ssh -o IdentitiesOnly=yes -o IdentityAgent="$HOME/.1password/agent.sock" -i "$tmp" jhein@100.84.87.81
 ```
 
 One-off remote command:
@@ -75,7 +75,7 @@ One-off remote command:
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH' > "$tmp"
-ssh -o IdentitiesOnly=yes -o IdentityAgent="$HOME/.1password/agent.sock" -i "$tmp" jhein@192.168.1.41 'hostname && pwd'
+ssh -o IdentitiesOnly=yes -o IdentityAgent="$HOME/.1password/agent.sock" -i "$tmp" jhein@100.84.87.81 'hostname && pwd'
 ```
 
 Why this matters:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PI_HOST="${PI_HOST:-jhein@192.168.1.41}"
+PI_HOST="${PI_HOST:-jhein@100.84.87.81}"
 PI_PUBKEY="${PI_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH}"
 SSH_KEY_FILE="$(mktemp)"
 trap 'rm -f "$SSH_KEY_FILE"' EXIT
