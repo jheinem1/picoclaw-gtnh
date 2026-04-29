@@ -1,0 +1,7 @@
+FROM docker.io/alpine:3.20
+COPY prebuilt/mc-relay /usr/local/bin/mc-relay
+COPY prebuilt/gtnh_inventory_query /usr/local/bin/gtnh_inventory_query
+RUN apk add --no-cache ca-certificates jq curl python3
+RUN mkdir -p /var/lib/mc-relay /root/.greggpt/workspace
+ENV GREGGPT_WORKSPACE=/root/.greggpt/workspace
+ENTRYPOINT ["/usr/local/bin/mc-relay"]

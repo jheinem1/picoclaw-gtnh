@@ -249,7 +249,7 @@ func loadConfig() (Config, error) {
 		DatHostPassword:    strings.TrimSpace(os.Getenv("DATHOST_API_PASSWORD")),
 		DatHostServer:      strings.TrimSpace(os.Getenv("DATHOST_SERVER_ID")),
 		DatHostBase:        strings.TrimRight(getenv("DATHOST_API_BASE", "https://dathost.net/api/0.1"), "/"),
-		WorkDir:            getenv("INVENTORY_WORKDIR", "/root/.picoclaw/workspace"),
+		WorkDir:            getenv("INVENTORY_WORKDIR", "/root/.greggpt/workspace"),
 		StateFile:          getenv("INVENTORY_STATE_FILE", "/var/lib/inventory-sync/state.json"),
 		PlayersInterval:    time.Duration(max(60, getenvInt("INVENTORY_PLAYERS_INTERVAL_SECONDS", 600))) * time.Second,
 		ChestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_CHESTS_INTERVAL_SECONDS", 21600))) * time.Second,
@@ -1504,7 +1504,7 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 }
 
 func scanME(client *http.Client, cfg Config) ([]MERecord, string, int, error) {
-	raw, err := getFile(client, cfg, "world/picoclaw/me_index.json")
+	raw, err := getFile(client, cfg, "world/greggpt/me_index.json")
 	if err != nil {
 		return nil, "", 0, err
 	}

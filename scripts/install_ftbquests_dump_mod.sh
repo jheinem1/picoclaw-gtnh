@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MOD_JAR="${MOD_JAR:-$ROOT/build/ftbquests-dump-mod/picoclaw-ftbquests-dump-1.0.0.jar}"
+MOD_JAR="${MOD_JAR:-$ROOT/build/ftbquests-dump-mod/greggpt-ftbquests-dump-1.0.0.jar}"
 INSTANCE_DIR="${1:-}"
 
 if [[ -z "$INSTANCE_DIR" ]]; then
@@ -17,7 +17,7 @@ fi
 
 MODS_DIR="$INSTANCE_DIR/mods"
 mkdir -p "$MODS_DIR"
-cp -f "$MOD_JAR" "$MODS_DIR/picoclaw-ftbquests-dump-1.0.0.jar"
+cp -f "$MOD_JAR" "$MODS_DIR/greggpt-ftbquests-dump-1.0.0.jar"
 
-echo "installed: $MODS_DIR/picoclaw-ftbquests-dump-1.0.0.jar"
-echo "after joining the server, look for dumps/picoclaw_ftbquests_snapshot.json and dumps/picoclaw_ftbquests_completed.json"
+echo "installed: $MODS_DIR/greggpt-ftbquests-dump-1.0.0.jar"
+echo "after joining the server, look for dumps/greggpt_ftbquests_snapshot.json and dumps/greggpt_ftbquests_completed.json"

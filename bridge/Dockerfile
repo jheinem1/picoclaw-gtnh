@@ -1,9 +1,9 @@
 FROM docker.io/golang:1.22-alpine AS builder
 
 WORKDIR /src
-COPY go.mod ./
-COPY main.go ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/dathost-bridge ./main.go
+COPY go.mod go.sum ./
+COPY bridge ./bridge
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/dathost-bridge ./bridge
 
 FROM docker.io/alpine:3.20
 

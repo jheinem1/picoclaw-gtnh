@@ -1,9 +1,29 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
+
+type fakeAgentRunner struct {
+	calls []AgentRequest
+	reply string
+	err   error
+}
+
+func (f *fakeAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentResponse, error) {
+	f.calls = append(f.calls, req)
+	if f.err != nil {
+		return AgentResponse{}, f.err
+	}
+	return AgentResponse{Text: f.reply}, nil
+}
 
 func TestSplitForMC(t *testing.T) {
 	parts := splitForMC("one two three four five six", 10, 4)
@@ -76,5 +96,91 @@ func TestFormatCoordinatesForMC_Dim(t *testing.T) {
 	want := "Chest at [x:-10, y:64, z:30, dim:0] count=12"
 	if got != want {
 		t.Fatalf("unexpected format\n got=%q\nwant=%q", got, want)
+	}
+}
+
+func TestAskAgentUsesRunner(t *testing.T) {
+	runner := &fakeAgentRunner{reply: "use bronze pipes"}
+	cfg := Config{AgentTimeout: time.Second}
+	ev := ConsoleEvent{Player: "Steve", Text: "greg what pipe should I make?"}
+
+	got, err := askAgent(runner, cfg, ev, "mc:relay:test", false)
+	if err != nil {
+		t.Fatalf("askAgent failed: %v", err)
+	}
+	if got != "use bronze pipes" {
+		t.Fatalf("unexpected reply: %q", got)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one runner call, got %d", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if call.Channel != agentChannelMinecraft {
+		t.Fatalf("unexpected channel: %q", call.Channel)
+	}
+	if call.Session != "mc:relay:test" {
+		t.Fatalf("unexpected session: %q", call.Session)
+	}
+	if !strings.Contains(call.Message, "Minecraft player 'Steve' asked") {
+		t.Fatalf("prompt did not include player context: %q", call.Message)
+	}
+}
+
+func TestProcessOnceUsesFakeAgentRunnerAndSaysReply(t *testing.T) {
+	var said []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mc/console":
+			_ = json.NewEncoder(w).Encode(ConsoleResponse{
+				OK:    true,
+				Count: 1,
+				Events: []ConsoleEvent{{
+					EventID:   "event-1",
+					Timestamp: "2026-04-28T00:00:00Z",
+					Player:    "Steve",
+					Text:      "greg where is my wrench?",
+					Triggered: true,
+				}},
+			})
+		case "/mc/say":
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode say payload: %v", err)
+			}
+			said = append(said, payload["text"])
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		BridgeURL:     server.URL,
+		ConsoleLines:  10,
+		ReplyMaxChars: 180,
+		MaxReplyParts: 4,
+		StateFile:     t.TempDir() + "/state.json",
+		SessionPrefix: "mc:relay",
+		AgentTimeout:  time.Second,
+		HTTPTimeout:   time.Second,
+	}
+	state := State{Initialized: true, Seen: map[string]int64{}}
+	runner := &fakeAgentRunner{reply: "Your wrench is at (1,2,3):4"}
+
+	processOnce(server.Client(), cfg, &state, runner)
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one runner call, got %d", len(runner.calls))
+	}
+	if len(said) != 1 {
+		t.Fatalf("expected one /mc/say call, got %#v", said)
+	}
+	want := "Your wrench is at [x:1, y:2, z:3] count=4"
+	if said[0] != want {
+		t.Fatalf("unexpected say text: got=%q want=%q", said[0], want)
+	}
+	if _, ok := state.Seen["event-1"]; !ok {
+		t.Fatalf("event was not marked seen")
 	}
 }

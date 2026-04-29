@@ -684,7 +684,7 @@ def discord_request(method: str, path: str, token: str, body: dict[str, Any] | N
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bot {token}")
-    req.add_header("User-Agent", "picoclaw-questbook-sync/1.0")
+    req.add_header("User-Agent", "greggpt-questbook-sync/1.0")
     if data is not None:
         req.add_header("Content-Type", "application/json")
 
@@ -716,7 +716,7 @@ def discord_request(method: str, path: str, token: str, body: dict[str, Any] | N
 
 def cmd_sync_channel(args: argparse.Namespace) -> int:
     data, state, _ = load_tracker(Path(args.data_file), Path(args.state_file))
-    token = (args.bot_token or os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("PICOCLAW_CHANNELS_DISCORD_TOKEN") or "").strip()
+    token = (args.bot_token or os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("GREGGPT_DISCORD_TOKEN") or "").strip()
     if not token:
         raise SystemExit("missing Discord bot token")
     sync_state_file = Path(args.sync_state_file)
@@ -788,7 +788,7 @@ def cmd_sync_channel(args: argparse.Namespace) -> int:
 
 
 def cmd_post_message(args: argparse.Namespace) -> int:
-    token = (args.bot_token or os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("PICOCLAW_CHANNELS_DISCORD_TOKEN") or "").strip()
+    token = (args.bot_token or os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("GREGGPT_DISCORD_TOKEN") or "").strip()
     if not token:
         raise SystemExit("missing Discord bot token")
     payload = {"content": args.content}
@@ -832,7 +832,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "find":
             sp.add_argument("--limit", type=int, default=20)
         if name == "complete":
-            sp.add_argument("--by", default="PicoClaw")
+            sp.add_argument("--by", default="GregGPT")
             sp.add_argument("--note", default="")
         if name == "sync-channel":
             sp.add_argument("--channel-id", required=True)

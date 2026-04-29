@@ -1,0 +1,6 @@
+FROM docker.io/alpine:3.20
+RUN apk add --no-cache ca-certificates jq curl python3
+WORKDIR /app
+COPY prebuilt/discord-commands /usr/local/bin/discord-commands
+COPY prebuilt/gtnh_inventory_query /usr/local/bin/gtnh_inventory_query
+ENTRYPOINT ["/usr/local/bin/discord-commands"]

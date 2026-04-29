@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	agentcore "greggpt-gtnh/internal/agent"
 )
 
 type Config struct {
@@ -30,6 +32,7 @@ type Config struct {
 	SessionPrefix string
 	AgentTimeout  time.Duration
 	HTTPTimeout   time.Duration
+	Workspace     string
 }
 
 type State struct {
@@ -51,7 +54,57 @@ type ConsoleResponse struct {
 	Events []ConsoleEvent `json:"events"`
 }
 
-var logPrefix = regexp.MustCompile(`^\d{4}/\d{2}/\d{2}\s`)
+const (
+	greggptDefaultWorkspace = "/root/.greggpt/workspace"
+	greggptEnvWorkspace     = "GREGGPT_WORKSPACE"
+	greggptEnvAgentTimeout  = "GREGGPT_AGENT_TIMEOUT_SECONDS"
+	agentChannelMinecraft   = "minecraft"
+)
+
+type AgentRequest struct {
+	Channel string
+	Session string
+	Message string
+}
+
+type AgentResponse struct {
+	Text string
+}
+
+type AgentRunner interface {
+	Run(context.Context, AgentRequest) (AgentResponse, error)
+}
+
+type sharedAgentRunner struct {
+	runner *agentcore.Runner
+}
+
+type startupErrorAgentRunner struct {
+	err error
+}
+
+func (r *sharedAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentResponse, error) {
+	if r == nil || r.runner == nil {
+		return AgentResponse{}, errors.New("agent runner is nil")
+	}
+	text, err := r.runner.Run(ctx, agentcore.Request{
+		Channel: agentcore.Channel(req.Channel),
+		User:    req.Session,
+		Message: req.Message,
+		Context: map[string]string{
+			"session": req.Session,
+		},
+	})
+	if err != nil {
+		return AgentResponse{}, err
+	}
+	return AgentResponse{Text: text}, nil
+}
+
+func (r startupErrorAgentRunner) Run(context.Context, AgentRequest) (AgentResponse, error) {
+	return AgentResponse{}, r.err
+}
+
 var unresolvedRe = regexp.MustCompile(`(?i)(could not resolve|no exact recipe chain found|no exact recipe|no recipe (chain )?found|not found)`)
 var turnIntoRe = regexp.MustCompile(`(?i)turn\s+(.+?)\s+into\s+(.+?)(?:\?|$)`)
 var refineIntoRe = regexp.MustCompile(`(?i)what does\s+(.+?)\s+refine into(?:\?|$)`)
@@ -103,8 +156,9 @@ func loadConfig() Config {
 		MaxReplyParts: getenvInt("MC_REPLY_MAX_PARTS", 4),
 		StateFile:     getenv("MC_RELAY_STATE_FILE", "/var/lib/mc-relay/state.json"),
 		SessionPrefix: getenv("MC_RELAY_SESSION", "mc:relay"),
-		AgentTimeout:  time.Duration(getenvInt("MC_RELAY_AGENT_TIMEOUT_SECONDS", 60)) * time.Second,
+		AgentTimeout:  time.Duration(getenvInt(greggptEnvAgentTimeout, 60)) * time.Second,
 		HTTPTimeout:   time.Duration(getenvInt("MC_RELAY_HTTP_TIMEOUT_SECONDS", 20)) * time.Second,
+		Workspace:     getenv(greggptEnvWorkspace, greggptDefaultWorkspace),
 	}
 }
 
@@ -216,44 +270,25 @@ func trimChars(s string, max int) string {
 	return string(r[:max])
 }
 
-func parseAgentOutput(raw string) string {
-	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "🦞") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "🦞"))
-		}
-	}
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" || logPrefix.MatchString(line) {
-			continue
-		}
-		return line
-	}
-	return ""
-}
-
-func askAgentWithPrompt(cfg Config, session, prompt string) (string, error) {
+func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.AgentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "picoclaw", "agent", "--session", session, "--message", prompt)
-	cmd.Env = os.Environ()
-	out, err := cmd.CombinedOutput()
+	out, err := runner.Run(ctx, AgentRequest{
+		Channel: agentChannelMinecraft,
+		Session: session,
+		Message: prompt,
+	})
 	if err != nil {
-		return "", fmt.Errorf("agent call failed: %w: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("agent call failed: %w", err)
 	}
-	text := strings.TrimSpace(parseAgentOutput(string(out)))
+	text := strings.TrimSpace(out.Text)
 	if text == "" {
-		return "", fmt.Errorf("agent returned empty output: %s", strings.TrimSpace(string(out)))
+		return "", errors.New("agent returned empty output")
 	}
 	return text, nil
 }
 
-func askAgent(cfg Config, ev ConsoleEvent, session string, mustVerify bool) (string, error) {
+func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, mustVerify bool) (string, error) {
 	prompt := fmt.Sprintf("Minecraft player '%s' asked: %q. Reply as GregGPT in GTNH context by default. Keep it concise, plain text, no markdown.", ev.Player, ev.Text)
 	prompt += "\nTool execution rule: execute one direct workspace command only; do not use cd, &&, pipes, or chained shell fragments."
 	prompt += "\nDo not claim a command was blocked by safety guard unless a tool call in this same turn returned stderr containing that exact phrase."
@@ -293,7 +328,7 @@ func askAgent(cfg Config, ev ConsoleEvent, session string, mustVerify bool) (str
 		prompt += "\nDo not claim you need the user to provide a page before searching. Try one lookup first, then clarify only if results are ambiguous."
 	}
 
-	reply, err := askAgentWithPrompt(cfg, session, prompt)
+	reply, err := askAgentWithPrompt(runner, cfg, session, prompt)
 	if err == nil {
 		return reply, nil
 	}
@@ -302,7 +337,7 @@ func askAgent(cfg Config, ev ConsoleEvent, session string, mustVerify bool) (str
 	retryPrompt := fmt.Sprintf(
 		"Reply concisely. Prefer GTNH context. Do not run more than one tool call. If lookup fails, say you could not resolve it from current snapshot.",
 	)
-	retryReply, retryErr := askAgentWithPrompt(cfg, session+":retry", retryPrompt+"\n\nUser: "+ev.Text)
+	retryReply, retryErr := askAgentWithPrompt(runner, cfg, session+":retry", retryPrompt+"\n\nUser: "+ev.Text)
 	if retryErr == nil {
 		return retryReply, nil
 	}
@@ -317,6 +352,12 @@ func fallbackReply(cfg Config, ev ConsoleEvent) string {
 	return msg + " Ask again with the exact item name and I'll retry."
 }
 
+func workspaceCommand(ctx context.Context, cfg Config, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = cfg.Workspace
+	return cmd
+}
+
 func directWikiReply(cfg Config, question string) (string, error) {
 	terms := extractCandidateTerms(question)
 	if len(terms) == 0 {
@@ -326,8 +367,7 @@ func directWikiReply(cfg Config, question string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "gtnh_wiki_search", query)
-	cmd.Dir = "/root/.picoclaw/workspace"
+	cmd := workspaceCommand(ctx, cfg, "sh", "gtnh_wiki_search", query)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("gtnh_wiki_search failed: %w: %s", err, strings.TrimSpace(string(out)))
@@ -423,8 +463,7 @@ func findItemMatches(cfg Config, query string, limit int) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "gtnh_query", "find-item", query)
-	cmd.Dir = "/root/.picoclaw/workspace"
+	cmd := workspaceCommand(ctx, cfg, "sh", "gtnh_query", "find-item", query)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("find-item failed: %w: %s", err, strings.TrimSpace(string(out)))
@@ -602,12 +641,11 @@ func isTaskBoardQuery(text string) bool {
 	return taskBoardRe.MatchString(text)
 }
 
-func taskBoardMCReply() (string, error) {
+func taskBoardMCReply(cfg Config) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "gtnh_tasks", "summary")
-	cmd.Dir = "/root/.picoclaw/workspace"
+	cmd := workspaceCommand(ctx, cfg, "sh", "gtnh_tasks", "summary")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("task summary failed: %w: %s", err, strings.TrimSpace(string(out)))
@@ -636,7 +674,7 @@ func fallbackID(ev ConsoleEvent) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-func processOnce(client *http.Client, cfg Config, st *State) {
+func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner) {
 	resp, err := getConsole(client, cfg)
 	if err != nil {
 		log.Printf("event=poll_error err=%q", err.Error())
@@ -675,7 +713,7 @@ func processOnce(client *http.Client, cfg Config, st *State) {
 		triggerCount++
 
 		if isTaskBoardQuery(ev.Text) {
-			reply, err := taskBoardMCReply()
+			reply, err := taskBoardMCReply(cfg)
 			if err != nil {
 				log.Printf("event=task_board_reply_error event_id=%q player=%q err=%q", id, ev.Player, err.Error())
 				reply = "Task board lookup failed. Ask in Discord and I will retry."
@@ -701,7 +739,7 @@ func processOnce(client *http.Client, cfg Config, st *State) {
 		}
 
 		mustVerify := needsVerification(ev.Text)
-		reply, err := askAgent(cfg, ev, sessionForEvent(cfg, id), mustVerify)
+		reply, err := askAgent(runner, cfg, ev, sessionForEvent(cfg, id), mustVerify)
 		if err != nil {
 			fallbackCount++
 			log.Printf("event=agent_error event_id=%q player=%q err=%q", id, ev.Player, err.Error())
@@ -742,18 +780,33 @@ func processOnce(client *http.Client, cfg Config, st *State) {
 	log.Printf("event=poll_success events=%d trigger_count=%d replied=%d fallback_count=%d", len(resp.Events), triggerCount, repliedCount, fallbackCount)
 }
 
+func newAgentRunner(cfg Config) AgentRunner {
+	runner, err := agentcore.NewDefaultRunner(agentcore.Config{
+		Model:        getenv(agentcore.EnvModel, agentcore.DefaultModel),
+		Workspace:    cfg.Workspace,
+		AuthFile:     getenv(agentcore.EnvAuthFile, agentcore.DefaultAuthFile),
+		Timeout:      cfg.AgentTimeout,
+		MaxToolCalls: getenvInt(agentcore.EnvMaxToolCalls, agentcore.DefaultMaxToolCalls),
+	})
+	if err != nil {
+		return startupErrorAgentRunner{err: err}
+	}
+	return &sharedAgentRunner{runner: runner}
+}
+
 func main() {
 	cfg := loadConfig()
 	client := &http.Client{Timeout: cfg.HTTPTimeout}
 	state := loadState(cfg.StateFile)
+	runner := newAgentRunner(cfg)
 
-	log.Printf("event=startup bridge=%q poll_interval=%s lines=%d reply_max=%d state=%q", cfg.BridgeURL, cfg.PollInterval.String(), cfg.ConsoleLines, cfg.ReplyMaxChars, cfg.StateFile)
+	log.Printf("event=startup bridge=%q poll_interval=%s lines=%d reply_max=%d state=%q workspace=%q", cfg.BridgeURL, cfg.PollInterval.String(), cfg.ConsoleLines, cfg.ReplyMaxChars, cfg.StateFile, cfg.Workspace)
 
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
 
-	processOnce(client, cfg, &state)
+	processOnce(client, cfg, &state, runner)
 	for range ticker.C {
-		processOnce(client, cfg, &state)
+		processOnce(client, cfg, &state, runner)
 	}
 }

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_DIR="$ROOT/mods/ftbquests-dump"
 BUILD_DIR="$ROOT/build/ftbquests-dump-mod"
-OUT_JAR="$BUILD_DIR/picoclaw-ftbquests-dump-1.0.0.jar"
+OUT_JAR="$BUILD_DIR/greggpt-ftbquests-dump-1.0.0.jar"
 
 GRADLE_VERSION="${GRADLE_VERSION:-9.2.1}"
 GRADLE_ROOT="$ROOT/.gradle-bin"
@@ -28,6 +28,6 @@ fi
 
 mkdir -p "$BUILD_DIR"
 "$GRADLE_BIN" --no-daemon -p "$PROJECT_DIR" clean jar
-cp -f "$PROJECT_DIR/build/libs/picoclaw_quest_dump-1.0.0.jar" "$OUT_JAR"
+cp -f "$PROJECT_DIR/build/libs/greggpt_quest_dump-1.0.0.jar" "$OUT_JAR"
 
 echo "wrote: $OUT_JAR"

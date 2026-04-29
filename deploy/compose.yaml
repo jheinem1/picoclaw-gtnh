@@ -1,8 +1,8 @@
 services:
   dathost-bridge:
     build:
-      context: ../bridge
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: bridge/Dockerfile
     container_name: dathost-bridge
     restart: unless-stopped
     env_file:
@@ -19,17 +19,17 @@ services:
     container_name: mc-relay
     restart: unless-stopped
     env_file:
-      - ./env/picoclaw.env
+      - ./env/greggpt.env
       - ./env/dathost-bridge.env
     environment:
       - DATHOST_BRIDGE_URL=http://dathost-bridge:8080
+      - GREGGPT_AUTH_FILE=/root/.greggpt/auth.json
+      - GREGGPT_WORKSPACE=/root/.greggpt/workspace
       - MC_RELAY_STATE_FILE=/var/lib/mc-relay/state.json
     volumes:
       - ../runtime/mc-relay:/var/lib/mc-relay
-      - ../runtime/picoclaw/picoclaw.custom:/usr/local/bin/picoclaw:ro
-      - ../runtime/picoclaw/config.json:/root/.picoclaw/config.json
-      - ../runtime/picoclaw/auth.json:/root/.picoclaw/auth.json
-      - ../workspace:/root/.picoclaw/workspace
+      - ../runtime/greggpt:/root/.greggpt
+      - ../workspace:/root/.greggpt/workspace
     depends_on:
       - dathost-bridge
 
@@ -40,45 +40,46 @@ services:
     container_name: discord-commands
     restart: unless-stopped
     env_file:
-      - ./env/picoclaw.env
+      - ./env/greggpt.env
     environment:
-      - DISCORD_CONFIG_PATH=/root/.picoclaw/config.json
-      - DISCORD_WORKSPACE=/root/.picoclaw/workspace
+      - GREGGPT_AUTH_FILE=/root/.greggpt/auth.json
+      - GREGGPT_WORKSPACE=/root/.greggpt/workspace
+      - DISCORD_WORKSPACE=/root/.greggpt/workspace
     volumes:
-      - ../runtime/picoclaw/config.json:/root/.picoclaw/config.json:ro
-      - ../workspace:/root/.picoclaw/workspace
+      - ../runtime/greggpt:/root/.greggpt
+      - ../workspace:/root/.greggpt/workspace
 
   kanban-sync:
     build:
-      context: ../kanban-sync
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: kanban-sync/Dockerfile
     container_name: kanban-sync
     restart: unless-stopped
     env_file:
-      - ./env/picoclaw.env
+      - ./env/greggpt.env
     environment:
       - KANBAN_STATE_FILE=/var/lib/kanban-sync/state.json
       - KANBAN_IN_PROGRESS_STATE_FILE=/var/lib/kanban-sync/in-progress-state.json
-      - KANBAN_WORKDIR=/root/.picoclaw/workspace
+      - KANBAN_WORKDIR=/root/.greggpt/workspace
     volumes:
       - ../runtime/kanban-sync:/var/lib/kanban-sync
-      - ../workspace:/root/.picoclaw/workspace
+      - ../workspace:/root/.greggpt/workspace
 
   inventory-sync:
     build:
-      context: ../inventory-sync
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: inventory-sync/Dockerfile
     container_name: inventory-sync
     restart: unless-stopped
     env_file:
-      - ./env/picoclaw.env
+      - ./env/greggpt.env
       - ./env/dathost-bridge.env
     environment:
-      - INVENTORY_WORKDIR=/root/.picoclaw/workspace
+      - INVENTORY_WORKDIR=/root/.greggpt/workspace
       - INVENTORY_STATE_FILE=/var/lib/inventory-sync/state.json
     volumes:
       - ../runtime/inventory-sync:/var/lib/inventory-sync
-      - ../workspace:/root/.picoclaw/workspace
+      - ../workspace:/root/.greggpt/workspace
 
   questbook-sync:
     build:
@@ -87,25 +88,8 @@ services:
     container_name: questbook-sync
     restart: unless-stopped
     env_file:
-      - ./env/picoclaw.env
+      - ./env/greggpt.env
     environment:
-      - QUESTBOOK_WORKDIR=/root/.picoclaw/workspace
+      - QUESTBOOK_WORKDIR=/root/.greggpt/workspace
     volumes:
-      - ../workspace:/root/.picoclaw/workspace
-
-  picoclaw-gateway:
-    build:
-      context: ../gateway
-      dockerfile: Dockerfile
-    container_name: picoclaw-gateway
-    restart: unless-stopped
-    env_file:
-      - ./env/picoclaw.env
-    volumes:
-      - ../runtime/picoclaw/picoclaw.custom:/usr/local/bin/picoclaw:ro
-      - ../runtime/picoclaw/config.json:/root/.picoclaw/config.json
-      - ../runtime/picoclaw/auth.json:/root/.picoclaw/auth.json
-      - ../workspace:/root/.picoclaw/workspace
-    command: ["gateway"]
-    ports:
-      - "127.0.0.1:18790:18790"
+      - ../workspace:/root/.greggpt/workspace

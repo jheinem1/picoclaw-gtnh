@@ -1,4 +1,4 @@
-Runtime GTNH dataset for PicoClaw.
+Runtime GTNH dataset for GregGPT.
 
 This directory intentionally excludes large raw dumps (recipes.json, recipes_stacks.json)
 to prevent accidental full-file reads and OOM/restarts.

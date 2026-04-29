@@ -1,15 +1,15 @@
-# picoclaw-gtnh
+# GregGPT GTNH
 
-Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, with DatHost Minecraft chat integration.
+Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, with DatHost Minecraft chat integration.
 
 ## What this repo contains
-- `deploy/compose.yaml`: PicoClaw gateway + Discord slash commands + DatHost bridge + MC relay + kanban-sync + inventory-sync services
-- `deploy/config/picoclaw.config.template.json`: base PicoClaw config (OpenAI OAuth + Discord)
-- `deploy/env/picoclaw.env.template`: secret env template
+- `deploy/compose.yaml`: Discord slash commands + DatHost bridge + MC relay + kanban-sync + inventory-sync services
+- `deploy/config/greggpt.config.template.json`: optional GregGPT config template
+- `deploy/env/greggpt.env.template`: secret env template
 - `deploy/env/dathost-bridge.env.template`: DatHost bridge env template
 - `bridge/`: lightweight Go DatHost bridge (`/healthz`, `/mc/console`, `/mc/say`)
 - `discord-commands/`: Discord slash-command service that exposes the workspace tools directly in Discord
-- `relay/`: lightweight Go worker that polls bridge events and asks PicoClaw for MC replies
+- `relay/`: lightweight Go worker that polls bridge events and asks GregGPT for MC replies
 - `kanban-sync/`: deterministic Discord embed renderer for GTNH Kanban board
 - `inventory-sync/`: deterministic DatHost file indexer for player inventories and chest coordinates
 - `workspace/AGENTS.md`: GTNH-specific behavior constraints
@@ -19,7 +19,7 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
 - `workspace/gtnh_wiki_search`: GTNH wiki search API (MediaWiki-backed shell command)
 - `workspace/gtnh_find_item`, `workspace/gtnh_resolve_recipes`, `workspace/gtnh_search_recipes`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
-- `workspace/gtnh_inventory`: inventory/chest lookup API for PicoClaw prompts
+- `workspace/gtnh_inventory`: inventory/chest lookup API for GregGPT prompts
 - `workspace/tools/search_gtnh.sh`: convenience wrapper for indexed item search
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
 - `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
@@ -27,13 +27,12 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
 - `scripts/install_oredict_dump_mod.sh`: install the dump mod into a local PrismLauncher GTNH instance
 - `scripts/build_ftbquests_dump_mod.sh`: build a NeoForge client mod that dumps live FTB Quests state
 - `scripts/install_ftbquests_dump_mod.sh`: install the FTB Quests dump mod into a local PrismLauncher ATMons instance
-- `scripts/import_oredict_dump.sh`: import a generated `picoclaw_oredict_dump.tsv` and build `oredict_index.tsv`
+- `scripts/import_oredict_dump.sh`: import a generated `greggpt_oredict_dump.tsv` and build `oredict_index.tsv`
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
 - `scripts/deploy_to_pi.sh`: rsync project to Pi
 - `scripts/install_user_service.sh`: install `systemd --user` service on Pi
-- `scripts/login_openai_oauth_on_pi.sh`: run OpenAI device-code OAuth login in container
-- `scripts/install_picoclaw_oauth_hotfix.sh`: build/deploy patched PicoClaw binary and restart service
+- `scripts/login_greggpt_oauth_on_pi.sh`: run OpenAI device-code OAuth login in container
 - `scripts/set_discord_token_from_op.sh`: read Discord token from 1Password and apply
 - `scripts/set_discord_token.sh`: apply Discord token manually and restart service
 - `scripts/test_dathost_bridge.sh`: HTTP smoke checks for DatHost bridge
@@ -46,15 +45,12 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
 5. Set Discord token:
    - 1Password: `scripts/set_discord_token_from_op.sh`
    - Manual: `scripts/set_discord_token.sh "<discord-bot-token>"`
-6. Edit Pi-side `/home/jhein/picoclaw-gtnh/runtime/picoclaw/config.json`:
-   - `channels.discord.allow_from` to your Discord user ID
-7. `scripts/login_openai_oauth_on_pi.sh`
-8. `ssh jhein@192.168.1.41 'systemctl --user start picoclaw-gtnh.service'`
+6. Edit Pi-side `/home/jhein/greggpt-gtnh/deploy/env/greggpt.env`:
+   - `GREGGPT_DISCORD_ALLOW_FROM` to your Discord user ID
+7. `scripts/login_greggpt_oauth_on_pi.sh`
+8. `ssh jhein@192.168.1.41 'systemctl --user start greggpt-gtnh.service'`
 
-Discord slash commands are provided by the separate `discord-commands` service in the compose stack. Global command registration can take a while to propagate; if you want fast iteration, set `DISCORD_GUILD_ID` in `deploy/env/picoclaw.env` to the target guild and redeploy.
-
-If OpenAI OAuth requests fail with `400 Bad Request` from `chatgpt.com/backend-api/codex/responses`, run:
-- `scripts/install_picoclaw_oauth_hotfix.sh`
+Discord slash commands are provided by the separate `discord-commands` service in the compose stack. Global command registration can take a while to propagate; if you want fast iteration, set `DISCORD_GUILD_ID` in `deploy/env/greggpt.env` to the target guild and redeploy.
 
 ## Pi access
 Deployment and operations target the Raspberry Pi at `jhein@192.168.1.41`.
@@ -93,8 +89,7 @@ Scripts that use this exact access pattern:
 - `scripts/setup_pi_runtime.sh`
 - `scripts/deploy_to_pi.sh`
 - `scripts/install_user_service.sh`
-- `scripts/login_openai_oauth_on_pi.sh`
-- `scripts/install_picoclaw_oauth_hotfix.sh`
+- `scripts/login_greggpt_oauth_on_pi.sh`
 - `scripts/set_discord_token.sh`
 - `scripts/sync_gtnh_data.sh`
 
@@ -148,7 +143,7 @@ Task schema now includes Kanban and metadata fields (`kanban_status`, `sort_key`
 
 Board sync:
 - Channel ID: `KANBAN_CHANNEL_ID` (default template is `1477539994825392128`)
-- Enable with: `KANBAN_ENABLED=true` in `deploy/env/picoclaw.env`
+- Enable with: `KANBAN_ENABLED=true` in `deploy/env/greggpt.env`
 - Board columns rendered in Discord: `Backlog`, `In Progress`, `Paused`, `Completed`
 
 In-progress sync:
@@ -160,7 +155,7 @@ In-progress sync:
 Shared:
 - Poll interval: `KANBAN_POLL_INTERVAL_SECONDS` (default `10`)
 
-Core env vars in `deploy/env/picoclaw.env`:
+Core env vars in `deploy/env/greggpt.env`:
 - `KANBAN_ENABLED`
 - `KANBAN_CHANNEL_ID`
 - `KANBAN_TITLE`
@@ -180,7 +175,7 @@ The bot workspace policy (`workspace/AGENTS.md`) is configured to prefer this AP
   - `world/region/*.mca` (Overworld)
   - `world/DIM-1/region/*.mca` (Nether)
   - `world/DIM1/region/*.mca` (End)
-- ME network contents from `world/picoclaw/me_index.json`
+- ME network contents from `world/greggpt/me_index.json`
 
 Index outputs written under workspace state:
 - `state/inventory_index.json`
@@ -206,14 +201,14 @@ Notes:
 - Custom item names are indexed from item NBT when present and shown in inventory/chest listings.
 
 ## ME Export Workflow
-To provide exact AE2/ME contents, install the PicoClaw ME export mod on the GTNH server:
+To provide exact AE2/ME contents, install the GregGPT ME export mod on the GTNH server:
 
 1. Build the mod:
    - `scripts/build_me_export_mod.sh`
 2. Install it into the server directory:
    - `scripts/install_me_export_mod.sh "/path/to/server"`
 3. Restart the server. The mod writes:
-   - `world/picoclaw/me_index.json`
+   - `world/greggpt/me_index.json`
 The exporter runs periodically and `inventory-sync` marks ME data stale if this file is missing or old.
 
 ## True Ore-Dict Cache Workflow
@@ -224,9 +219,9 @@ To build a real GTNH ore-dictionary cache without checking large dumps into the 
 2. Install it into a local PrismLauncher GTNH instance:
    - `scripts/install_oredict_dump_mod.sh "/path/to/instance/minecraft"`
 3. Launch that GTNH instance once. The mod writes:
-   - `dumps/picoclaw_oredict_dump.tsv`
+   - `dumps/greggpt_oredict_dump.tsv`
 4. Import the dump into this repo and build the index:
-   - `scripts/import_oredict_dump.sh "/path/to/instance/minecraft/dumps/picoclaw_oredict_dump.tsv"`
+   - `scripts/import_oredict_dump.sh "/path/to/instance/minecraft/dumps/greggpt_oredict_dump.tsv"`
 5. If needed, sync updated runtime data to the Pi:
    - `scripts/sync_gtnh_data.sh DEPLOY_TO_PI=1`
 
@@ -245,14 +240,14 @@ To dump exact live FTB Quests progress from a running ATMons client:
    - `scripts/install_ftbquests_dump_mod.sh "/var/home/jhein/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/All the Mons - ATMons/minecraft"`
 3. Restart the ATMons client and join the server.
 4. The mod writes snapshot files under the instance:
-   - `dumps/picoclaw_ftbquests_snapshot.json`
-   - `dumps/picoclaw_ftbquests_completed.json`
-   - `dumps/picoclaw_ftbquests_dump.log`
+   - `dumps/greggpt_ftbquests_snapshot.json`
+   - `dumps/greggpt_ftbquests_completed.json`
+   - `dumps/greggpt_ftbquests_dump.log`
 5. You can also force an immediate client-side dump with:
-   - `/picoclawquestsdump`
+   - `/greggptquestsdump`
 - `workspace/gtnh-data/index/oredict_index.tsv`
 
-Env vars in `deploy/env/picoclaw.env`:
+Env vars in `deploy/env/greggpt.env`:
 - `INVENTORY_SYNC_ENABLED`
 - `INVENTORY_WORKDIR`
 - `INVENTORY_STATE_FILE`
@@ -292,7 +287,7 @@ Populate `deploy/env/dathost-bridge.env` on the Pi:
 - `DATHOST_API_EMAIL` + `DATHOST_API_PASSWORD`
 - `DATHOST_SERVER_ID`
 
-Wrapper commands in PicoClaw workspace:
+Wrapper commands in GregGPT workspace:
 - `sh mc_poll [lines]`
 - `sh mc_online [lines]`
 - `sh mc_say "<text>"`
@@ -306,22 +301,19 @@ Trigger policy for Minecraft chat:
   - processed event IDs persist in `runtime/mc-relay/state.json`
 
 ## Service operations (on Pi)
-- Status: `systemctl --user status picoclaw-gtnh.service`
-- Logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f picoclaw-gateway`
-- Bridge logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f dathost-bridge`
-- Relay logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f mc-relay`
-- Kanban logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f kanban-sync`
-- Inventory sync logs: `cd ~/picoclaw-gtnh/deploy && podman-compose -f compose.yaml logs -f inventory-sync`
-- Restart: `systemctl --user restart picoclaw-gtnh.service`
+- Status: `systemctl --user status greggpt-gtnh.service`
+- Bridge logs: `cd ~/greggpt-gtnh/deploy && podman-compose -f compose.yaml logs -f dathost-bridge`
+- Relay logs: `cd ~/greggpt-gtnh/deploy && podman-compose -f compose.yaml logs -f mc-relay`
+- Kanban logs: `cd ~/greggpt-gtnh/deploy && podman-compose -f compose.yaml logs -f kanban-sync`
+- Inventory sync logs: `cd ~/greggpt-gtnh/deploy && podman-compose -f compose.yaml logs -f inventory-sync`
+- Restart: `systemctl --user restart greggpt-gtnh.service`
 - Bridge smoke checks: `ALLOW_CONSOLE_FAILURE=1 scripts/test_dathost_bridge.sh`
-- Heartbeat runtime log: `tail -f ~/picoclaw-gtnh/workspace/heartbeat.log`
+- Heartbeat runtime log: `tail -f ~/greggpt-gtnh/workspace/heartbeat.log`
 
 ### Heartbeat behavior note
-- PicoClaw heartbeat is enabled by default and uses `workspace/HEARTBEAT.md`.
+- GregGPT heartbeat is enabled by default and uses `workspace/HEARTBEAT.md`.
 - Heartbeat resolves to the last active external channel (`workspace/state/state.json`), so it can run and post/retry status in Discord without a new mention.
-- If you want strictly mention-driven Discord behavior, disable heartbeat in Pi runtime config (`runtime/picoclaw/config.json`):
-  - set `"heartbeat": { "enabled": false, ... }`
-  - restart service: `systemctl --user restart picoclaw-gtnh.service`
+- If you want strictly mention-driven Discord behavior, disable heartbeat in the GregGPT runtime configuration and restart with `systemctl --user restart greggpt-gtnh.service`.
 
 ## Discord invite permissions
 Use integer permissions `116800` when generating the bot invite URL.
@@ -329,5 +321,5 @@ Recommended scopes: `bot`.
 
 ## Secrets
 Do not commit:
-- `deploy/env/picoclaw.env`
+- `deploy/env/greggpt.env`
 - `runtime/`

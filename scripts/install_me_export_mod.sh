@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MOD_JAR="${MOD_JAR:-$ROOT/build/me-export-mod/picoclaw-me-export-1.0.0.jar}"
+MOD_JAR="${MOD_JAR:-$ROOT/build/me-export-mod/greggpt-me-export-1.0.0.jar}"
 SERVER_DIR="${1:-}"
 
 if [[ -z "$SERVER_DIR" ]]; then
@@ -17,7 +17,7 @@ fi
 
 MODS_DIR="$SERVER_DIR/mods"
 mkdir -p "$MODS_DIR"
-cp -f "$MOD_JAR" "$MODS_DIR/picoclaw-me-export-1.0.0.jar"
+cp -f "$MOD_JAR" "$MODS_DIR/greggpt-me-export-1.0.0.jar"
 
-echo "installed: $MODS_DIR/picoclaw-me-export-1.0.0.jar"
-echo "after the server starts, look for world/picoclaw/me_index.json"
+echo "installed: $MODS_DIR/greggpt-me-export-1.0.0.jar"
+echo "after the server starts, look for world/greggpt/me_index.json"

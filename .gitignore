@@ -1,14 +1,19 @@
 # Runtime data and secrets
 runtime/
-deploy/env/picoclaw.env
-deploy/env/dathost-bridge.env
+deploy/env/*.env
 
 # Local misc
 *.log
 .DS_Store
 
 # Local build artifacts
-relay/picoclaw-gtnh-mc-relay
+build/
+bin/
+dist/
+*.class
+*.jar
+*.test
+relay/greggpt-gtnh-mc-relay
 workspace/tools/__pycache__/
 workspace/state/atmons-questbook-state.json
 workspace/state/atmons-questbook-sync.json

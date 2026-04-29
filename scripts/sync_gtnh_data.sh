@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DIR="${SOURCE_DIR:-$HOME/Downloads}"
 DEST_DIR="$ROOT/data/gtnh"
-REMOTE_TARGET="${REMOTE_TARGET:-jhein@192.168.1.41:/home/jhein/picoclaw-gtnh/data/gtnh}"
-REMOTE_RUNTIME_TARGET="${REMOTE_RUNTIME_TARGET:-jhein@192.168.1.41:/home/jhein/picoclaw-gtnh/data/gtnh_runtime}"
+REMOTE_TARGET="${REMOTE_TARGET:-jhein@192.168.1.41:/home/jhein/greggpt-gtnh/data/gtnh}"
+REMOTE_RUNTIME_TARGET="${REMOTE_RUNTIME_TARGET:-jhein@192.168.1.41:/home/jhein/greggpt-gtnh/data/gtnh_runtime}"
 DEPLOY_TO_PI="${DEPLOY_TO_PI:-0}"
 RESTART_PI_SERVICE="${RESTART_PI_SERVICE:-0}"
 PI_HOST="${PI_HOST:-jhein@192.168.1.41}"
@@ -65,6 +65,6 @@ if [[ "$DEPLOY_TO_PI" == "1" ]]; then
   echo "synced to pi: $REMOTE_TARGET"
 
   if [[ "$RESTART_PI_SERVICE" == "1" ]]; then
-    $SSH_CMD "$PI_HOST" 'systemctl --user restart picoclaw-gtnh.service && systemctl --user --no-pager --full status picoclaw-gtnh.service | sed -n "1,80p"'
+    $SSH_CMD "$PI_HOST" 'systemctl --user restart greggpt-gtnh.service && systemctl --user --no-pager --full status greggpt-gtnh.service | sed -n "1,80p"'
   fi
 fi
