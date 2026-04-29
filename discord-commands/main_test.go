@@ -197,10 +197,75 @@ func TestGregGPTMentionRecipeWikiAndTaskMutationsRouteToAgent(t *testing.T) {
 	}
 }
 
+func TestFormatDiscordHistoryTruncatesChronologicalContext(t *testing.T) {
+	history := []discordHistoryMessage{
+		{AuthorName: "latest", Content: "third message"},
+		{AuthorName: "middle", Content: "second message"},
+		{AuthorName: "oldest", Content: "first message"},
+	}
+
+	got := formatDiscordHistory(history, false, 45)
+
+	if !strings.HasPrefix(got, "oldest: first message\nmiddle: second") {
+		t.Fatalf("history should be oldest-first before truncation, got %q", got)
+	}
+	if len(got) > 45 {
+		t.Fatalf("history exceeded max chars: len=%d text=%q", len(got), got)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("truncated history should end with ellipsis: %q", got)
+	}
+}
+
+func TestFormatDiscordHistoryExcludesBotMessagesByDefault(t *testing.T) {
+	history := []discordHistoryMessage{
+		{AuthorName: "bot", Content: "bot reply", IsBot: true},
+		{AuthorName: "player", Content: "player question"},
+	}
+
+	got := formatDiscordHistory(history, false, 4000)
+
+	if strings.Contains(got, "bot reply") {
+		t.Fatalf("bot message included despite includeBots=false: %q", got)
+	}
+	if !strings.Contains(got, "player: player question") {
+		t.Fatalf("player message missing from history: %q", got)
+	}
+}
+
+func TestFormatDiscordHistoryIncludesAttachmentMetadataOnly(t *testing.T) {
+	history := []discordHistoryMessage{{
+		AuthorName: "player",
+		Content:    "see this",
+		Attachments: []discordHistoryAttachment{{
+			Filename:    "setup.png",
+			ContentType: "image/png",
+			Size:        12345,
+			Width:       640,
+			Height:      480,
+		}},
+	}}
+
+	got := formatDiscordHistory(history, false, 4000)
+
+	for _, want := range []string{"player: see this", "filename=setup.png", "content_type=image/png", "size=12345", "dimensions=640x480"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatted history missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "http://") || strings.Contains(got, "https://") {
+		t.Fatalf("attachment URLs should not be included: %q", got)
+	}
+}
+
 func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 	runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "retried"}}
 	svc := &Service{
-		cfg:    Config{MentionAgent: true},
+		cfg: Config{
+			MentionAgent:             true,
+			DiscordHistoryMaxChars:   4000,
+			DiscordHistoryIncludeBot: false,
+		},
 		runner: runner,
 	}
 
@@ -210,7 +275,9 @@ func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 		ChannelID:   "channel",
 		MessageID:   "message",
 		MentionsBot: true,
-	}, []string{`previous output: gtnh_inventory find-item --query "stainless steel dust" --scope me`})
+	}, []discordHistoryMessage{
+		{AuthorName: "GregGPT", Content: `previous output: gtnh_inventory find-item --query "stainless steel dust" --scope me`, IsBot: true},
+	})
 
 	if !result.Handled || result.Reply != "retried" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -224,6 +291,9 @@ func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 	}
 	if !strings.Contains(runner.requests[0].Text, "stainless steel dust") {
 		t.Fatalf("retry prompt did not include query: %q", runner.requests[0].Text)
+	}
+	if strings.Contains(runner.requests[0].RecentMessages, "stainless steel dust") {
+		t.Fatalf("bot retry source should not be included in recent context by default: %q", runner.requests[0].RecentMessages)
 	}
 }
 

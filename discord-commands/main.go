@@ -20,15 +20,19 @@ import (
 )
 
 type Config struct {
-	Token          string
-	Workspace      string
-	ConfigPath     string
-	GuildID        string
-	CommandTimeout time.Duration
-	ReplyLimit     int
-	AllowedUsers   map[string]struct{}
-	MentionAgent   bool
-	Agent          AgentConfig
+	Token                    string
+	Workspace                string
+	ConfigPath               string
+	GuildID                  string
+	CommandTimeout           time.Duration
+	ReplyLimit               int
+	AllowedUsers             map[string]struct{}
+	MentionAgent             bool
+	DiscordHistoryEnabled    bool
+	DiscordHistoryLimit      int
+	DiscordHistoryMaxChars   int
+	DiscordHistoryIncludeBot bool
+	Agent                    AgentConfig
 }
 
 type AgentConfig struct {
@@ -93,6 +97,7 @@ type DiscordAgentRequest struct {
 	Username         string          `json:"username,omitempty"`
 	DiscordChannelID string          `json:"discord_channel_id"`
 	MessageID        string          `json:"message_id"`
+	RecentMessages   string          `json:"recent_messages,omitempty"`
 	RetryInventory   *InventoryRetry `json:"retry_inventory,omitempty"`
 }
 
@@ -118,6 +123,22 @@ type discordMentionMessage struct {
 	ChannelID   string
 	MessageID   string
 	MentionsBot bool
+}
+
+type discordHistoryMessage struct {
+	Content     string
+	AuthorID    string
+	AuthorName  string
+	IsBot       bool
+	Attachments []discordHistoryAttachment
+}
+
+type discordHistoryAttachment struct {
+	Filename    string
+	ContentType string
+	Size        int
+	Width       int
+	Height      int
 }
 
 type mentionProcessResult struct {
@@ -146,6 +167,21 @@ func getenvInt(key string, fallback int) int {
 	return n
 }
 
+func getenvBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 func getenvDurationSeconds(key string, fallback time.Duration) time.Duration {
 	seconds := getenvInt(key, int(fallback/time.Second))
 	return time.Duration(seconds) * time.Second
@@ -169,14 +205,18 @@ func loadConfig() (Config, error) {
 	}
 
 	cfg := Config{
-		Token:          token,
-		Workspace:      getenv("DISCORD_WORKSPACE", agentCfg.Workspace),
-		ConfigPath:     getenv("GREGGPT_CONFIG_PATH", "/root/.greggpt/config.json"),
-		GuildID:        strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID")),
-		CommandTimeout: time.Duration(getenvInt("DISCORD_COMMAND_TIMEOUT_SECONDS", 45)) * time.Second,
-		ReplyLimit:     getenvInt("DISCORD_REPLY_LIMIT", 1900),
-		AllowedUsers:   map[string]struct{}{},
-		MentionAgent:   getenv("GREGGPT_DISCORD_MENTIONS_ENABLED", "true") != "false",
+		Token:                    token,
+		Workspace:                getenv("DISCORD_WORKSPACE", agentCfg.Workspace),
+		ConfigPath:               getenv("GREGGPT_CONFIG_PATH", "/root/.greggpt/config.json"),
+		GuildID:                  strings.TrimSpace(os.Getenv("DISCORD_GUILD_ID")),
+		CommandTimeout:           time.Duration(getenvInt("DISCORD_COMMAND_TIMEOUT_SECONDS", 45)) * time.Second,
+		ReplyLimit:               getenvInt("DISCORD_REPLY_LIMIT", 1900),
+		AllowedUsers:             map[string]struct{}{},
+		MentionAgent:             getenvBool("GREGGPT_DISCORD_MENTIONS_ENABLED", true),
+		DiscordHistoryEnabled:    getenvBool("GREGGPT_DISCORD_HISTORY_ENABLED", true),
+		DiscordHistoryLimit:      getenvInt("GREGGPT_DISCORD_HISTORY_LIMIT", 10),
+		DiscordHistoryMaxChars:   getenvInt("GREGGPT_DISCORD_HISTORY_MAX_CHARS", 4000),
+		DiscordHistoryIncludeBot: getenvBool("GREGGPT_DISCORD_HISTORY_INCLUDE_BOTS", false),
 		Agent: AgentConfig{
 			Config: agentCfg,
 		},
@@ -566,9 +606,10 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 	}
 	log.Printf("message_agent_start user_id=%s channel_id=%s message_id=%s content_len=%d", m.Author.ID, m.ChannelID, m.ID, len(m.Content))
 
-	var history []string
-	if isInventoryRetryRequest(cleanMentionText(m.Content)) {
-		history = s.resolveRetryInventoryHistory(dg, m)
+	isRetry := isInventoryRetryRequest(cleanMentionText(m.Content))
+	var history []discordHistoryMessage
+	if s.cfg.DiscordHistoryEnabled || isRetry {
+		history = s.resolveDiscordHistory(dg, m, s.cfg.DiscordHistoryLimit)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Agent.Config.Timeout)
@@ -621,20 +662,50 @@ func (s *Service) startTyping(dg *discordgo.Session, channelID string, ctx conte
 	}
 }
 
-func (s *Service) resolveRetryInventoryHistory(dg *discordgo.Session, m *discordgo.MessageCreate) []string {
-	msgs, err := dg.ChannelMessages(m.ChannelID, 25, m.ID, "", "")
-	if err != nil {
-		log.Printf("message_inventory_retry_history_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, err.Error())
+func (s *Service) resolveDiscordHistory(dg *discordgo.Session, m *discordgo.MessageCreate, limit int) []discordHistoryMessage {
+	if limit <= 0 {
 		return nil
 	}
-	history := make([]string, 0, len(msgs))
+	msgs, err := dg.ChannelMessages(m.ChannelID, limit, m.ID, "", "")
+	if err != nil {
+		log.Printf("message_history_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, err.Error())
+		return nil
+	}
+	history := make([]discordHistoryMessage, 0, len(msgs))
 	for _, msg := range msgs {
 		if msg == nil {
 			continue
 		}
-		history = append(history, msg.Content)
+		history = append(history, discordHistoryMessageFromDiscord(msg))
 	}
 	return history
+}
+
+func discordHistoryMessageFromDiscord(msg *discordgo.Message) discordHistoryMessage {
+	h := discordHistoryMessage{
+		Content: strings.TrimSpace(msg.Content),
+	}
+	if msg.Author != nil {
+		h.AuthorID = msg.Author.ID
+		h.AuthorName = msg.Author.Username
+		h.IsBot = msg.Author.Bot
+	}
+	if len(msg.Attachments) != 0 {
+		h.Attachments = make([]discordHistoryAttachment, 0, len(msg.Attachments))
+		for _, a := range msg.Attachments {
+			if a == nil {
+				continue
+			}
+			h.Attachments = append(h.Attachments, discordHistoryAttachment{
+				Filename:    a.Filename,
+				ContentType: a.ContentType,
+				Size:        a.Size,
+				Width:       a.Width,
+				Height:      a.Height,
+			})
+		}
+	}
+	return h
 }
 
 func inventoryQueryFromText(text string) (string, string) {
@@ -664,7 +735,7 @@ func (s *Service) allowedDiscordUser(userID string) bool {
 	return ok
 }
 
-func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionMessage, history []string) mentionProcessResult {
+func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionMessage, history []discordHistoryMessage) mentionProcessResult {
 	if !s.cfg.MentionAgent {
 		return mentionProcessResult{Reason: "disabled"}
 	}
@@ -682,7 +753,7 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 
 	var retry *InventoryRetry
 	if isInventoryRetryRequest(text) {
-		query, scope := resolveRetryInventoryQueryFromHistory(history)
+		query, scope := resolveRetryInventoryQueryFromHistory(discordHistoryTexts(history))
 		if query == "" {
 			return mentionProcessResult{
 				Handled: true,
@@ -705,6 +776,7 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 		Username:         msg.AuthorName,
 		DiscordChannelID: msg.ChannelID,
 		MessageID:        msg.MessageID,
+		RecentMessages:   formatDiscordHistory(history, s.cfg.DiscordHistoryIncludeBot, s.cfg.DiscordHistoryMaxChars),
 		RetryInventory:   retry,
 	})
 	if err != nil {
@@ -720,6 +792,74 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 		reply = "(no response)"
 	}
 	return mentionProcessResult{Handled: true, Reply: reply, Reason: "ok"}
+}
+
+func discordHistoryTexts(history []discordHistoryMessage) []string {
+	texts := make([]string, 0, len(history))
+	for _, msg := range history {
+		texts = append(texts, msg.Content)
+	}
+	return texts
+}
+
+func formatDiscordHistory(history []discordHistoryMessage, includeBots bool, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(history))
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if msg.IsBot && !includeBots {
+			continue
+		}
+		line := formatDiscordHistoryLine(msg)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return truncate(strings.Join(lines, "\n"), maxChars)
+}
+
+func formatDiscordHistoryLine(msg discordHistoryMessage) string {
+	name := strings.TrimSpace(msg.AuthorName)
+	if name == "" {
+		name = strings.TrimSpace(msg.AuthorID)
+	}
+	if name == "" {
+		name = "unknown"
+	}
+	content := strings.TrimSpace(strings.Join(strings.Fields(msg.Content), " "))
+	parts := make([]string, 0, 1+len(msg.Attachments))
+	if content != "" {
+		parts = append(parts, content)
+	}
+	for _, a := range msg.Attachments {
+		parts = append(parts, formatDiscordHistoryAttachment(a))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s", name, strings.Join(parts, " "))
+}
+
+func formatDiscordHistoryAttachment(a discordHistoryAttachment) string {
+	fields := []string{"attachment"}
+	if strings.TrimSpace(a.Filename) != "" {
+		fields = append(fields, "filename="+strings.TrimSpace(a.Filename))
+	}
+	if strings.TrimSpace(a.ContentType) != "" {
+		fields = append(fields, "content_type="+strings.TrimSpace(a.ContentType))
+	}
+	if a.Size > 0 {
+		fields = append(fields, fmt.Sprintf("size=%d", a.Size))
+	}
+	if a.Width > 0 && a.Height > 0 {
+		fields = append(fields, fmt.Sprintf("dimensions=%dx%d", a.Width, a.Height))
+	}
+	return "[" + strings.Join(fields, " ") + "]"
 }
 
 func cleanMentionText(text string) string {
@@ -1238,6 +1378,9 @@ func (r *commandAgentRunner) Run(ctx context.Context, req DiscordAgentRequest) (
 	if req.RetryInventory != nil {
 		contextValues["retry_inventory_query"] = req.RetryInventory.Query
 		contextValues["retry_inventory_scope"] = req.RetryInventory.Scope
+	}
+	if strings.TrimSpace(req.RecentMessages) != "" {
+		contextValues["discord_recent_messages"] = strings.TrimSpace(req.RecentMessages)
 	}
 	text, err := r.runner.Run(ctx, agent.Request{
 		Channel: req.Channel,
