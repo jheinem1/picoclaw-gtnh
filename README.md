@@ -246,6 +246,7 @@ Env vars in `deploy/env/greggpt.env`:
 - `INVENTORY_PLAYERS_INTERVAL_SECONDS`
 - `INVENTORY_CHESTS_INTERVAL_SECONDS`
 - `INVENTORY_ME_INTERVAL_SECONDS`
+- `INVENTORY_ME_EXPORT_PATHS` (comma-separated DatHost paths; defaults to `world/greggpt/me_index.json,world/picoclaw/me_index.json`)
 - `INVENTORY_MAX_RESULTS`
 - `INVENTORY_DEFAULT_LIMIT`
 - `INVENTORY_HTTP_TIMEOUT_SECONDS`

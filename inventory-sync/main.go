@@ -34,6 +34,7 @@ type Config struct {
 	PlayersInterval    time.Duration
 	ChestsInterval     time.Duration
 	MEInterval         time.Duration
+	MEExportPaths      []string
 	BlocksInterval     time.Duration
 	HTTPTimeout        time.Duration
 	MaxRegionFiles     int
@@ -313,6 +314,7 @@ func loadConfig() (Config, error) {
 		PlayersInterval:    time.Duration(max(60, getenvInt("INVENTORY_PLAYERS_INTERVAL_SECONDS", 600))) * time.Second,
 		ChestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_CHESTS_INTERVAL_SECONDS", 21600))) * time.Second,
 		MEInterval:         time.Duration(max(60, getenvInt("INVENTORY_ME_INTERVAL_SECONDS", 300))) * time.Second,
+		MEExportPaths:      parseCSV(getenv("INVENTORY_ME_EXPORT_PATHS", "world/greggpt/me_index.json,world/picoclaw/me_index.json")),
 		BlocksInterval:     time.Duration(max(300, getenvInt("INVENTORY_BLOCKS_INTERVAL_SECONDS", 86400))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
@@ -354,6 +356,18 @@ func parseDims(raw string) []int {
 	}
 	if len(out) == 0 {
 		return []int{0, -1, 1}
+	}
+	return out
+}
+
+func parseCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
 	}
 	return out
 }
@@ -2032,18 +2046,34 @@ func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndex
 }
 
 func scanME(client *http.Client, cfg Config) ([]MERecord, string, int, error) {
-	raw, err := getFile(client, cfg, "world/greggpt/me_index.json")
-	if err != nil {
-		return nil, "", 0, err
+	paths := cfg.MEExportPaths
+	if len(paths) == 0 {
+		paths = []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"}
 	}
-	records, generatedAt, stackCount, err := parseMEExport(raw)
-	if err != nil {
-		return nil, "", 0, err
+	var lastErr error
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		raw, err := getFile(client, cfg, path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		records, generatedAt, stackCount, err := parseMEExport(raw)
+		if err != nil {
+			return nil, "", 0, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if generatedAt == "" {
+			generatedAt = nowUTC()
+		}
+		return records, generatedAt, stackCount, nil
 	}
-	if generatedAt == "" {
-		generatedAt = nowUTC()
+	if lastErr != nil {
+		return nil, "", 0, lastErr
 	}
-	return records, generatedAt, stackCount, nil
+	return nil, "", 0, errors.New("no ME export paths configured")
 }
 
 func main() {

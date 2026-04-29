@@ -195,7 +195,7 @@ func TestParseMEExport_Networks(t *testing.T) {
 	}
 }
 
-func TestScanMEFetchesGregGPTPathOnly(t *testing.T) {
+func TestScanMEFetchesConfiguredPath(t *testing.T) {
 	var requested []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = append(requested, r.URL.Path)
@@ -213,6 +213,7 @@ func TestScanMEFetchesGregGPTPathOnly(t *testing.T) {
 		DatHostServer: "server-1",
 		DatHostToken:  "token",
 		HTTPTimeout:   time.Second,
+		MEExportPaths:  []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"},
 	}
 
 	records, generatedAt, stackCount, err := scanME(server.Client(), cfg)
@@ -230,6 +231,45 @@ func TestScanMEFetchesGregGPTPathOnly(t *testing.T) {
 	}
 	if !strings.Contains(requested[0], "greggpt") {
 		t.Fatalf("scanME requested unexpected ME export path: %q", requested[0])
+	}
+}
+
+func TestScanMEFallsBackToPicoClawPath(t *testing.T) {
+	var requested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		if r.URL.Path != "/game-servers/server-1/files/world/picoclaw/me_index.json" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"generated_at":"2026-04-29T21:03:50Z","networks":[]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		DatHostBase:   server.URL,
+		DatHostServer: "server-1",
+		DatHostToken:  "token",
+		HTTPTimeout:   time.Second,
+		MEExportPaths:  []string{"world/greggpt/me_index.json", "world/picoclaw/me_index.json"},
+	}
+
+	records, generatedAt, stackCount, err := scanME(server.Client(), cfg)
+	if err != nil {
+		t.Fatalf("scanME failed: %v", err)
+	}
+	if len(records) != 0 || stackCount != 0 {
+		t.Fatalf("expected empty ME export, got records=%#v stackCount=%d", records, stackCount)
+	}
+	if generatedAt != "2026-04-29T21:03:50Z" {
+		t.Fatalf("unexpected generated_at: %q", generatedAt)
+	}
+	if len(requested) != 2 {
+		t.Fatalf("expected primary and fallback ME fetches, got %d requests: %#v", len(requested), requested)
+	}
+	if !strings.Contains(requested[0], "greggpt") || !strings.Contains(requested[1], "picoclaw") {
+		t.Fatalf("scanME requested unexpected paths: %#v", requested)
 	}
 }
 
