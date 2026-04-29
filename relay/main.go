@@ -60,7 +60,7 @@ var specificGTRe = regexp.MustCompile(`(?i)\b(recipe|recipes|refine|smelt|craft|
 var gtnhDomainRe = regexp.MustCompile(`(?i)\b(gtnh|gregtech|steam|pipe|fluid|throughput|boiler|turbine|lv|mv|hv|ev|iv|luv|zpm|uv|machine|multiblock|ore|dust|ingot|plate|rod|cable|wire)\b`)
 var taskBoardRe = regexp.MustCompile(`(?i)\b(task\s*board|tasks?\s+board|open\s+tasks?|task\s+list)\b`)
 var taskMutationIntentRe = regexp.MustCompile(`(?i)\b(assign|reassign|move|pause|unpause|resume|reopen|describe|description|update|status update|progress update)\b`)
-var inventoryIntentRe = regexp.MustCompile(`(?i)\b(who has|where is|which chest|inventory|inventories|in chests?|in my chest|has item|holding|stored)\b`)
+var inventoryIntentRe = regexp.MustCompile(`(?i)\b(who has|where is|which chest|inventory|inventories|in chests?|in my chest|has item|holding|stored|in me|me system|do we have)\b`)
 var safetyGuardReplyRe = regexp.MustCompile(`(?i)safety guard|dangerous pattern`)
 var coordTupleCountRe = regexp.MustCompile(`\((-?\d+),(-?\d+),(-?\d+)\)(?:×|:)(\d+)`)
 var coordTupleDimCountRe = regexp.MustCompile(`\((-?\d+),(-?\d+),(-?\d+)\)\s*dim\s*=?\s*(-?\d+)\s*count\s*=?\s*(\d+)`)
@@ -269,9 +269,10 @@ func askAgent(cfg Config, ev ConsoleEvent, session string, mustVerify bool) (str
 	}
 	if inventoryIntentRe.MatchString(ev.Text) {
 		prompt += "\nIf this asks who has an item, where an item is stored, or chest/inventory location, run exactly one inventory command (no cd/&& chaining) and answer only from that command output."
-		prompt += "\nUseful commands: sh gtnh_inventory status; sh gtnh_inventory find --item <mod:name[:damage]> [--scope players|chests|both] [--limit <n>] for exact lookups; sh gtnh_inventory find-item --query \"<name>\" [--scope players|chests|both] [--limit <n>] for natural-language requests; sh gtnh_inventory player --name <player>|--uuid <uuid>; sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]."
+		prompt += "\nUseful commands: sh gtnh_inventory status; sh gtnh_inventory find --item <mod:name[:damage]> [--scope players|containers|me|all] [--limit <n>] for exact lookups; sh gtnh_inventory find-item --query \"<name>\" [--scope players|containers|me|all] [--limit <n>] for natural-language requests; sh gtnh_inventory player --name <player>|--uuid <uuid>; sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]."
 		prompt += "\nIf the request names a specific player (for example __exx), include --player <name> in gtnh_inventory find to avoid top-N false negatives."
 		prompt += "\nDo not claim you lack access to inventory/chest data if these tools are available."
+		prompt += "\nUse --scope all by default. Use --scope me when the player explicitly asks about the ME system. Include the Freshness line from the tool output in the answer."
 		prompt += "\nFor name-based requests (for example steel ingot), use sh gtnh_inventory find-item --query \"<name>\" first; do not guess numeric IDs."
 		prompt += "\nStale fallback is forbidden: do not say jq/curl is missing unless the command you ran in this turn returned that exact stderr."
 		prompt += "\nIf find is called with --id but without --damage, treat it as invalid input and rerun with --item or find-item."

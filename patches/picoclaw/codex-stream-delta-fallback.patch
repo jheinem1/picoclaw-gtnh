@@ -1,0 +1,178 @@
+diff --git a/pkg/providers/codex_provider.go b/pkg/providers/codex_provider.go
+index d968215..41b4283 100644
+--- a/pkg/providers/codex_provider.go
++++ b/pkg/providers/codex_provider.go
+@@ -2,6 +2,7 @@ package providers
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"strings"
+@@ -13,6 +14,7 @@ import (
+ 	"github.com/sipeed/picoclaw/pkg/auth"
+ 	"github.com/sipeed/picoclaw/pkg/logger"
+ 	orc "github.com/sipeed/picoclaw/pkg/providers/openai_responses_common"
++	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+ )
+ 
+ const (
+@@ -104,8 +106,83 @@ func (p *CodexProvider) Chat(
+ 	defer stream.Close()
+ 
+ 	var resp *responses.Response
++	var streamedText strings.Builder
++	eventCounts := make(map[string]int)
++	eventOrder := make([]string, 0, 8)
++	type streamedFunctionCall struct {
++		ItemID string
++		CallID string
++		Name   string
++		Args   strings.Builder
++	}
++	streamedFunctionCalls := make(map[string]*streamedFunctionCall)
++	streamedFunctionCallOrder := make([]string, 0, 4)
++	rememberFunctionCall := func(itemID string) *streamedFunctionCall {
++		if itemID == "" {
++			return nil
++		}
++		if fc, ok := streamedFunctionCalls[itemID]; ok {
++			return fc
++		}
++		fc := &streamedFunctionCall{ItemID: itemID}
++		streamedFunctionCalls[itemID] = fc
++		streamedFunctionCallOrder = append(streamedFunctionCallOrder, itemID)
++		return fc
++	}
++	recordFunctionCallItem := func(item responses.ResponseOutputItemUnion) {
++		if item.Type != "function_call" {
++			return
++		}
++		fcItem := item.AsFunctionCall()
++		itemID := fcItem.ID
++		if itemID == "" {
++			itemID = fcItem.CallID
++		}
++		fc := rememberFunctionCall(itemID)
++		if fc == nil {
++			return
++		}
++		if fcItem.CallID != "" {
++			fc.CallID = fcItem.CallID
++		}
++		if fcItem.Name != "" {
++			fc.Name = fcItem.Name
++		}
++		if fcItem.Arguments != "" {
++			fc.Args.Reset()
++			fc.Args.WriteString(fcItem.Arguments)
++		}
++	}
+ 	for stream.Next() {
+ 		evt := stream.Current()
++		if evt.Type == "response.output_text.delta" {
++			streamedText.WriteString(evt.AsResponseOutputTextDelta().Delta)
++		}
++		eventCounts[evt.Type]++
++		if eventCounts[evt.Type] == 1 {
++			eventOrder = append(eventOrder, evt.Type)
++		}
++		switch evt.Type {
++		case "response.output_item.added":
++			recordFunctionCallItem(evt.AsResponseOutputItemAdded().Item)
++		case "response.output_item.done":
++			recordFunctionCallItem(evt.AsResponseOutputItemDone().Item)
++		case "response.function_call_arguments.delta":
++			fc := rememberFunctionCall(evt.AsResponseFunctionCallArgumentsDelta().ItemID)
++			if fc != nil {
++				fc.Args.WriteString(evt.AsResponseFunctionCallArgumentsDelta().Delta)
++			}
++		case "response.function_call_arguments.done":
++			done := evt.AsResponseFunctionCallArgumentsDone()
++			fc := rememberFunctionCall(done.ItemID)
++			if fc != nil {
++				if done.Name != "" {
++					fc.Name = done.Name
++				}
++				fc.Args.Reset()
++				fc.Args.WriteString(done.Arguments)
++			}
++		}
+ 		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {
+ 			evtResp := evt.Response
+ 			if evtResp.ID != "" {
+@@ -153,7 +230,72 @@ func (p *CodexProvider) Chat(
+ 		return nil, fmt.Errorf("codex API call: stream ended without completed response")
+ 	}
+ 
+-	return orc.ParseResponseFromStruct(resp), nil
++	parsed := orc.ParseResponseFromStruct(resp)
++	usedDeltaFallback := false
++	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && streamedText.Len() > 0 {
++		parsed.Content = streamedText.String()
++		usedDeltaFallback = true
++	}
++	usedFunctionCallFallback := false
++	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && len(streamedFunctionCallOrder) > 0 {
++		recovered := make([]protocoltypes.ToolCall, 0, len(streamedFunctionCallOrder))
++		for _, itemID := range streamedFunctionCallOrder {
++			fc := streamedFunctionCalls[itemID]
++			if fc == nil || strings.TrimSpace(fc.Name) == "" {
++				continue
++			}
++			argsJSON := strings.TrimSpace(fc.Args.String())
++			if argsJSON == "" {
++				argsJSON = "{}"
++			}
++			var args map[string]any
++			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
++				args = map[string]any{"raw": argsJSON}
++			}
++			callID := fc.CallID
++			if callID == "" {
++				callID = itemID
++			}
++			recovered = append(recovered, protocoltypes.ToolCall{
++				ID:        callID,
++				Name:      fc.Name,
++				Arguments: args,
++			})
++		}
++		if len(recovered) > 0 {
++			parsed.ToolCalls = recovered
++			parsed.FinishReason = "tool_calls"
++			usedFunctionCallFallback = true
++		}
++	}
++	if usedFunctionCallFallback {
++		logger.WarnCF("provider.codex", "Recovered tool calls from Codex stream events", map[string]any{
++			"requested_model":      model,
++			"resolved_model":       resolvedModel,
++			"messages_count":       len(messages),
++			"tools_count":          len(tools),
++			"account_id_present":   accountID != "",
++			"recovered_tool_calls": len(parsed.ToolCalls),
++		})
++	}
++	if parsed.Content == "" && len(parsed.ToolCalls) == 0 {
++		eventSummary := make(map[string]any, len(eventCounts))
++		for _, eventType := range eventOrder {
++			eventSummary[eventType] = eventCounts[eventType]
++		}
++		logger.WarnCF("provider.codex", "Codex stream completed with empty parsed content", map[string]any{
++			"requested_model":     model,
++			"resolved_model":      resolvedModel,
++			"messages_count":      len(messages),
++			"tools_count":         len(tools),
++			"account_id_present":  accountID != "",
++			"parsed_tool_calls":   len(parsed.ToolCalls),
++			"streamed_text_chars": streamedText.Len(),
++			"used_delta_fallback": usedDeltaFallback,
++			"event_counts":        eventSummary,
++		})
++	}
++	return parsed, nil
+ }
+ 
+ func (p *CodexProvider) GetDefaultModel() string {

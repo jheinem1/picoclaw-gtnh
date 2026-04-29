@@ -34,6 +34,7 @@ FORMAT_CODE_RE = re.compile(r"(?:§|&)[0-9A-FK-ORa-fk-or]")
 HEX_FORMAT_CODE_RE = re.compile(r"&#[0-9A-Fa-f]{6}")
 WHITESPACE_RE = re.compile(r"[ \t]+")
 NUMBER_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?[bBsSlLfFdD]?$")
+QUEST_ID_RE = re.compile(r"^[0-9A-F]{16}$")
 
 
 class ParseError(RuntimeError):
@@ -227,6 +228,45 @@ def truncate(text: str, limit: int) -> str:
     if limit <= 3:
         return text[:limit]
     return text[: limit - 3].rstrip() + "..."
+
+
+def first_sentence(text: str) -> str:
+    text = clean_text(text)
+    if not text:
+        return ""
+    line = text.split("\n", 1)[0].strip()
+    for sep in [". ", "! ", "? "]:
+        if sep in line:
+            return line.split(sep, 1)[0].strip() + line[line.find(sep) : line.find(sep) + 1]
+    return line
+
+
+def display_quest_title(quest: dict[str, Any]) -> str:
+    title = clean_text(quest.get("title", ""))
+    quest_id = str(quest.get("id", "")).strip()
+    if title and title != quest_id and not QUEST_ID_RE.fullmatch(title):
+        return title
+
+    task_titles = []
+    for raw in quest.get("task_titles", []):
+        cleaned = clean_text(str(raw))
+        if cleaned and cleaned.lower() != "allrightsreserved":
+            task_titles.append(cleaned)
+    if task_titles:
+        unique = list(dict.fromkeys(task_titles))
+        if len(unique) == 1:
+            return unique[0]
+        return truncate(" / ".join(unique), 120)
+
+    subtitle = clean_text(quest.get("subtitle", ""))
+    desc = first_sentence(quest.get("description", ""))
+    if subtitle and desc and subtitle.lower() not in desc.lower():
+        return truncate(f"{subtitle} | {desc}", 120)
+    if subtitle:
+        return subtitle
+    if desc:
+        return truncate(desc, 120)
+    return title or quest_id
 
 
 def load_json_file(path: Path, default: Any) -> Any:
@@ -464,7 +504,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def format_match(quest: dict[str, Any]) -> str:
     marker = "milestone" if quest.get("is_milestone") else "quest"
     hidden = " hidden" if quest.get("hidden") else ""
-    return f"{quest['id']} | {quest['chapter_title']} | {quest['title']} [{marker}{hidden}]"
+    return f"{quest['id']} | {quest['chapter_title']} | {display_quest_title(quest)} [{marker}{hidden}]"
 
 
 def cmd_find(args: argparse.Namespace) -> int:
@@ -497,7 +537,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     completed = state.get("completed", {}).get(quest["id"])
     print(f"id: {quest['id']}")
     print(f"chapter: {quest['chapter_title']}")
-    print(f"title: {quest['title']}")
+    print(f"title: {display_quest_title(quest)}")
     if quest.get("subtitle"):
         print(f"subtitle: {quest['subtitle']}")
     print(f"status: {'completed' if completed else 'open'}")
@@ -558,9 +598,10 @@ def build_chapter_payload(chapter: dict[str, Any], state: dict[str, Any], versio
             prefix = "⭐"
         else:
             prefix = "⬜"
-        title = quest.get("title", quest["id"])
-        if quest.get("subtitle"):
-            title = f"{title} | {quest['subtitle']}"
+        title = display_quest_title(quest)
+        subtitle = clean_text(quest.get("subtitle", ""))
+        if subtitle and subtitle not in title:
+            title = f"{title} | {subtitle}"
         line_variants.append(f"{prefix} {index}. {title}".strip())
 
     use_compact = False
@@ -570,7 +611,7 @@ def build_chapter_payload(chapter: dict[str, Any], state: dict[str, Any], versio
         line_variants = []
         for quest in visible_quests:
             prefix = "✅" if quest["id"] in completed else ("⭐" if quest.get("is_milestone") else "⬜")
-            line_variants.append(f"{prefix} {quest.get('title', quest['id'])}")
+            line_variants.append(f"{prefix} {display_quest_title(quest)}")
 
     chunks: list[str] = []
     current: list[str] = []
@@ -702,8 +743,21 @@ def cmd_sync_channel(args: argparse.Namespace) -> int:
         if message_id and tracked.get("hash") == payload_hash:
             continue
         if message_id:
-            discord_request("PATCH", f"/channels/{args.channel_id}/messages/{message_id}", token, payload)
-            updated += 1
+            try:
+                discord_request("PATCH", f"/channels/{args.channel_id}/messages/{message_id}", token, payload)
+                updated += 1
+            except SystemExit as exc:
+                text = str(exc)
+                if 'HTTP 429' in text and '"code": 30046' in text:
+                    discord_request("DELETE", f"/channels/{args.channel_id}/messages/{message_id}", token, None)
+                    raw, _ = discord_request("POST", f"/channels/{args.channel_id}/messages", token, payload)
+                    resp = json.loads(raw.decode("utf-8"))
+                    message_id = str(resp.get("id", "")).strip()
+                    if not message_id:
+                        raise SystemExit(f"discord recreate message returned empty id for chapter {chapter_id}") from exc
+                    updated += 1
+                else:
+                    raise
         else:
             raw, _ = discord_request("POST", f"/channels/{args.channel_id}/messages", token, payload)
             resp = json.loads(raw.decode("utf-8"))

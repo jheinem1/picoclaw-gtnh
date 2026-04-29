@@ -19,12 +19,16 @@ git clone --depth 1 --branch "$PICOCLAW_REF" https://github.com/sipeed/picoclaw.
 for patch in "$ROOT"/patches/picoclaw/*.patch; do
   [ -e "$patch" ] || continue
   echo "applying patch $(basename "$patch")..."
-  git -C "$BUILD_DIR/src" apply "$patch"
+  if git -C "$BUILD_DIR/src" apply --check "$patch"; then
+    git -C "$BUILD_DIR/src" apply "$patch"
+  else
+    echo "skipping patch $(basename "$patch") (does not apply to $PICOCLAW_REF)"
+  fi
 done
 cp -r "$BUILD_DIR/src/workspace" "$BUILD_DIR/src/cmd/picoclaw/internal/onboard/"
 (
   cd "$BUILD_DIR/src"
-  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o "$BUILD_DIR/picoclaw.custom" ./cmd/picoclaw
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags goolm -trimpath -ldflags='-s -w' -o "$BUILD_DIR/picoclaw.custom" ./cmd/picoclaw
 )
 
 echo "uploading hotfix binary to pi..."

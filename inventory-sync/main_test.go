@@ -5,10 +5,10 @@ import "testing"
 func TestParseItemList_ExtractsNestedAndCustomNames(t *testing.T) {
 	list := []any{
 		map[string]any{
-			"id":    float64(6412),
-			"Count": float64(1),
+			"id":     float64(6412),
+			"Count":  float64(1),
 			"Damage": float64(0),
-			"Slot":  float64(5),
+			"Slot":   float64(5),
 			"tag": map[string]any{
 				"display": map[string]any{
 					"Name": "Quest Bag",
@@ -91,5 +91,64 @@ func TestExtractCustomName_FallbackKeys(t *testing.T) {
 	}
 	if got := extractCustomName(tag); got != "Renamed Backpack" {
 		t.Fatalf("expected fallback custom name, got %q", got)
+	}
+}
+
+func TestParseMEExport_Networks(t *testing.T) {
+	raw := []byte(`{
+	  "generated_at":"2026-04-28T12:00:00Z",
+	  "networks":[{
+	    "network_id":"main",
+	    "label":"Main ME",
+	    "dim":0,
+	    "x":10,
+	    "y":64,
+	    "z":20,
+	    "items":[
+	      {"id":7437,"damage":11305,"count":2048,"reg_name":"gregtech:gt.metaitem.01","display_name":"Steel Ingot"}
+	    ]
+	  }]
+	}`)
+
+	records, generatedAt, stackCount, err := parseMEExport(raw)
+	if err != nil {
+		t.Fatalf("parseMEExport failed: %v", err)
+	}
+	if generatedAt != "2026-04-28T12:00:00Z" {
+		t.Fatalf("unexpected generated_at: %q", generatedAt)
+	}
+	if stackCount != 1 {
+		t.Fatalf("expected one ME stack, got %d", stackCount)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one ME network, got %d", len(records))
+	}
+	if records[0].Label != "Main ME" || records[0].Items[0].Count != 2048 {
+		t.Fatalf("unexpected ME record: %#v", records[0])
+	}
+}
+
+func TestIndexFromData_IncludesMEHits(t *testing.T) {
+	index := indexFromData(nil, nil, []MERecord{
+		{
+			NetworkID: "main",
+			Label:     "Main ME",
+			Dimension: 0,
+			Pos:       Position{X: 10, Y: 64, Z: 20},
+			Items: []MEItemStack{
+				{ID: 7437, Damage: 11305, Count: 2048, DisplayName: "Steel Ingot"},
+			},
+		},
+	}, SourceMeta{MEScanAt: "2026-04-28T12:00:00Z"}, IndexStats{})
+
+	hits := index.ItemIndex["7437:11305"].ME
+	if len(hits) != 1 {
+		t.Fatalf("expected one ME hit, got %#v", hits)
+	}
+	if hits[0].TotalCount != 2048 {
+		t.Fatalf("expected count 2048, got %d", hits[0].TotalCount)
+	}
+	if index.Version != 2 {
+		t.Fatalf("expected index version 2, got %d", index.Version)
 	}
 }

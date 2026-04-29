@@ -4,8 +4,8 @@
       "workspace": "~/.picoclaw/workspace",
       "restrict_to_workspace": true,
       "provider": "openai",
-      "model": "gpt-5.4-mini",
-      "model_name": "gpt-5.4-mini",
+      "model": "gpt-5.3-codex",
+      "model_name": "gpt-5.3-codex",
       "max_tokens": 8192,
       "temperature": 0.2,
       "max_tool_iterations": 128
@@ -13,8 +13,8 @@
   },
   "model_list": [
     {
-      "model_name": "gpt-5.4-mini",
-      "model": "openai/gpt-5.4-mini",
+      "model_name": "gpt-5.3-codex",
+      "model": "openai/gpt-5.3-codex",
       "auth_method": "oauth"
     }
   ],
@@ -30,7 +30,7 @@
       "enabled": true,
       "token": "REPLACE_WITH_DISCORD_BOT_TOKEN",
       "allow_from": [
-        "REPLACE_WITH_DISCORD_USER_ID"
+        "1329363718974214216"
       ],
       "mention_only": true,
       "reasoning_channel_id": ""

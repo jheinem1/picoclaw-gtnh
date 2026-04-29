@@ -42,3 +42,27 @@ func TestFormatWikiSearchOutput(t *testing.T) {
 		t.Fatalf("unexpected formatted output: %q", got)
 	}
 }
+
+func TestInventoryCommandScopeChoicesIncludeMEAndAll(t *testing.T) {
+	cmd := inventoryCommand()
+	var findItemScopes []string
+	for _, opt := range cmd.Options {
+		if opt.Name != "find_item" {
+			continue
+		}
+		for _, sub := range opt.Options {
+			if sub.Name == "scope" {
+				for _, choice := range sub.Choices {
+					findItemScopes = append(findItemScopes, choice.Value.(string))
+				}
+			}
+		}
+	}
+	want := map[string]bool{"all": true, "containers": true, "me": true}
+	for _, got := range findItemScopes {
+		delete(want, got)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing inventory scope choices: %#v (got %#v)", want, findItemScopes)
+	}
+}

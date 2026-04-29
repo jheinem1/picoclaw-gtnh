@@ -8,16 +8,35 @@ REFRESH_FILE="${GTNH_INVENTORY_REFRESH_FILE:-$WORKSPACE_DIR/state/inventory_refr
 DEFAULT_LIMIT="${INVENTORY_DEFAULT_LIMIT:-20}"
 MAX_RESULTS="${INVENTORY_MAX_RESULTS:-100}"
 ITEMS_INDEX_FILE="${GTNH_ITEMS_INDEX:-$WORKSPACE_DIR/gtnh-data/index/item_index.tsv}"
+if [ -n "${GTNH_INVENTORY_QUERY_BIN:-}" ]; then
+  QUERY_BIN="$GTNH_INVENTORY_QUERY_BIN"
+elif [ -x "$WORKSPACE_DIR/tools/gtnh_inventory_query" ]; then
+  QUERY_BIN="$WORKSPACE_DIR/tools/gtnh_inventory_query"
+elif command -v gtnh_inventory_query >/dev/null 2>&1; then
+  QUERY_BIN="$(command -v gtnh_inventory_query)"
+else
+  QUERY_BIN=""
+fi
+
+if [ "${GTNH_INVENTORY_FORCE_LEGACY:-0}" != "1" ] && [ -n "$QUERY_BIN" ] && [ -x "$QUERY_BIN" ]; then
+  case "${1:-}" in
+    status|find|find-item|refresh)
+      export GTNH_WORKSPACE="$WORKSPACE_DIR"
+      exec "$QUERY_BIN" "$@"
+      ;;
+  esac
+fi
+
 usage() {
 
   cat <<'USAGE'
 usage:
   sh gtnh_inventory status
-  sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]
-  sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|both] [--limit <n>]
+  sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]
+  sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]
   sh gtnh_inventory player --name <player> | --uuid <uuid> [--all]
   sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]
-  sh gtnh_inventory refresh [--players|--chests|--all]
+  sh gtnh_inventory refresh [--players|--chests|--containers|--me|--all]
 USAGE
   exit 2
 }
@@ -310,8 +329,15 @@ cmd_find() {
   done
 
   case "$scope" in
-    players|chests|both) ;;
-    *) echo "error: --scope must be players, chests, or both" >&2; exit 2 ;;
+    players|chests|containers|both|all)
+      [ "$scope" != "containers" ] || scope="chests"
+      [ "$scope" != "all" ] || scope="both"
+      ;;
+    me)
+      echo "error: --scope me requires gtnh_inventory_query; install the compiled query binary or unset GTNH_INVENTORY_FORCE_LEGACY" >&2
+      exit 2
+      ;;
+    *) echo "error: --scope must be players, chests, containers, me, both, or all" >&2; exit 2 ;;
   esac
 
   [ -n "$id$item" ] || { echo "error: provide --item <mod:name[:damage]> or --id with --damage" >&2; exit 2; }
@@ -552,8 +578,15 @@ cmd_find_item() {
 
   [ -n "$query" ] || { echo "error: --query is required" >&2; exit 2; }
   case "$scope" in
-    players|chests|both) ;;
-    *) echo "error: --scope must be players, chests, or both" >&2; exit 2 ;;
+    players|chests|containers|both|all)
+      [ "$scope" != "containers" ] || scope="chests"
+      [ "$scope" != "all" ] || scope="both"
+      ;;
+    me)
+      echo "error: --scope me requires gtnh_inventory_query; install the compiled query binary or unset GTNH_INVENTORY_FORCE_LEGACY" >&2
+      exit 2
+      ;;
+    *) echo "error: --scope must be players, chests, containers, me, both, or all" >&2; exit 2 ;;
   esac
   limit="$(cap_limit "$limit")"
 
@@ -724,6 +757,8 @@ cmd_refresh() {
     case "$1" in
       --players) scope="players"; shift ;;
       --chests) scope="chests"; shift ;;
+      --containers) scope="chests"; shift ;;
+      --me) scope="me"; shift ;;
       --all) scope="all"; shift ;;
       *) usage ;;
     esac

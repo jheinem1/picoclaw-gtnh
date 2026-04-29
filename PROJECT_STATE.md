@@ -55,18 +55,20 @@ Last updated: 2026-03-17
 - Source files (via DatHost file API):
   - `world/playerdata/*.dat`
   - `world/region/*.mca`, `world/DIM-1/region/*.mca`, `world/DIM1/region/*.mca`
+  - `world/picoclaw/me_index.json` from the PicoClaw ME export mod
 - Index outputs:
   - `workspace/state/inventory_index.json`
   - `workspace/state/inventory_status.json`
   - `workspace/state/inventory_refresh.json` (manual refresh request)
 - Workspace tool:
   - `sh gtnh_inventory status`
-  - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]`
-  - `sh gtnh_inventory find-item --query "<name>" [--scope players|chests|both] [--limit <n>]`
+  - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
+  - `sh gtnh_inventory find-item --query "<name>" [--scope players|chests|containers|me|both|all] [--limit <n>]`
   - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
   - `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
-  - `sh gtnh_inventory refresh [--players|--chests|--all]`
+  - `sh gtnh_inventory refresh [--players|--chests|--containers|--me|--all]`
   - `find --id` is strict legacy mode and requires `--damage`
+  - Lookup output includes source freshness for players, containers, and ME.
 
 ## Minecraft relay
 - Poll source: `dathost-bridge /mc/console`

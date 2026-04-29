@@ -33,6 +33,7 @@ type Config struct {
 	StateFile          string
 	PlayersInterval    time.Duration
 	ChestsInterval     time.Duration
+	MEInterval         time.Duration
 	HTTPTimeout        time.Duration
 	MaxRegionFiles     int
 	ScanDims           []int
@@ -53,6 +54,7 @@ type ChestBounds struct {
 type RuntimeState struct {
 	LastPlayersScan string `json:"last_players_scan"`
 	LastChestsScan  string `json:"last_chests_scan"`
+	LastMEScan      string `json:"last_me_scan"`
 }
 
 type RefreshRequest struct {
@@ -65,9 +67,11 @@ type SourceMeta struct {
 	ServerID       string `json:"server_id"`
 	PlayersScanAt  string `json:"players_scan_at"`
 	ChestsScanAt   string `json:"chests_scan_at"`
+	MEScanAt       string `json:"me_scan_at"`
 	DatHostSyncAt  string `json:"dathost_sync_at"`
 	PlayersVersion int    `json:"players_version"`
 	ChestsVersion  int    `json:"chests_version"`
+	MEVersion      int    `json:"me_version"`
 }
 
 type IndexStats struct {
@@ -77,6 +81,8 @@ type IndexStats struct {
 	PlayerStacks       int `json:"player_stacks"`
 	EnderStacks        int `json:"ender_stacks"`
 	ChestStacks        int `json:"chest_stacks"`
+	MENetworkCount     int `json:"me_network_count"`
+	MEStacks           int `json:"me_stacks"`
 	RegionFilesScanned int `json:"region_files_scanned"`
 }
 
@@ -113,6 +119,23 @@ type ChestRecord struct {
 	Items     []ItemStack `json:"items"`
 }
 
+type MERecord struct {
+	NetworkID string        `json:"network_id,omitempty"`
+	Label     string        `json:"label,omitempty"`
+	Dimension int           `json:"dim"`
+	Pos       Position      `json:"pos"`
+	Items     []MEItemStack `json:"items"`
+}
+
+type MEItemStack struct {
+	ID          int    `json:"id"`
+	Damage      int    `json:"damage"`
+	Count       int    `json:"count"`
+	RegName     string `json:"reg_name,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Name        string `json:"name,omitempty"`
+}
+
 type PlayerSlotRef struct {
 	Slot   int    `json:"slot"`
 	Count  int    `json:"count"`
@@ -139,9 +162,18 @@ type ChestHit struct {
 	TotalCount int    `json:"total_count"`
 }
 
+type MEHit struct {
+	NetworkID  string   `json:"network_id,omitempty"`
+	Label      string   `json:"label,omitempty"`
+	Dimension  int      `json:"dim"`
+	Pos        Position `json:"pos"`
+	TotalCount int      `json:"total_count"`
+}
+
 type ItemHits struct {
 	Players []PlayerHit `json:"players"`
 	Chests  []ChestHit  `json:"chests"`
+	ME      []MEHit     `json:"me,omitempty"`
 }
 
 type InventoryIndex struct {
@@ -151,6 +183,7 @@ type InventoryIndex struct {
 	Stats       IndexStats          `json:"stats"`
 	Players     []PlayerRecord      `json:"players"`
 	Chests      []ChestRecord       `json:"chests"`
+	ME          []MERecord          `json:"me,omitempty"`
 	ItemIndex   map[string]ItemHits `json:"item_index"`
 }
 
@@ -220,6 +253,7 @@ func loadConfig() (Config, error) {
 		StateFile:          getenv("INVENTORY_STATE_FILE", "/var/lib/inventory-sync/state.json"),
 		PlayersInterval:    time.Duration(max(60, getenvInt("INVENTORY_PLAYERS_INTERVAL_SECONDS", 600))) * time.Second,
 		ChestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_CHESTS_INTERVAL_SECONDS", 21600))) * time.Second,
+		MEInterval:         time.Duration(max(60, getenvInt("INVENTORY_ME_INTERVAL_SECONDS", 300))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
 		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1")),
@@ -375,8 +409,10 @@ func loadRefreshRequest(path string) (RefreshRequest, bool) {
 		return RefreshRequest{}, false
 	}
 	s := strings.ToLower(strings.TrimSpace(req.Scope))
-	if s != "players" && s != "chests" && s != "all" {
+	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "all" {
 		req.Scope = "all"
+	} else if s == "containers" {
+		req.Scope = "chests"
 	} else {
 		req.Scope = s
 	}
@@ -910,6 +946,146 @@ func parsePlayerData(raw []byte, uuid string, names map[string]string) (PlayerRe
 	}, nil
 }
 
+func stringFromAny(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		return strings.TrimSpace(fmt.Sprint(t))
+	}
+}
+
+func parseMEItem(row map[string]any) (MEItemStack, bool) {
+	id := numberToInt(row["id"])
+	damage := numberToInt(row["damage"])
+	if _, ok := row["Damage"]; ok {
+		damage = numberToInt(row["Damage"])
+	}
+	count := numberToInt(row["count"])
+	if _, ok := row["Count"]; ok {
+		count = numberToInt(row["Count"])
+	}
+	if id == 0 || count <= 0 {
+		return MEItemStack{}, false
+	}
+	return MEItemStack{
+		ID:          id,
+		Damage:      damage,
+		Count:       count,
+		RegName:     firstNonEmptyString(row["reg_name"], row["regName"], row["registry_name"]),
+		DisplayName: firstNonEmptyString(row["display_name"], row["displayName"], row["label"]),
+		Name:        firstNonEmptyString(row["name"], row["internal_name"]),
+	}, true
+}
+
+func firstNonEmptyString(values ...any) string {
+	for _, v := range values {
+		s := stringFromAny(v)
+		if s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
+}
+
+func parseMEExport(raw []byte) ([]MERecord, string, int, error) {
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil, "", 0, err
+	}
+	generatedAt := firstNonEmptyString(root["generated_at"], root["generatedAt"], root["timestamp"])
+	records := make([]MERecord, 0)
+	stackCount := 0
+
+	addRecord := func(net map[string]any, itemRows []any) {
+		rec := MERecord{
+			NetworkID: firstNonEmptyString(net["network_id"], net["networkId"], net["id"], net["uuid"]),
+			Label:     firstNonEmptyString(net["label"], net["name"]),
+			Dimension: numberToInt(firstPresent(net, "dim", "dimension")),
+			Pos: Position{
+				X: numberToFloat(firstPresent(net, "x")),
+				Y: numberToFloat(firstPresent(net, "y")),
+				Z: numberToFloat(firstPresent(net, "z")),
+			},
+			Items: make([]MEItemStack, 0, len(itemRows)),
+		}
+		for _, row := range itemRows {
+			item, ok := parseMEItem(toMap(row))
+			if !ok {
+				continue
+			}
+			rec.Items = append(rec.Items, item)
+			stackCount++
+		}
+		if len(rec.Items) > 0 {
+			if rec.Label == "" {
+				rec.Label = rec.NetworkID
+			}
+			if rec.Label == "" {
+				rec.Label = fmt.Sprintf("ME network %d", len(records)+1)
+			}
+			records = append(records, rec)
+		}
+	}
+
+	for _, row := range toList(root["networks"]) {
+		net := toMap(row)
+		if len(net) == 0 {
+			continue
+		}
+		addRecord(net, toList(net["items"]))
+	}
+
+	topItems := toList(root["items"])
+	if len(topItems) > 0 {
+		grouped := map[string][]any{}
+		meta := map[string]map[string]any{}
+		for _, row := range topItems {
+			m := toMap(row)
+			if len(m) == 0 {
+				continue
+			}
+			key := firstNonEmptyString(m["network_id"], m["networkId"], m["network"], m["label"])
+			if key == "" {
+				key = "default"
+			}
+			grouped[key] = append(grouped[key], row)
+			if _, ok := meta[key]; !ok {
+				meta[key] = map[string]any{
+					"network_id": firstNonEmptyString(m["network_id"], m["networkId"], m["network"]),
+					"label":      firstNonEmptyString(m["label"], m["network_label"], m["networkLabel"]),
+					"dim":        firstPresent(m, "dim", "dimension"),
+					"x":          firstPresent(m, "x"),
+					"y":          firstPresent(m, "y"),
+					"z":          firstPresent(m, "z"),
+				}
+			}
+		}
+		keys := make([]string, 0, len(grouped))
+		for k := range grouped {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			addRecord(meta[k], grouped[k])
+		}
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return strings.ToLower(records[i].Label) < strings.ToLower(records[j].Label)
+	})
+	return records, generatedAt, stackCount, nil
+}
+
+func firstPresent(m map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if v, ok := m[key]; ok {
+			return v
+		}
+	}
+	return nil
+}
+
 func tileEntityType(raw string) string {
 	typ := strings.TrimSpace(raw)
 	if typ == "" {
@@ -1087,14 +1263,15 @@ func itemKey(id, damage int) string {
 	return fmt.Sprintf("%d:%d", id, damage)
 }
 
-func indexFromData(players []PlayerRecord, chests []ChestRecord, source SourceMeta, stats IndexStats) InventoryIndex {
+func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, source SourceMeta, stats IndexStats) InventoryIndex {
 	idx := InventoryIndex{
-		Version:     1,
+		Version:     2,
 		GeneratedAt: nowUTC(),
 		Source:      source,
 		Stats:       stats,
 		Players:     players,
 		Chests:      chests,
+		ME:          me,
 		ItemIndex:   map[string]ItemHits{},
 	}
 
@@ -1147,6 +1324,33 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, source SourceMe
 		}
 	}
 
+	for _, network := range me {
+		for _, it := range network.Items {
+			k := itemKey(it.ID, it.Damage)
+			h := idx.ItemIndex[k]
+			found := false
+			for i := range h.ME {
+				if h.ME[i].NetworkID == network.NetworkID && h.ME[i].Label == network.Label &&
+					h.ME[i].Dimension == network.Dimension &&
+					int(h.ME[i].Pos.X) == int(network.Pos.X) && int(h.ME[i].Pos.Y) == int(network.Pos.Y) && int(h.ME[i].Pos.Z) == int(network.Pos.Z) {
+					h.ME[i].TotalCount += it.Count
+					found = true
+					break
+				}
+			}
+			if !found {
+				h.ME = append(h.ME, MEHit{
+					NetworkID:  network.NetworkID,
+					Label:      network.Label,
+					Dimension:  network.Dimension,
+					Pos:        network.Pos,
+					TotalCount: it.Count,
+				})
+			}
+			idx.ItemIndex[k] = h
+		}
+	}
+
 	for k, h := range idx.ItemIndex {
 		sort.Slice(h.Players, func(i, j int) bool {
 			if h.Players[i].TotalCount == h.Players[j].TotalCount {
@@ -1168,6 +1372,12 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, source SourceMe
 				return h.Chests[i].Dimension < h.Chests[j].Dimension
 			}
 			return h.Chests[i].TotalCount > h.Chests[j].TotalCount
+		})
+		sort.Slice(h.ME, func(i, j int) bool {
+			if h.ME[i].TotalCount == h.ME[j].TotalCount {
+				return strings.ToLower(h.ME[i].Label) < strings.ToLower(h.ME[j].Label)
+			}
+			return h.ME[i].TotalCount > h.ME[j].TotalCount
 		})
 		idx.ItemIndex[k] = h
 	}
@@ -1293,6 +1503,21 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 	return all, regionCount, chestStacks, nil
 }
 
+func scanME(client *http.Client, cfg Config) ([]MERecord, string, int, error) {
+	raw, err := getFile(client, cfg, "world/picoclaw/me_index.json")
+	if err != nil {
+		return nil, "", 0, err
+	}
+	records, generatedAt, stackCount, err := parseMEExport(raw)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	if generatedAt == "" {
+		generatedAt = nowUTC()
+	}
+	return records, generatedAt, stackCount, nil
+}
+
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -1308,9 +1533,9 @@ func main() {
 	state := loadRuntimeState(stateFile)
 
 	if cfg.ChestBounds != nil {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
 	} else {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval)
 	}
 
 	for {
@@ -1322,6 +1547,7 @@ func main() {
 		now := time.Now().UTC()
 		playersDue := parseRFC3339(state.LastPlayersScan).IsZero() || now.Sub(parseRFC3339(state.LastPlayersScan)) >= cfg.PlayersInterval
 		chestsDue := parseRFC3339(state.LastChestsScan).IsZero() || now.Sub(parseRFC3339(state.LastChestsScan)) >= cfg.ChestsInterval
+		meDue := parseRFC3339(state.LastMEScan).IsZero() || now.Sub(parseRFC3339(state.LastMEScan)) >= cfg.MEInterval
 
 		refreshReq, hasRefresh := loadRefreshRequest(refreshFile)
 		if hasRefresh {
@@ -1330,13 +1556,16 @@ func main() {
 				playersDue = true
 			case "chests":
 				chestsDue = true
+			case "me":
+				meDue = true
 			default:
 				playersDue = true
 				chestsDue = true
+				meDue = true
 			}
 		}
 
-		if !playersDue && !chestsDue {
+		if !playersDue && !chestsDue && !meDue {
 			time.Sleep(cfg.LoopSleep)
 			continue
 		}
@@ -1353,6 +1582,7 @@ func main() {
 		prev := loadIndex(indexFile)
 		players := prev.Players
 		chests := prev.Chests
+		me := prev.ME
 		stats := prev.Stats
 		source := prev.Source
 		source.ServerID = cfg.DatHostServer
@@ -1392,7 +1622,22 @@ func main() {
 			}
 		}
 
-		index := indexFromData(players, chests, source, stats)
+		if meDue {
+			networks, meScanAt, meStacks, err := scanME(client, cfg)
+			if err != nil {
+				errorsMap["me"] = err.Error()
+				log.Printf("event=inventory_me_scan_error err=%q", err.Error())
+			} else {
+				me = networks
+				state.LastMEScan = meScanAt
+				source.MEScanAt = state.LastMEScan
+				source.MEVersion++
+				stats.MENetworkCount = len(me)
+				stats.MEStacks = meStacks
+			}
+		}
+
+		index := indexFromData(players, chests, me, source, stats)
 		if err := atomicWriteJSON(indexFile, index); err != nil {
 			log.Printf("event=inventory_index_write_error file=%q err=%q", indexFile, err.Error())
 			errorsMap["index_write"] = err.Error()
@@ -1406,6 +1651,7 @@ func main() {
 			Stale: map[string]bool{
 				"players": parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
 				"chests":  parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
+				"me":      parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
 			},
 			Errors: errorsMap,
 		}
@@ -1418,7 +1664,7 @@ func main() {
 			clearRefreshRequest(refreshFile)
 		}
 
-		log.Printf("event=inventory_cycle_complete players=%d chests=%d item_keys=%d", index.Stats.PlayerCount, index.Stats.ChestCount, index.Stats.IndexedItemKeys)
+		log.Printf("event=inventory_cycle_complete players=%d chests=%d me_networks=%d item_keys=%d", index.Stats.PlayerCount, index.Stats.ChestCount, index.Stats.MENetworkCount, index.Stats.IndexedItemKeys)
 		time.Sleep(cfg.LoopSleep)
 	}
 }
@@ -1437,6 +1683,7 @@ func writeOutputs(indexFile, statusFile string, index InventoryIndex, errorsMap 
 		Stale: map[string]bool{
 			"players": parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
 			"chests":  parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
+			"me":      parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
 		},
 		Errors: errorsMap,
 	}

@@ -25,6 +25,8 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using PicoClaw + Podman, w
 - `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
 - `scripts/build_oredict_dump_mod.sh`: build a GTNH Forge mod that dumps the live ore dictionary
 - `scripts/install_oredict_dump_mod.sh`: install the dump mod into a local PrismLauncher GTNH instance
+- `scripts/build_ftbquests_dump_mod.sh`: build a NeoForge client mod that dumps live FTB Quests state
+- `scripts/install_ftbquests_dump_mod.sh`: install the FTB Quests dump mod into a local PrismLauncher ATMons instance
 - `scripts/import_oredict_dump.sh`: import a generated `picoclaw_oredict_dump.tsv` and build `oredict_index.tsv`
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
@@ -178,6 +180,7 @@ The bot workspace policy (`workspace/AGENTS.md`) is configured to prefer this AP
   - `world/region/*.mca` (Overworld)
   - `world/DIM-1/region/*.mca` (Nether)
   - `world/DIM1/region/*.mca` (End)
+- ME network contents from `world/picoclaw/me_index.json`
 
 Index outputs written under workspace state:
 - `state/inventory_index.json`
@@ -186,18 +189,32 @@ Index outputs written under workspace state:
 
 Commands from workspace root:
 - `sh gtnh_inventory status`
-- `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|both] [--limit <n>]`
-- `sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|both] [--limit <n>]`
+- `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
+- `sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]`
 - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
 - `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
-- `sh gtnh_inventory refresh [--players|--chests|--all]`
+- `sh gtnh_inventory refresh [--players|--chests|--containers|--me|--all]`
 
 Notes:
+- Lookup output includes a `Freshness:` line for players, containers, and ME data.
+- `chests` is kept as a compatibility alias for world containers.
+- `all` is the default lookup scope when the compiled `gtnh_inventory_query` helper is installed.
 - `find --id` remains as strict legacy mode and requires `--damage`.
 - `--oredict` uses a true GTNH ore-dictionary cache built from a live dump, not display-name heuristics.
 - If `gtnh_inventory find-item --query "<alias>" --oredict` fails with a missing ore-dict index, build/import a fresh dump first.
 - `player --all` includes nested container contents from inventory items (for example backpacks/toolboxes) as `src=nested`.
 - Custom item names are indexed from item NBT when present and shown in inventory/chest listings.
+
+## ME Export Workflow
+To provide exact AE2/ME contents, install the PicoClaw ME export mod on the GTNH server:
+
+1. Build the mod:
+   - `scripts/build_me_export_mod.sh`
+2. Install it into the server directory:
+   - `scripts/install_me_export_mod.sh "/path/to/server"`
+3. Restart the server. The mod writes:
+   - `world/picoclaw/me_index.json`
+The exporter runs periodically and `inventory-sync` marks ME data stale if this file is missing or old.
 
 ## True Ore-Dict Cache Workflow
 To build a real GTNH ore-dictionary cache without checking large dumps into the runtime dataset:
@@ -218,6 +235,21 @@ The imported runtime index is:
 
 That file is copied into:
 - `data/gtnh_runtime/index/oredict_index.tsv`
+
+## ATMons FTB Quests Dump Workflow
+To dump exact live FTB Quests progress from a running ATMons client:
+
+1. Build the dump mod:
+   - `scripts/build_ftbquests_dump_mod.sh`
+2. Install it into the PrismLauncher ATMons instance:
+   - `scripts/install_ftbquests_dump_mod.sh "/var/home/jhein/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/All the Mons - ATMons/minecraft"`
+3. Restart the ATMons client and join the server.
+4. The mod writes snapshot files under the instance:
+   - `dumps/picoclaw_ftbquests_snapshot.json`
+   - `dumps/picoclaw_ftbquests_completed.json`
+   - `dumps/picoclaw_ftbquests_dump.log`
+5. You can also force an immediate client-side dump with:
+   - `/picoclawquestsdump`
 - `workspace/gtnh-data/index/oredict_index.tsv`
 
 Env vars in `deploy/env/picoclaw.env`:
@@ -226,6 +258,7 @@ Env vars in `deploy/env/picoclaw.env`:
 - `INVENTORY_STATE_FILE`
 - `INVENTORY_PLAYERS_INTERVAL_SECONDS`
 - `INVENTORY_CHESTS_INTERVAL_SECONDS`
+- `INVENTORY_ME_INTERVAL_SECONDS`
 - `INVENTORY_MAX_RESULTS`
 - `INVENTORY_DEFAULT_LIMIT`
 - `INVENTORY_HTTP_TIMEOUT_SECONDS`

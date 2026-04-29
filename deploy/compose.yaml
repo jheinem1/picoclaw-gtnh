@@ -14,8 +14,8 @@ services:
 
   mc-relay:
     build:
-      context: ../relay
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: relay/Dockerfile
     container_name: mc-relay
     restart: unless-stopped
     env_file:
@@ -35,8 +35,8 @@ services:
 
   discord-commands:
     build:
-      context: ../discord-commands
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: discord-commands/Dockerfile
     container_name: discord-commands
     restart: unless-stopped
     env_file:

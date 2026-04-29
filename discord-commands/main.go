@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ type Config struct {
 	ReplyLimit     int
 	AllowedUsers   map[string]struct{}
 	Questbook      QuestbookConfig
+	MentionInventory bool
 }
 
 type QuestbookConfig struct {
@@ -67,6 +69,11 @@ type Service struct {
 	s   *discordgo.Session
 }
 
+var discordInventoryIntentRe = regexp.MustCompile(`(?i)\b(how\s+much|how\s+many|do we have|where (?:is|are)|who has|which chest|in storage|inventory|stored|in me|me system)\b`)
+var mentionCleanupRe = regexp.MustCompile(`<@!?\d+>`)
+var discordRetryRe = regexp.MustCompile(`(?i)\b(try (that )?again|retry|run (that|it) again|same query)\b`)
+var inventoryCommandQueryRe = regexp.MustCompile(`(?i)gtnh_inventory\s+find-item\s+--query\s+"([^"]+)"(?:.*--scope\s+([a-z]+))?`)
+
 func getenv(key, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -104,6 +111,7 @@ func loadConfig() (Config, error) {
 		CommandTimeout: time.Duration(getenvInt("DISCORD_COMMAND_TIMEOUT_SECONDS", 45)) * time.Second,
 		ReplyLimit:     getenvInt("DISCORD_REPLY_LIMIT", 1900),
 		AllowedUsers:   map[string]struct{}{},
+		MentionInventory: getenv("DISCORD_MENTION_INVENTORY_ENABLED", "true") != "false",
 		Questbook: QuestbookConfig{
 			ChannelID:     strings.TrimSpace(os.Getenv("QUESTBOOK_CHANNEL_ID")),
 			SyncStateFile: getenv("QUESTBOOK_SYNC_STATE_FILE", "state/atmons-questbook-sync.json"),
@@ -149,10 +157,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("discord_session_error: %v", err)
 	}
-	session.Identify.Intents = discordgo.IntentsGuilds
+	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
 
 	svc := &Service{cfg: cfg, s: session}
 	session.AddHandler(svc.onInteractionCreate)
+	session.AddHandler(svc.onMessageCreate)
 
 	ready := make(chan string, 1)
 	session.AddHandlerOnce(func(s *discordgo.Session, r *discordgo.Ready) {
@@ -281,14 +290,14 @@ func inventoryCommand() *discordgo.ApplicationCommand {
 			subcommand("status", "Show inventory index status"),
 			subcommand("find", "Find an exact item",
 				stringOption("item", "Exact mod:name[:damage] or mod:name", true),
-				stringChoice("scope", "Scope", false, "players", "chests", "both"),
+				stringChoice("scope", "Scope", false, "all", "players", "containers", "chests", "me", "both"),
 				integerOption("limit", "Result limit", false),
 				stringOption("player", "Filter by player", false),
 				boolOption("any_damage", "Allow any damage value"),
 			),
 			subcommand("find_item", "Find an item by natural language",
 				stringOption("query", "Item query", true),
-				stringChoice("scope", "Scope", false, "players", "chests", "both"),
+				stringChoice("scope", "Scope", false, "all", "players", "containers", "chests", "me", "both"),
 				integerOption("limit", "Result limit", false),
 				boolOption("oredict", "Use ore dictionary"),
 			),
@@ -304,7 +313,7 @@ func inventoryCommand() *discordgo.ApplicationCommand {
 				integerOption("dim", "Dimension", false),
 			),
 			subcommand("refresh", "Refresh inventory index",
-				stringChoice("scope", "Scope", false, "players", "chests", "all"),
+				stringChoice("scope", "Scope", false, "players", "chests", "containers", "me", "all"),
 			),
 		},
 	}
@@ -477,6 +486,249 @@ func (s *Service) onInteractionCreate(dg *discordgo.Session, i *discordgo.Intera
 	content = wrapCodeBlock(content)
 
 	_, _ = dg.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
+}
+
+func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCreate) {
+	if m.Author == nil {
+		return
+	}
+	if dg.State != nil && dg.State.User != nil && m.Author.ID == dg.State.User.ID {
+		if strings.Contains(strings.ToLower(m.Content), "exec is restricted to internal channels") {
+			_ = dg.ChannelMessageDelete(m.ChannelID, m.ID)
+		}
+		return
+	}
+	if !s.cfg.MentionInventory || !s.mentionsBot(m) {
+		return
+	}
+	if !s.allowedMessageUser(m) {
+		log.Printf("message_inventory_skip reason=not_allowed user_id=%s channel_id=%s", m.Author.ID, m.ChannelID)
+		return
+	}
+	text := strings.TrimSpace(mentionCleanupRe.ReplaceAllString(m.Content, ""))
+	if !discordInventoryIntentRe.MatchString(text) {
+		if !discordRetryRe.MatchString(text) {
+			log.Printf("message_inventory_skip reason=no_intent user_id=%s channel_id=%s content_len=%d", m.Author.ID, m.ChannelID, len(m.Content))
+			return
+		}
+		retryQuery, retryScope := s.resolveRetryInventoryQuery(dg, m)
+		if retryQuery == "" {
+			log.Printf("message_inventory_skip reason=retry_no_query user_id=%s channel_id=%s content_len=%d", m.Author.ID, m.ChannelID, len(m.Content))
+			_, _ = dg.ChannelMessageSendReply(m.ChannelID, "I could not find the previous inventory query to retry. Ask the item question again and I will run it directly.", m.Reference())
+			return
+		}
+		text = retryQuery
+		if retryScope != "" {
+			text += " in " + retryScope
+		}
+	}
+	query := inventoryQueryFromDiscordText(text)
+	if query == "" {
+		log.Printf("message_inventory_skip reason=empty_query user_id=%s channel_id=%s content=%q", m.Author.ID, m.ChannelID, m.Content)
+		return
+	}
+	scope := "all"
+	if regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`).MatchString(text) {
+		scope = "me"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.CommandTimeout)
+	defer cancel()
+	stopTyping := s.startTyping(dg, m.ChannelID, ctx)
+	defer stopTyping()
+	log.Printf("message_inventory_lookup user_id=%s channel_id=%s query=%q scope=%s", m.Author.ID, m.ChannelID, query, scope)
+	out, err := s.run(ctx, "sh", "gtnh_inventory", "find-item", "--query", query, "--scope", scope, "--limit", "100")
+	reply := formatInventoryMentionReply(query, scope, out, err)
+	reply = truncate(reply, s.cfg.ReplyLimit)
+	if _, sendErr := dg.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); sendErr != nil {
+		log.Printf("message_inventory_reply_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, sendErr.Error())
+	}
+}
+
+func (s *Service) startTyping(dg *discordgo.Session, channelID string, ctx context.Context) func() {
+	done := make(chan struct{})
+	sendTyping := func() {
+		if err := dg.ChannelTyping(channelID); err != nil {
+			log.Printf("typing_indicator_error channel_id=%s err=%q", channelID, err.Error())
+		}
+	}
+	sendTyping()
+	go func() {
+		ticker := time.NewTicker(7 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				sendTyping()
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+	}
+}
+
+func (s *Service) resolveRetryInventoryQuery(dg *discordgo.Session, m *discordgo.MessageCreate) (string, string) {
+	msgs, err := dg.ChannelMessages(m.ChannelID, 25, m.ID, "", "")
+	if err != nil {
+		log.Printf("message_inventory_retry_history_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, err.Error())
+		return "", ""
+	}
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		if q, scope := inventoryQueryFromText(msg.Content); q != "" {
+			return q, scope
+		}
+	}
+	return "", ""
+}
+
+func inventoryQueryFromText(text string) (string, string) {
+	if m := inventoryCommandQueryRe.FindStringSubmatch(text); len(m) >= 2 {
+		scope := "all"
+		if len(m) >= 3 && m[2] != "" {
+			scope = strings.ToLower(m[2])
+		}
+		return strings.TrimSpace(m[1]), scope
+	}
+	clean := strings.TrimSpace(mentionCleanupRe.ReplaceAllString(text, ""))
+	if discordInventoryIntentRe.MatchString(clean) {
+		scope := "all"
+		if regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`).MatchString(clean) {
+			scope = "me"
+		}
+		return inventoryQueryFromDiscordText(clean), scope
+	}
+	return "", ""
+}
+
+func (s *Service) allowedMessageUser(m *discordgo.MessageCreate) bool {
+	if len(s.cfg.AllowedUsers) == 0 {
+		return true
+	}
+	_, ok := s.cfg.AllowedUsers[m.Author.ID]
+	return ok
+}
+
+func (s *Service) mentionsBot(m *discordgo.MessageCreate) bool {
+	if s.s == nil || s.s.State == nil || s.s.State.User == nil {
+		return false
+	}
+	botID := s.s.State.User.ID
+	for _, u := range m.Mentions {
+		if u != nil && u.ID == botID {
+			return true
+		}
+	}
+	return strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">")
+}
+
+func inventoryQueryFromDiscordText(text string) string {
+	q := strings.ToLower(strings.TrimSpace(text))
+	repls := []string{
+		"how much", "", "how many", "", "do we have", "", "where are", "", "where is", "",
+		"who has", "", "which chest has", "", "in storage", "", "in the storage", "",
+		"in me", "", "in the me system", "", "in me system", "", "me system", "",
+		"stored", "", "storage", "", "?", "", "please", "",
+	}
+	for i := 0; i < len(repls); i += 2 {
+		q = strings.ReplaceAll(q, repls[i], repls[i+1])
+	}
+	q = strings.Trim(q, " \t\r\n.,:;!?")
+	q = strings.Join(strings.Fields(q), " ")
+	return q
+}
+
+func formatInventoryMentionReply(query, scope, out string, err error) string {
+	out = strings.TrimSpace(out)
+	if err != nil {
+		if out == "" {
+			return fmt.Sprintf("Inventory lookup failed for %q: %s", query, err)
+		}
+		return fmt.Sprintf("Inventory lookup for %q returned an error:\n```text\n%s\n```", query, truncate(out, 1500))
+	}
+	lines := strings.Split(out, "\n")
+	item := ""
+	freshness := ""
+	sections := make([]string, 0, 8)
+	sourceTotals := map[string]int{}
+	currentSource := ""
+	countRe := regexp.MustCompile(`\bcount=(\d+)`)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Item: ") {
+			item = strings.TrimPrefix(line, "Item: ")
+			continue
+		}
+		if strings.HasPrefix(line, "Freshness: ") {
+			freshness = line
+			continue
+		}
+		switch line {
+		case "Players:", "Containers:", "ME:":
+			currentSource = strings.TrimSuffix(line, ":")
+			continue
+		}
+		if strings.HasPrefix(line, "- ") {
+			sections = append(sections, line)
+			if m := countRe.FindStringSubmatch(line); len(m) == 2 && currentSource != "" {
+				var n int
+				if _, scanErr := fmt.Sscanf(m[1], "%d", &n); scanErr == nil {
+					sourceTotals[currentSource] += n
+				}
+			}
+		}
+	}
+	if item == "" {
+		item = query
+	}
+	if len(sections) == 0 {
+		if freshness != "" {
+			return fmt.Sprintf("I found no %s in %s. %s", item, scope, freshness)
+		}
+		return fmt.Sprintf("I found no %s in %s.", item, scope)
+	}
+	total := 0
+	for _, n := range sourceTotals {
+		total += n
+	}
+	var b strings.Builder
+	if total > 0 {
+		fmt.Fprintf(&b, "%s: %d total in %s.", item, total, scope)
+	} else {
+		fmt.Fprintf(&b, "%s found in %s.", item, scope)
+	}
+	if len(sourceTotals) > 1 {
+		parts := make([]string, 0, 3)
+		for _, source := range []string{"ME", "Containers", "Players"} {
+			if n := sourceTotals[source]; n > 0 {
+				parts = append(parts, fmt.Sprintf("%s=%d", source, n))
+			}
+		}
+		if len(parts) > 0 {
+			b.WriteString(" ")
+			b.WriteString(strings.Join(parts, ", "))
+			b.WriteString(".")
+		}
+	}
+	if freshness != "" {
+		b.WriteString(" ")
+		b.WriteString(freshness)
+	}
+	for i, line := range sections {
+		if i >= 5 {
+			fmt.Fprintf(&b, "\n...and %d more locations.", len(sections)-i)
+			break
+		}
+		b.WriteString("\n")
+		b.WriteString(line)
+	}
+	return b.String()
 }
 
 func (s *Service) allowedUser(i *discordgo.InteractionCreate) bool {
@@ -655,6 +907,10 @@ func (s *Service) dispatchInventory(ctx context.Context, opts []*discordgo.Appli
 				args = append(args, "--players")
 			case "chests":
 				args = append(args, "--chests")
+			case "containers":
+				args = append(args, "--containers")
+			case "me":
+				args = append(args, "--me")
 			case "all":
 				args = append(args, "--all")
 			}

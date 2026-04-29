@@ -55,6 +55,12 @@ func TestNeedsVerification_SteamThroughputQuestion(t *testing.T) {
 	}
 }
 
+func TestInventoryIntent_MEQuestion(t *testing.T) {
+	if !inventoryIntentRe.MatchString("greg do we have stainless steel plates in ME?") {
+		t.Fatalf("expected ME inventory question to match inventory intent")
+	}
+}
+
 func TestFormatCoordinatesForMC_TupleCount(t *testing.T) {
 	in := "Chests with glass: (-1173,20,3525):63; (-1256,50,-8798):57"
 	got := formatCoordinatesForMC(in)
