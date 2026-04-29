@@ -21,11 +21,12 @@ func main() {
 		message = "Use your tools to find a GTNH item matching copper, then answer with one matching display name."
 	}
 	cfg := agent.Config{
-		Model:        getenv(agent.EnvModel, agent.DefaultModel),
-		Workspace:    getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
-		AuthFile:     getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
-		Timeout:      time.Duration(getenvInt(agent.EnvAgentTimeout, 90)) * time.Second,
-		MaxToolCalls: getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
+		Model:           getenv(agent.EnvModel, agent.DefaultModel),
+		ReasoningEffort: getenv(agent.EnvReasoningEffort, agent.DefaultReasoningEffort),
+		Workspace:       getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
+		AuthFile:        getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
+		Timeout:         time.Duration(getenvInt(agent.EnvAgentTimeout, 90)) * time.Second,
+		MaxToolCalls:    getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
 	}
 	runner, err := agent.NewDefaultRunner(cfg)
 	if err != nil {

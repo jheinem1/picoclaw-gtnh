@@ -42,6 +42,7 @@ type Request struct {
 
 type ModelRequest struct {
 	Model              string
+	ReasoningEffort    string
 	Instructions       string
 	PreviousResponseID string
 	Input              []InputItem
@@ -73,6 +74,22 @@ type ToolCall struct {
 	Arguments json.RawMessage
 }
 
+type TimeoutSummaryError struct {
+	Summary string
+	Cause   error
+}
+
+func (e TimeoutSummaryError) Error() string {
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return "agent timed out"
+}
+
+func (e TimeoutSummaryError) Unwrap() error {
+	return e.Cause
+}
+
 type ValidationError struct {
 	Message string
 }
@@ -84,6 +101,9 @@ func (e ValidationError) Error() string {
 func NewRunner(cfg Config, client Client, registry Registry) *Runner {
 	if cfg.Model == "" {
 		cfg.Model = DefaultModel
+	}
+	if cfg.ReasoningEffort == "" {
+		cfg.ReasoningEffort = DefaultReasoningEffort
 	}
 	if cfg.MaxToolCalls == 0 {
 		cfg.MaxToolCalls = DefaultMaxToolCalls
@@ -127,15 +147,23 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 		Content: content,
 	}}
 	toolCalls := 0
+	progress := make([]toolProgress, 0, r.cfg.MaxToolCalls)
 
 	for {
 		resp, err := r.client.CreateResponse(ctx, ModelRequest{
-			Model:        r.cfg.Model,
-			Instructions: profile.Instructions,
-			Input:        append([]InputItem(nil), input...),
-			Tools:        append([]ToolDefinition(nil), tools...),
+			Model:           r.cfg.Model,
+			ReasoningEffort: r.cfg.ReasoningEffort,
+			Instructions:    profile.Instructions,
+			Input:           append([]InputItem(nil), input...),
+			Tools:           append([]ToolDefinition(nil), tools...),
 		})
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", TimeoutSummaryError{
+					Summary: profile.formatFinal(timeoutSummary(progress)),
+					Cause:   err,
+				}
+			}
 			return "", err
 		}
 
@@ -157,6 +185,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 				ToolName:   call.Name,
 			})
 			output := r.executeTool(ctx, call)
+			progress = append(progress, toolProgress{
+				Name:      call.Name,
+				Arguments: string(call.Arguments),
+				Output:    output,
+			})
 			input = append(input, InputItem{
 				Role:       roleToolOutput,
 				Content:    output,
@@ -166,6 +199,51 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 			toolCalls++
 		}
 	}
+}
+
+type toolProgress struct {
+	Name      string
+	Arguments string
+	Output    string
+}
+
+func timeoutSummary(progress []toolProgress) string {
+	var b strings.Builder
+	b.WriteString("I hit the 5 minute response limit before I could finish a polished answer.")
+	if len(progress) == 0 {
+		b.WriteString(" I did not complete any tool calls before the timeout.")
+		return b.String()
+	}
+	b.WriteString("\n\nWork completed before timeout:")
+	limit := len(progress)
+	if limit > 5 {
+		limit = 5
+	}
+	for i := 0; i < limit; i++ {
+		p := progress[i]
+		fmt.Fprintf(&b, "\n- Ran `%s`", strings.TrimSpace(p.Name))
+		if args := trimOneLine(p.Arguments, 160); args != "" && args != "{}" {
+			fmt.Fprintf(&b, " with `%s`", args)
+		}
+		if out := trimOneLine(p.Output, 500); out != "" {
+			fmt.Fprintf(&b, ": %s", out)
+		}
+	}
+	if len(progress) > limit {
+		fmt.Fprintf(&b, "\n- Plus %d more tool call(s) before the timeout.", len(progress)-limit)
+	}
+	return b.String()
+}
+
+func trimOneLine(text string, max int) string {
+	text = strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+	if max <= 0 || len(text) <= max {
+		return text
+	}
+	if max <= 3 {
+		return text[:max]
+	}
+	return text[:max-3] + "..."
 }
 
 func (r *Runner) executeTool(ctx context.Context, call ToolCall) string {

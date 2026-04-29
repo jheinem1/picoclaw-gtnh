@@ -319,3 +319,32 @@ func TestGregGPTMentionAgentErrorReply(t *testing.T) {
 		t.Fatalf("expected error in reply, got %q", result.Reply)
 	}
 }
+
+func TestGregGPTMentionTimeoutSummaryReply(t *testing.T) {
+	runner := &fakeAgentRunner{
+		resp: DiscordAgentResponse{Reply: "I hit the 5 minute response limit.\n\nWork completed before timeout:\n- Ran `inventory_find_item`: ambiguous item query"},
+		err:  errors.New("context deadline exceeded"),
+	}
+	svc := &Service{
+		cfg:    Config{MentionAgent: true},
+		runner: runner,
+	}
+
+	result := svc.processGregGPTMention(context.Background(), discordMentionMessage{
+		Content:     "<@123> where is the super chest?",
+		AuthorID:    "user",
+		ChannelID:   "channel",
+		MessageID:   "message",
+		MentionsBot: true,
+	}, nil)
+
+	if !result.Handled || result.Reason != "agent_timeout_summary" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if strings.Contains(result.Reply, "GregGPT could not handle that") {
+		t.Fatalf("timeout summary should not include raw error wrapper: %q", result.Reply)
+	}
+	if !strings.Contains(result.Reply, "ambiguous item query") {
+		t.Fatalf("expected progress summary in reply, got %q", result.Reply)
+	}
+}

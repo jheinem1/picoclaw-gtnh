@@ -736,11 +736,12 @@ func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner)
 
 func newAgentRunner(cfg Config) AgentRunner {
 	runner, err := agentcore.NewDefaultRunner(agentcore.Config{
-		Model:        getenv(agentcore.EnvModel, agentcore.DefaultModel),
-		Workspace:    cfg.Workspace,
-		AuthFile:     getenv(agentcore.EnvAuthFile, agentcore.DefaultAuthFile),
-		Timeout:      cfg.AgentTimeout,
-		MaxToolCalls: getenvInt(agentcore.EnvMaxToolCalls, agentcore.DefaultMaxToolCalls),
+		Model:           getenv(agentcore.EnvModel, agentcore.DefaultModel),
+		ReasoningEffort: getenv(agentcore.EnvReasoningEffort, agentcore.DefaultReasoningEffort),
+		Workspace:       cfg.Workspace,
+		AuthFile:        getenv(agentcore.EnvAuthFile, agentcore.DefaultAuthFile),
+		Timeout:         cfg.AgentTimeout,
+		MaxToolCalls:    getenvInt(agentcore.EnvMaxToolCalls, agentcore.DefaultMaxToolCalls),
 	})
 	if err != nil {
 		return startupErrorAgentRunner{err: err}

@@ -18,7 +18,8 @@ import (
 
 func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
 	req, err := toResponseRequest(ModelRequest{
-		Model: "gpt-5",
+		Model:           "gpt-5",
+		ReasoningEffort: "medium",
 		Tools: []ToolDefinition{{
 			Name:        "gtnh_find_item",
 			Description: "Find GTNH items by text query.",
@@ -47,6 +48,9 @@ func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
 	}
 	if len(req.Include) != 1 || req.Include[0] != responses.ResponseIncludableWebSearchCallActionSources {
 		t.Fatalf("Include = %#v, want web search action sources", req.Include)
+	}
+	if req.Reasoning.Effort != "medium" {
+		t.Fatalf("Reasoning.Effort = %q, want medium", req.Reasoning.Effort)
 	}
 	if req.Tools[1].OfFunction == nil || req.Tools[1].OfFunction.Name != "gtnh_find_item" {
 		t.Fatalf("second tool is not original function tool: %+v", req.Tools[1])

@@ -3,16 +3,18 @@ package agent
 import "time"
 
 const (
-	DefaultModel          = "gpt-5.3-codex"
-	DefaultWorkspace      = "/root/.greggpt/workspace"
-	DefaultAuthFile       = "/root/.greggpt/auth.json"
-	DefaultMaxToolCalls   = 8
-	DefaultMemoryMaxBytes = 3000
-	DefaultMemoryMaxItems = 8
+	DefaultModel           = "gpt-5.3-codex-spark"
+	DefaultReasoningEffort = "medium"
+	DefaultWorkspace       = "/root/.greggpt/workspace"
+	DefaultAuthFile        = "/root/.greggpt/auth.json"
+	DefaultMaxToolCalls    = 8
+	DefaultMemoryMaxBytes  = 3000
+	DefaultMemoryMaxItems  = 8
 )
 
 const (
 	EnvModel                  = "GREGGPT_MODEL"
+	EnvReasoningEffort        = "GREGGPT_REASONING_EFFORT"
 	EnvWorkspace              = "GREGGPT_WORKSPACE"
 	EnvAuthFile               = "GREGGPT_AUTH_FILE"
 	EnvAgentTimeout           = "GREGGPT_AGENT_TIMEOUT_SECONDS"
@@ -26,6 +28,7 @@ const (
 
 type Config struct {
 	Model                  string
+	ReasoningEffort        string
 	Workspace              string
 	AuthFile               string
 	Timeout                time.Duration

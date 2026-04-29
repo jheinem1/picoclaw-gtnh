@@ -177,6 +177,37 @@ func TestRunnerBackendErrorReturnsToCaller(t *testing.T) {
 	}
 }
 
+func TestRunnerTimeoutSummarizesToolProgress(t *testing.T) {
+	client := &fakeClient{
+		responses: []ModelResponse{
+			{ToolCalls: []ToolCall{toolCall("call-1", "lookup", `{"q":"super chest"}`)}},
+		},
+		errAfterResponses: context.DeadlineExceeded,
+	}
+	registry := newFakeRegistry()
+	registry.outputs["lookup"] = "error: ambiguous item query \"Super Chest\" matched 8 items"
+	runner := NewRunner(Config{}, client, registry)
+
+	got, err := runner.Run(context.Background(), Request{
+		Channel: ChannelDiscord,
+		User:    "exx",
+		Message: "where is the super chest?",
+	})
+	if err == nil {
+		t.Fatalf("expected timeout error")
+	}
+	var timeoutErr TimeoutSummaryError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected TimeoutSummaryError, got %T: %v", err, err)
+	}
+	if !strings.Contains(timeoutErr.Summary, "5 minute response limit") || !strings.Contains(timeoutErr.Summary, "ambiguous item query") {
+		t.Fatalf("unexpected summary: %q", timeoutErr.Summary)
+	}
+	if got != "" {
+		t.Fatalf("expected empty returned text with summary in error, got %q", got)
+	}
+}
+
 func TestRunnerInjectsSelectedMemory(t *testing.T) {
 	workspace := t.TempDir()
 	memoryPath := filepath.Join(workspace, "state", "greggpt_memory.json")
@@ -235,9 +266,10 @@ func toolCall(id, name, args string) ToolCall {
 }
 
 type fakeClient struct {
-	responses []ModelResponse
-	requests  []ModelRequest
-	err       error
+	responses         []ModelResponse
+	requests          []ModelRequest
+	err               error
+	errAfterResponses error
 }
 
 func (f *fakeClient) CreateResponse(_ context.Context, req ModelRequest) (ModelResponse, error) {
@@ -246,6 +278,9 @@ func (f *fakeClient) CreateResponse(_ context.Context, req ModelRequest) (ModelR
 		return ModelResponse{}, f.err
 	}
 	if len(f.responses) == 0 {
+		if f.errAfterResponses != nil {
+			return ModelResponse{}, f.errAfterResponses
+		}
 		return ModelResponse{}, nil
 	}
 	resp := f.responses[0]

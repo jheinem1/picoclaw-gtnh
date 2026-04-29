@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 const (
@@ -262,10 +263,32 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 		Include:           []responses.ResponseIncludable{responses.ResponseIncludableWebSearchCallActionSources},
 		ParallelToolCalls: openai.Bool(true),
 	}
+	if effort := reasoningEffort(request.ReasoningEffort); effort != "" {
+		out.Reasoning = shared.ReasoningParam{Effort: effort}
+	}
 	if request.PreviousResponseID != "" {
 		out.PreviousResponseID = openai.String(request.PreviousResponseID)
 	}
 	return out, nil
+}
+
+func reasoningEffort(raw string) shared.ReasoningEffort {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "none":
+		return shared.ReasoningEffortNone
+	case "minimal":
+		return shared.ReasoningEffortMinimal
+	case "low":
+		return shared.ReasoningEffortLow
+	case "medium", "":
+		return shared.ReasoningEffortMedium
+	case "high":
+		return shared.ReasoningEffortHigh
+	case "xhigh", "extra_high", "extra-high":
+		return shared.ReasoningEffortXhigh
+	default:
+		return shared.ReasoningEffortMedium
+	}
 }
 
 func fromResponse(response *Response) ModelResponse {

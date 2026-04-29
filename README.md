@@ -44,6 +44,7 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
    - Manual: `scripts/set_discord_token.sh "<discord-bot-token>"`
 6. Edit Pi-side `/home/jhein/greggpt-gtnh/deploy/env/greggpt.env`:
    - `GREGGPT_DISCORD_ALLOW_FROM` to your Discord user ID
+   - `GREGGPT_AGENT_TIMEOUT_SECONDS=300` to give mentions up to 5 minutes before a timeout fallback response
 7. `scripts/login_greggpt_oauth_on_pi.sh`
 8. `ssh jhein@100.84.87.81 'systemctl --user start greggpt-gtnh.service'`
 

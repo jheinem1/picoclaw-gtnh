@@ -197,11 +197,12 @@ func loadConfig() (Config, error) {
 	}
 
 	agentCfg := agent.Config{
-		Model:        getenv(agent.EnvModel, agent.DefaultModel),
-		Workspace:    getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
-		AuthFile:     getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
-		Timeout:      getenvDurationSeconds(agent.EnvAgentTimeout, 90*time.Second),
-		MaxToolCalls: getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
+		Model:           getenv(agent.EnvModel, agent.DefaultModel),
+		ReasoningEffort: getenv(agent.EnvReasoningEffort, agent.DefaultReasoningEffort),
+		Workspace:       getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
+		AuthFile:        getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
+		Timeout:         getenvDurationSeconds(agent.EnvAgentTimeout, 90*time.Second),
+		MaxToolCalls:    getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
 	}
 
 	cfg := Config{
@@ -787,7 +788,7 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 	if err != nil {
 		reply := strings.TrimSpace(resp.Reply)
 		if reply != "" {
-			reply += "\n\n"
+			return mentionProcessResult{Handled: true, Reply: reply, Reason: "agent_timeout_summary"}
 		}
 		reply += "GregGPT could not handle that: " + err.Error()
 		return mentionProcessResult{Handled: true, Reply: reply, Reason: "agent_error"}
@@ -1402,6 +1403,10 @@ func (r *commandAgentRunner) Run(ctx context.Context, req DiscordAgentRequest) (
 		Context: contextValues,
 	})
 	if err != nil {
+		var timeoutErr agent.TimeoutSummaryError
+		if errors.As(err, &timeoutErr) && strings.TrimSpace(timeoutErr.Summary) != "" {
+			return DiscordAgentResponse{Reply: timeoutErr.Summary}, err
+		}
 		return DiscordAgentResponse{}, err
 	}
 	return DiscordAgentResponse{Reply: text}, nil
