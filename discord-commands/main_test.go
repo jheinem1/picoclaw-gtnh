@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -155,6 +157,49 @@ func TestGregGPTMentionInventoryRoutesToAgent(t *testing.T) {
 	}
 	if got := runner.requests[0].Text; got != "how many LV circuits are in ME?" {
 		t.Fatalf("unexpected agent text: %q", got)
+	}
+}
+
+func TestGregGPTMentionSuperChestLocationUsesDirectLookup(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+if [ "$1" = "find-block" ] && [ "$2" = "--block" ] && [ "$3" = "Super Chest I" ]; then
+  cat <<'OUT'
+Block: Super Chest I
+Freshness: players: 1m old | containers: 2h old | block inventories: 30s old | ME: 5m old | blocks: never
+Block find keys=1
+- 2442:1 (Super Chest I) at (381,75,-692) dim=0
+OUT
+  exit 0
+fi
+echo unexpected "$@" >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(dir, "gtnh_inventory"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "should not run"}}
+	svc := &Service{
+		cfg:    Config{MentionAgent: true, Workspace: dir},
+		runner: runner,
+	}
+
+	result := svc.processGregGPTMention(context.Background(), discordMentionMessage{
+		Content:     "<@123> try checking where the super chest is again",
+		AuthorID:    "user",
+		ChannelID:   "channel",
+		MessageID:   "message",
+		MentionsBot: true,
+	}, nil)
+
+	if !result.Handled || result.Reason != "direct_super_chest_location" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if !strings.Contains(result.Reply, "(381,75,-692)") || !strings.Contains(result.Reply, "block inventories: 30s old") {
+		t.Fatalf("unexpected reply: %q", result.Reply)
+	}
+	if len(runner.requests) != 0 {
+		t.Fatalf("direct lookup should not call agent runner: %#v", runner.requests)
 	}
 }
 
@@ -331,7 +376,7 @@ func TestGregGPTMentionTimeoutSummaryReply(t *testing.T) {
 	}
 
 	result := svc.processGregGPTMention(context.Background(), discordMentionMessage{
-		Content:     "<@123> where is the super chest?",
+		Content:     "<@123> where are the stainless steel dusts?",
 		AuthorID:    "user",
 		ChannelID:   "channel",
 		MessageID:   "message",

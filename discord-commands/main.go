@@ -85,6 +85,8 @@ var mentionCleanupRe = regexp.MustCompile(`<@!?\d+>`)
 var discordRetryRe = regexp.MustCompile(`(?i)\b(try (that )?again|retry|run (that|it) again|same query)\b`)
 var inventoryCommandQueryRe = regexp.MustCompile(`(?i)gtnh_inventory\s+find-item\s+--query\s+"([^"]+)"(?:.*--scope\s+([a-z]+))?`)
 var inventoryScopeRe = regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`)
+var superChestMentionRe = regexp.MustCompile(`(?i)\bsuper\s+chest\b`)
+var locationIntentRe = regexp.MustCompile(`(?i)\b(where|coord|coords|coordinate|coordinates|location|located|find|checking|check)\b`)
 
 type DiscordAgentRunner interface {
 	Run(ctx context.Context, req DiscordAgentRequest) (DiscordAgentResponse, error)
@@ -756,6 +758,9 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 	if text == "" {
 		return mentionProcessResult{Reason: "empty_text"}
 	}
+	if reply, ok := s.tryDirectSuperChestLocation(ctx, text); ok {
+		return mentionProcessResult{Handled: true, Reply: reply, Reason: "direct_super_chest_location"}
+	}
 
 	var retry *InventoryRetry
 	if isInventoryRetryRequest(text) {
@@ -806,6 +811,44 @@ func discordHistoryTexts(history []discordHistoryMessage) []string {
 		texts = append(texts, msg.Content)
 	}
 	return texts
+}
+
+func (s *Service) tryDirectSuperChestLocation(ctx context.Context, text string) (string, bool) {
+	if !superChestMentionRe.MatchString(text) || !locationIntentRe.MatchString(text) {
+		return "", false
+	}
+	out, err := s.run(ctx, "sh", "gtnh_inventory", "find-block", "--block", "Super Chest I", "--limit", "5")
+	if err != nil {
+		return fmt.Sprintf("I tried the direct Super Chest lookup, but it failed:\n```text\n%s\n```", truncate(out, 1600)), true
+	}
+	reply := superChestLocationReply(out)
+	if reply == "" {
+		reply = "I ran the direct Super Chest lookup, but it did not return a location."
+	}
+	return reply, true
+}
+
+func superChestLocationReply(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	freshness := ""
+	location := ""
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Freshness:") && freshness == "" {
+			freshness = line
+		}
+		if strings.HasPrefix(line, "- ") && strings.Contains(line, "Super Chest I") && strings.Contains(line, " at ") {
+			location = strings.TrimPrefix(line, "- ")
+			break
+		}
+	}
+	if location == "" {
+		return ""
+	}
+	if freshness == "" {
+		return "Super Chest I: " + location
+	}
+	return "Super Chest I: " + location + "\n" + freshness
 }
 
 func formatDiscordHistory(history []discordHistoryMessage, includeBots bool, maxChars int) string {
