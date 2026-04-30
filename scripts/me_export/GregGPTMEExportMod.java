@@ -570,6 +570,12 @@ public final class GregGPTMEExportMod {
           return m.invoke(target, args);
         } catch (NoSuchMethodException ignored) {
         }
+        try {
+          Method m = c.getDeclaredMethod(name, types);
+          m.setAccessible(true);
+          return m.invoke(target, args);
+        } catch (NoSuchMethodException ignored) {
+        }
       }
       c = c.getSuperclass();
     }
@@ -594,6 +600,12 @@ public final class GregGPTMEExportMod {
           return f.get(target);
         } catch (NoSuchFieldException ignored) {
         }
+        try {
+          Field f = c.getDeclaredField(name);
+          f.setAccessible(true);
+          return f.get(target);
+        } catch (NoSuchFieldException ignored) {
+        }
       }
       c = c.getSuperclass();
     }
@@ -614,6 +626,13 @@ public final class GregGPTMEExportMod {
       for (String name : names) {
         try {
           Field f = c.getField(name);
+          f.setAccessible(true);
+          f.set(target, value);
+          return;
+        } catch (NoSuchFieldException ignored) {
+        }
+        try {
+          Field f = c.getDeclaredField(name);
           f.setAccessible(true);
           f.set(target, value);
           return;
