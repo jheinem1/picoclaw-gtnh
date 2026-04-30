@@ -11,7 +11,7 @@ import (
 
 var (
 	scopeEnum        = []any{"players", "chests", "containers", "me", "both", "all"}
-	refreshScopeEnum = []any{"players", "chests", "containers", "me", "blocks", "all"}
+	refreshScopeEnum = []any{"players", "chests", "containers", "me", "block-inventories", "blocks", "all"}
 	statusEnum       = []any{"todo", "doing", "paused", "done"}
 	priorityEnum     = []any{"low", "med", "high"}
 	listStatusEnum   = []any{"open", "done", "all"}
@@ -180,7 +180,17 @@ func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
 				"--dim", strconv.Itoa(intArg(a, "dim", 0)),
 			}, nil
 		}),
-		tool("inventory_find_block", GroupInventory, "Find indexed placed block locations by numeric block id/meta.", medium, object(
+		tool("inventory_find_block_name", GroupInventory, "Find indexed placed block locations by block display or registry name. Use this for placed block coordinates, for example Super Chest I.", medium, object(
+			required("block", stringSpec("Block display or registry name, for example Super Chest I or gregtech:gt.blockmachines.")),
+			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_inventory", "find-block", "--block", stringArg(a, "block")}
+			if limit := intArg(a, "limit", 0); limit > 0 {
+				argv = append(argv, "--limit", strconv.Itoa(limit))
+			}
+			return argv, nil
+		}),
+		tool("inventory_find_block", GroupInventory, "Find indexed placed block locations by numeric block id/meta. Prefer inventory_find_block_name when the user names a block such as Super Chest I.", medium, object(
 			required("id", intSpec("Numeric Minecraft block id.", 1, 65535, nil)),
 			required("meta", intSpec("Block metadata value.", 0, 65535, nil)),
 			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
