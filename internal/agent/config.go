@@ -7,7 +7,7 @@ const (
 	DefaultReasoningEffort = "medium"
 	DefaultWorkspace       = "/root/.greggpt/workspace"
 	DefaultAuthFile        = "/root/.greggpt/auth.json"
-	DefaultMaxToolCalls    = 8
+	DefaultMaxToolCalls    = 24
 	DefaultMemoryMaxBytes  = 3000
 	DefaultMemoryMaxItems  = 8
 )
