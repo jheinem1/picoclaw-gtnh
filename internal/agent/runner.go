@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -133,6 +134,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 	}
 
 	profile := ProfileForChannel(req.Channel)
+	instructions := r.runtimeInstructions(profile)
 	tools, err := r.registry.Tools(ctx)
 	if err != nil {
 		return "", err
@@ -153,7 +155,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 		resp, err := r.client.CreateResponse(ctx, ModelRequest{
 			Model:           r.cfg.Model,
 			ReasoningEffort: r.cfg.ReasoningEffort,
-			Instructions:    profile.Instructions,
+			Instructions:    instructions,
 			Input:           append([]InputItem(nil), input...),
 			Tools:           append([]ToolDefinition(nil), tools...),
 		})
@@ -199,6 +201,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 			toolCalls++
 		}
 	}
+}
+
+func (r *Runner) runtimeInstructions(profile Profile) string {
+	instructions := strings.TrimSpace(profile.Instructions)
+	raw, err := os.ReadFile(filepath.Join(r.workspacePath(), "AGENTS.md"))
+	if err != nil {
+		return instructions
+	}
+	rules := strings.TrimSpace(string(raw))
+	if rules == "" {
+		return instructions
+	}
+	if instructions == "" {
+		return rules
+	}
+	return instructions + "\n\n" + rules
 }
 
 type toolProgress struct {
@@ -336,9 +354,13 @@ func (r *Runner) memoryPath() string {
 	if filepath.IsAbs(path) {
 		return path
 	}
+	return filepath.Join(r.workspacePath(), path)
+}
+
+func (r *Runner) workspacePath() string {
 	workspace := r.cfg.Workspace
 	if workspace == "" {
 		workspace = DefaultWorkspace
 	}
-	return filepath.Join(workspace, path)
+	return workspace
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,6 +40,29 @@ func TestRunnerFinalOnly(t *testing.T) {
 	}
 	if !strings.Contains(modelReq.Input[0].Content, "channel: minecraft") {
 		t.Fatalf("request missing channel context: %q", modelReq.Input[0].Content)
+	}
+}
+
+func TestRunnerLoadsWorkspaceAgentsInstructions(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("Use inventory_find_block_name for Super Chest coordinates."), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	client := &fakeClient{responses: []ModelResponse{{FinalText: "ok"}}}
+	runner := NewRunner(Config{Workspace: workspace}, client, newFakeRegistry())
+
+	if _, err := runner.Run(context.Background(), Request{
+		Channel: ChannelDiscord,
+		Message: "where is the Super Chest?",
+	}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("expected one model request, got %d", len(client.requests))
+	}
+	instructions := client.requests[0].Instructions
+	if !strings.Contains(instructions, "Markdown is allowed") || !strings.Contains(instructions, "inventory_find_block_name") {
+		t.Fatalf("runtime instructions missing profile or AGENTS.md content: %q", instructions)
 	}
 }
 

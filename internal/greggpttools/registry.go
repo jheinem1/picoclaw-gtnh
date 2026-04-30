@@ -143,7 +143,7 @@ func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
 			argv = appendScopeAndLimit(argv, a, "all", 20)
 			return argv, nil
 		}),
-		tool("inventory_find_item", GroupInventory, "Resolve a natural-language item query and find inventory locations.", medium, object(
+		tool("inventory_find_item", GroupInventory, "Resolve a natural-language item query and find item locations in players, containers, or ME. Do not use for placed block coordinates; use inventory_find_block_name for questions like where is Super Chest I.", medium, object(
 			required("query", stringSpec("Natural-language item name.")),
 			optional("oredict", boolSpec("Resolve through the ore dictionary cache.", false)),
 			optional("scope", enumStringSpec("Lookup scope.", scopeEnum, "all")),
@@ -180,7 +180,7 @@ func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
 				"--dim", strconv.Itoa(intArg(a, "dim", 0)),
 			}, nil
 		}),
-		tool("inventory_find_block_name", GroupInventory, "Find indexed placed block locations by block display or registry name. Use this for placed block coordinates, for example Super Chest I.", medium, object(
+		tool("inventory_find_block_name", GroupInventory, "Find indexed placed block locations by block display or registry name. Use this first for placed block coordinates and questions like where is the Super Chest or where is Super Chest I.", medium, object(
 			required("block", stringSpec("Block display or registry name, for example Super Chest I or gregtech:gt.blockmachines.")),
 			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
 		), func(a Arguments) ([]string, error) {
