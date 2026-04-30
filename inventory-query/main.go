@@ -961,6 +961,14 @@ func cmdFindBlock(args []string) error {
 	}
 	fmt.Printf("Block find keys=%d\n", len(keys))
 	hits := mergeBlockHits(idx, keys)
+	if strings.TrimSpace(*block) != "" {
+		base := strings.TrimSpace(*block)
+		parts := strings.Split(base, ":")
+		if len(parts) == 3 {
+			base = strings.Join(parts[:2], ":")
+		}
+		hits = filterBlockHitsByName(hits, base)
+	}
 	if len(hits) == 0 {
 		fmt.Println("(none)")
 		return nil
@@ -1032,6 +1040,17 @@ func blockRecordMatches(b BlockHit, base, queryNorm string) bool {
 		return false
 	}
 	return normalize(b.RegName) == queryNorm || normalize(b.Name) == queryNorm
+}
+
+func filterBlockHitsByName(hits []BlockHit, base string) []BlockHit {
+	queryNorm := normalize(base)
+	out := hits[:0]
+	for _, h := range hits {
+		if blockRecordMatches(h, base, queryNorm) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func dedupeStrings(in []string) []string {

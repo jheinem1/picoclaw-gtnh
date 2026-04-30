@@ -130,6 +130,17 @@ func TestMergeBlockHits(t *testing.T) {
 	}
 }
 
+func TestFilterBlockHitsByName_DisambiguatesSharedGregTechBlockKey(t *testing.T) {
+	hits := []BlockHit{
+		{ID: 2442, Meta: 1, Name: "Basic Miner"},
+		{ID: 2442, Meta: 1, Name: "Super Chest I"},
+	}
+	got := filterBlockHitsByName(hits, "Super Chest I")
+	if len(got) != 1 || got[0].Name != "Super Chest I" {
+		t.Fatalf("unexpected filtered hits: %#v", got)
+	}
+}
+
 func TestCmdChest_ExportedBlockInventory(t *testing.T) {
 	ws := writeTestWorkspace(t)
 	t.Setenv("GTNH_WORKSPACE", ws)

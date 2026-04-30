@@ -2443,7 +2443,7 @@ func main() {
 				stats.ChestCount = len(chests)
 				stats.ChestStacks = countChestStacks(chests)
 				stats.BlockCount = len(blocks)
-				if len(b) > 0 && blockStatus.Reason == "block scan requires INVENTORY_BLOCK_BOUNDS or INVENTORY_BLOCK_ALLOWLIST" {
+				if len(b) > 0 && !blockStatus.Enabled {
 					blockStatus.Reason = "block scan disabled; using exported inventory block positions"
 				}
 			}
