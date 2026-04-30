@@ -15,12 +15,17 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 @Mod(
     modid = "greggpt_me_export",
@@ -29,9 +34,25 @@ import java.util.TimeZone;
     acceptableRemoteVersions = "*"
 )
 public final class GregGPTMEExportMod {
-  private static final long DEFAULT_INTERVAL_TICKS = 20L * 60L * 5L;
-  private static long nextDumpTick = 0L;
+  private static final long DEFAULT_INTERVAL_SECONDS = 300L;
+  private static final Object CACHE_MISS = new Object();
+  private static final Map<String, Object> CLASS_CACHE = new HashMap<String, Object>();
+  private static final Map<String, Object> METHOD_CACHE = new HashMap<String, Object>();
+  private static final Map<String, Object> FIELD_CACHE = new HashMap<String, Object>();
+  private static final ExecutorService WRITER =
+      Executors.newSingleThreadExecutor(
+          new ThreadFactory() {
+            public Thread newThread(Runnable r) {
+              Thread t = new Thread(r, "GregGPT ME Export Writer");
+              t.setDaemon(true);
+              return t;
+            }
+          });
+
+  private static long nextMETick = 0L;
+  private static long nextBlockInventoryTick = 0L;
   private static long tickCounter = 0L;
+  private static BlockInventoryJob blockInventoryJob = null;
 
   public GregGPTMEExportMod() {
     FMLCommonHandler.instance().bus().register(this);
@@ -43,44 +64,80 @@ public final class GregGPTMEExportMod {
       return;
     }
     tickCounter++;
-    if (tickCounter < nextDumpTick) {
+    Object server = null;
+
+    if (boolProperty("greggpt.me_export_enabled", true) && tickCounter >= nextMETick) {
+      nextMETick = tickCounter + intervalTicks("greggpt.me_export_interval_seconds", DEFAULT_INTERVAL_SECONDS);
+      try {
+        server = serverInstance();
+        writeMEDump(server);
+      } catch (Throwable t) {
+        System.out.println("[GREGGPT-ME] export failed: " + t);
+        t.printStackTrace(System.out);
+      }
+    }
+
+    if (!boolProperty("greggpt.block_inventory_export_enabled", true)) {
+      blockInventoryJob = null;
       return;
     }
-    nextDumpTick = tickCounter + intervalTicks();
+
     try {
-      Object server =
-          invokeAny(
-              FMLCommonHandler.instance(),
-              new String[] {"getMinecraftServerInstance"},
-              new Class[0],
-              new Object[0]);
-      writeDump(server);
+      if (blockInventoryJob == null && tickCounter >= nextBlockInventoryTick) {
+        nextBlockInventoryTick =
+            tickCounter + intervalTicks("greggpt.block_inventory_export_interval_seconds", DEFAULT_INTERVAL_SECONDS);
+        if (server == null) {
+          server = serverInstance();
+        }
+        blockInventoryJob = startBlockInventoryJob(server);
+      }
+      if (blockInventoryJob != null && blockInventoryJob.processTick()) {
+        blockInventoryJob.finish();
+        blockInventoryJob = null;
+      }
     } catch (Throwable t) {
-      System.out.println("[GREGGPT-ME] export failed: " + t);
+      blockInventoryJob = null;
+      System.out.println("[PICOCLAW-BLOCKINV] export failed: " + t);
       t.printStackTrace(System.out);
     }
   }
 
-  private static long intervalTicks() {
-    String raw = System.getProperty("greggpt.me_export_interval_seconds", "30");
+  private static Object serverInstance() throws Exception {
+    return invokeAny(
+        FMLCommonHandler.instance(),
+        new String[] {"getMinecraftServerInstance"},
+        new Class[0],
+        new Object[0]);
+  }
+
+  private static boolean boolProperty(String name, boolean defaultValue) {
+    String raw = System.getProperty(name);
+    if (raw == null) {
+      return defaultValue;
+    }
+    return Boolean.parseBoolean(raw);
+  }
+
+  private static long intervalTicks(String propertyName, long defaultSeconds) {
+    String raw = System.getProperty(propertyName, String.valueOf(defaultSeconds));
     try {
       long seconds = Long.parseLong(raw);
-      if (seconds < 30L) {
-        seconds = 30L;
+      if (seconds < 1L) {
+        seconds = 1L;
       }
       return seconds * 20L;
     } catch (NumberFormatException ignored) {
-      return DEFAULT_INTERVAL_TICKS;
+      return defaultSeconds * 20L;
     }
   }
 
-  private static void writeDump(Object server) throws Exception {
-    writeMEDump(server);
+  private static int intProperty(String propertyName, int defaultValue, int minValue) {
+    String raw = System.getProperty(propertyName, String.valueOf(defaultValue));
     try {
-      writeBlockInventoryDump(server);
-    } catch (Throwable t) {
-      System.out.println("[PICOCLAW-BLOCKINV] export failed: " + t);
-      t.printStackTrace(System.out);
+      int value = Integer.parseInt(raw);
+      return value < minValue ? minValue : value;
+    } catch (NumberFormatException ignored) {
+      return defaultValue;
     }
   }
 
@@ -89,103 +146,166 @@ public final class GregGPTMEExportMod {
       return;
     }
     File out = outputFile(server);
+    String json = buildMEJson(server);
+    submitWrite(out, json, "[GREGGPT-ME]", "wrote " + out.getAbsolutePath());
+  }
+
+  private static String buildMEJson(Object server) throws Exception {
+    StringWriter out = new StringWriter();
+    PrintWriter w = new PrintWriter(out);
+    w.print("{\"generated_at\":\"");
+    w.print(escape(nowUTC()));
+    w.print("\",\"networks\":[");
+    boolean firstNetwork = true;
+    IdentityHashMap<Object, Boolean> seenGrids = new IdentityHashMap<Object, Boolean>();
+    Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
+    for (Object world : worlds) {
+      if (world == null) {
+        continue;
+      }
+      Object loaded = getField(world, "loadedTileEntityList", "field_147482_g");
+      if (!(loaded instanceof Iterable)) {
+        continue;
+      }
+      for (Object te : (Iterable<?>) loaded) {
+        Object grid = findGrid(te);
+        if (grid == null || seenGrids.containsKey(grid)) {
+          continue;
+        }
+        seenGrids.put(grid, Boolean.TRUE);
+        Iterable<?> items = storageList(grid);
+        if (items == null) {
+          continue;
+        }
+        if (!firstNetwork) {
+          w.print(',');
+        }
+        firstNetwork = false;
+        writeNetwork(w, grid, te, items);
+      }
+    }
+    w.print("]}");
+    w.flush();
+    return out.toString();
+  }
+
+  private static void submitWrite(final File out, final String json, final String logPrefix, final String successMessage) {
+    WRITER.submit(
+        new Runnable() {
+          public void run() {
+            try {
+              writeJsonFile(out, json);
+              System.out.println(logPrefix + " " + successMessage);
+            } catch (Throwable t) {
+              System.out.println(logPrefix + " write failed: " + t);
+              t.printStackTrace(System.out);
+            }
+          }
+        });
+  }
+
+  private static void writeJsonFile(File out, String json) throws Exception {
     File tmp = new File(out.getParentFile(), out.getName() + ".tmp");
     if (!out.getParentFile().exists() && !out.getParentFile().mkdirs()) {
       throw new IllegalStateException("failed to create " + out.getParentFile());
     }
 
-    PrintWriter w = new PrintWriter(new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8));
+    PrintWriter w =
+        new PrintWriter(new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8));
     try {
-      w.print("{\"generated_at\":\"");
-      w.print(escape(nowUTC()));
-      w.print("\",\"networks\":[");
-      boolean firstNetwork = true;
-      IdentityHashMap<Object, Boolean> seenGrids = new IdentityHashMap<Object, Boolean>();
-      Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
-      for (Object world : worlds) {
-        if (world == null) {
-          continue;
-        }
-        Object loaded = getField(world, "loadedTileEntityList", "field_147482_g");
-        if (!(loaded instanceof Iterable)) {
-          continue;
-        }
-        for (Object te : (Iterable<?>) loaded) {
-          Object grid = findGrid(te);
-          if (grid == null || seenGrids.containsKey(grid)) {
-            continue;
-          }
-          seenGrids.put(grid, Boolean.TRUE);
-          Iterable<?> items = storageList(grid);
-          if (items == null) {
-            continue;
-          }
-          if (!firstNetwork) {
-            w.print(',');
-          }
-          firstNetwork = false;
-          writeNetwork(w, grid, te, items);
-        }
-      }
-      w.print("]}");
+      w.print(json);
     } finally {
       w.close();
     }
     if (!tmp.renameTo(out)) {
       throw new IllegalStateException("failed to rename " + tmp + " to " + out);
     }
-    System.out.println("[GREGGPT-ME] wrote " + out.getAbsolutePath());
   }
 
-  private static void writeBlockInventoryDump(Object server) throws Exception {
+  private static BlockInventoryJob startBlockInventoryJob(Object server) throws Exception {
     if (server == null) {
-      return;
+      return null;
     }
     File out = blockInventoryOutputFile(server);
-    File tmp = new File(out.getParentFile(), out.getName() + ".tmp");
-    if (!out.getParentFile().exists() && !out.getParentFile().mkdirs()) {
-      throw new IllegalStateException("failed to create " + out.getParentFile());
+    List<Object> tiles = new ArrayList<Object>();
+    Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
+    for (Object world : worlds) {
+      if (world == null) {
+        continue;
+      }
+      Object loaded = getField(world, "loadedTileEntityList", "field_147482_g");
+      if (!(loaded instanceof Iterable)) {
+        continue;
+      }
+      for (Object te : (Iterable<?>) loaded) {
+        tiles.add(te);
+      }
+    }
+    return new BlockInventoryJob(out, tiles, nowUTC());
+  }
+
+  private static final class BlockInventoryJob {
+    private final File out;
+    private final List<Object> tiles;
+    private final String generatedAt;
+    private final int tilesPerTick;
+    private final long budgetNanos;
+    private final List<String> rows = new ArrayList<String>();
+    private int index = 0;
+    private int recordCount = 0;
+    private int itemCount = 0;
+
+    BlockInventoryJob(File out, List<Object> tiles, String generatedAt) {
+      this.out = out;
+      this.tiles = tiles;
+      this.generatedAt = generatedAt;
+      this.tilesPerTick = intProperty("greggpt.block_inventory_tiles_per_tick", 2, 1);
+      this.budgetNanos = (long) intProperty("greggpt.block_inventory_budget_ms", 2, 1) * 1000000L;
     }
 
-    int recordCount = 0;
-    int itemCount = 0;
-    PrintWriter w = new PrintWriter(new OutputStreamWriter(new FileOutputStream(tmp), StandardCharsets.UTF_8));
-    try {
-      w.print("{\"generated_at\":\"");
-      w.print(escape(nowUTC()));
-      w.print("\",\"inventories\":[");
-      boolean firstRecord = true;
-      Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
-      for (Object world : worlds) {
-        if (world == null) {
-          continue;
+    boolean processTick() {
+      long started = System.nanoTime();
+      int processed = 0;
+      while (index < tiles.size() && processed < tilesPerTick) {
+        if (processed > 0 && System.nanoTime() - started >= budgetNanos) {
+          break;
         }
-        Object loaded = getField(world, "loadedTileEntityList", "field_147482_g");
-        if (!(loaded instanceof Iterable)) {
-          continue;
-        }
-        for (Object te : (Iterable<?>) loaded) {
+        Object te = tiles.get(index++);
+        processed++;
+        try {
           List<String> items = collectBlockInventoryItems(te);
           if (items.isEmpty() && !isInventoryTile(te)) {
             continue;
           }
-          if (!firstRecord) {
-            w.print(',');
-          }
-          firstRecord = false;
-          writeBlockInventoryRecord(w, te, items);
+          rows.add(blockInventoryRecordJson(te, items));
           recordCount++;
           itemCount += items.size();
+        } catch (Throwable t) {
+          System.out.println("[PICOCLAW-BLOCKINV] tile export failed: " + t);
+          t.printStackTrace(System.out);
         }
       }
-      w.print("]}");
-    } finally {
-      w.close();
+      return index >= tiles.size();
     }
-    if (!tmp.renameTo(out)) {
-      throw new IllegalStateException("failed to rename " + tmp + " to " + out);
+
+    void finish() {
+      StringBuilder json = new StringBuilder(rows.size() * 256 + 64);
+      json.append("{\"generated_at\":\"");
+      json.append(escape(generatedAt));
+      json.append("\",\"inventories\":[");
+      for (int i = 0; i < rows.size(); i++) {
+        if (i > 0) {
+          json.append(',');
+        }
+        json.append(rows.get(i));
+      }
+      json.append("]}");
+      submitWrite(
+          out,
+          json.toString(),
+          "[PICOCLAW-BLOCKINV]",
+          "wrote " + out.getAbsolutePath() + " count=" + recordCount + " items=" + itemCount);
     }
-    System.out.println("[PICOCLAW-BLOCKINV] wrote " + out.getAbsolutePath() + " count=" + recordCount + " items=" + itemCount);
   }
 
   private static File outputFile(Object server) throws Exception {
@@ -260,12 +380,20 @@ public final class GregGPTMEExportMod {
     w.print("]}");
   }
 
+  private static String blockInventoryRecordJson(Object te, List<String> itemRows) {
+    StringWriter out = new StringWriter();
+    PrintWriter w = new PrintWriter(out);
+    writeBlockInventoryRecord(w, te, itemRows);
+    w.flush();
+    return out.toString();
+  }
+
   private static List<String> collectBlockInventoryItems(Object te) {
     List<String> out = new ArrayList<String>();
     Set<String> seen = new LinkedHashSet<String>();
 
     try {
-      Class<?> iinv = Class.forName("net.minecraft.inventory.IInventory");
+      Class<?> iinv = classForName("net.minecraft.inventory.IInventory");
       if (iinv.isInstance(te)) {
         int size = intInvoke(te, "getSizeInventory", "func_70302_i_");
         for (int slot = 0; slot < size; slot++) {
@@ -290,7 +418,7 @@ public final class GregGPTMEExportMod {
 
   private static boolean isInventoryTile(Object te) {
     try {
-      Class<?> iinv = Class.forName("net.minecraft.inventory.IInventory");
+      Class<?> iinv = classForName("net.minecraft.inventory.IInventory");
       if (iinv.isInstance(te)) {
         return true;
       }
@@ -360,7 +488,7 @@ public final class GregGPTMEExportMod {
     try {
       Object node = null;
       try {
-        Class<?> forgeDirection = Class.forName("net.minecraftforge.common.util.ForgeDirection");
+        Class<?> forgeDirection = classForName("net.minecraftforge.common.util.ForgeDirection");
         node = invokeAny(te, new String[] {"getGridNode"}, new Class[] {forgeDirection}, new Object[] {null});
       } catch (Throwable ignored) {
       }
@@ -378,7 +506,7 @@ public final class GregGPTMEExportMod {
 
   private static Iterable<?> storageList(Object grid) {
     try {
-      Class<?> storageGridClass = Class.forName("appeng.api.networking.storage.IStorageGrid");
+      Class<?> storageGridClass = classForName("appeng.api.networking.storage.IStorageGrid");
       Object storageGrid = invokeAny(grid, new String[] {"getCache"}, new Class[] {Class.class}, new Object[] {storageGridClass});
       if (storageGrid == null) {
         return null;
@@ -560,21 +688,112 @@ public final class GregGPTMEExportMod {
     return copy;
   }
 
+  private static Class<?> classForName(String name) throws ClassNotFoundException {
+    synchronized (CLASS_CACHE) {
+      Object cached = CLASS_CACHE.get(name);
+      if (cached == CACHE_MISS) {
+        throw new ClassNotFoundException(name);
+      }
+      if (cached instanceof Class) {
+        return (Class<?>) cached;
+      }
+    }
+    try {
+      Class<?> c = Class.forName(name);
+      synchronized (CLASS_CACHE) {
+        CLASS_CACHE.put(name, c);
+      }
+      return c;
+    } catch (ClassNotFoundException e) {
+      synchronized (CLASS_CACHE) {
+        CLASS_CACHE.put(name, CACHE_MISS);
+      }
+      throw e;
+    }
+  }
+
+  private static Method findMethod(Class<?> c, String name, Class[] types) {
+    String key = memberKey(c, name, types);
+    synchronized (METHOD_CACHE) {
+      Object cached = METHOD_CACHE.get(key);
+      if (cached == CACHE_MISS) {
+        return null;
+      }
+      if (cached instanceof Method) {
+        return (Method) cached;
+      }
+    }
+    Method m = null;
+    try {
+      m = c.getMethod(name, types);
+    } catch (NoSuchMethodException ignored) {
+      try {
+        m = c.getDeclaredMethod(name, types);
+      } catch (NoSuchMethodException ignoredToo) {
+      }
+    }
+    synchronized (METHOD_CACHE) {
+      if (m == null) {
+        METHOD_CACHE.put(key, CACHE_MISS);
+      } else {
+        m.setAccessible(true);
+        METHOD_CACHE.put(key, m);
+      }
+    }
+    return m;
+  }
+
+  private static Field findField(Class<?> c, String name) {
+    String key = c.getName() + "#" + name;
+    synchronized (FIELD_CACHE) {
+      Object cached = FIELD_CACHE.get(key);
+      if (cached == CACHE_MISS) {
+        return null;
+      }
+      if (cached instanceof Field) {
+        return (Field) cached;
+      }
+    }
+    Field f = null;
+    try {
+      f = c.getField(name);
+    } catch (NoSuchFieldException ignored) {
+      try {
+        f = c.getDeclaredField(name);
+      } catch (NoSuchFieldException ignoredToo) {
+      }
+    }
+    synchronized (FIELD_CACHE) {
+      if (f == null) {
+        FIELD_CACHE.put(key, CACHE_MISS);
+      } else {
+        f.setAccessible(true);
+        FIELD_CACHE.put(key, f);
+      }
+    }
+    return f;
+  }
+
+  private static String memberKey(Class<?> c, String name, Class[] types) {
+    StringBuilder b = new StringBuilder(c.getName());
+    b.append('#').append(name).append('(');
+    for (int i = 0; i < types.length; i++) {
+      if (i > 0) {
+        b.append(',');
+      }
+      b.append(types[i] == null ? "null" : types[i].getName());
+    }
+    b.append(')');
+    return b.toString();
+  }
+
   private static Object invokeAny(Object target, String[] names, Class[] types, Object[] args) throws Exception {
     Class<?> c = target.getClass();
     while (c != null) {
       for (String name : names) {
-        try {
-          Method m = c.getMethod(name, types);
-          m.setAccessible(true);
+        Method m = findMethod(c, name, types);
+        if (m != null) {
           return m.invoke(target, args);
-        } catch (NoSuchMethodException ignored) {
-        }
-        try {
-          Method m = c.getDeclaredMethod(name, types);
-          m.setAccessible(true);
-          return m.invoke(target, args);
-        } catch (NoSuchMethodException ignored) {
         }
       }
       c = c.getSuperclass();
@@ -594,17 +813,9 @@ public final class GregGPTMEExportMod {
     Class<?> c = target.getClass();
     while (c != null) {
       for (String name : names) {
-        try {
-          Field f = c.getField(name);
-          f.setAccessible(true);
+        Field f = findField(c, name);
+        if (f != null) {
           return f.get(target);
-        } catch (NoSuchFieldException ignored) {
-        }
-        try {
-          Field f = c.getDeclaredField(name);
-          f.setAccessible(true);
-          return f.get(target);
-        } catch (NoSuchFieldException ignored) {
         }
       }
       c = c.getSuperclass();
@@ -624,19 +835,10 @@ public final class GregGPTMEExportMod {
     Class<?> c = target.getClass();
     while (c != null) {
       for (String name : names) {
-        try {
-          Field f = c.getField(name);
-          f.setAccessible(true);
+        Field f = findField(c, name);
+        if (f != null) {
           f.set(target, value);
           return;
-        } catch (NoSuchFieldException ignored) {
-        }
-        try {
-          Field f = c.getDeclaredField(name);
-          f.setAccessible(true);
-          f.set(target, value);
-          return;
-        } catch (NoSuchFieldException ignored) {
         }
       }
       c = c.getSuperclass();
@@ -670,10 +872,10 @@ public final class GregGPTMEExportMod {
 
   private static Object uniqueIdentifier(Object item) {
     try {
-      Class<?> itemClass = Class.forName("net.minecraft.item.Item");
-      Class<?> registry = Class.forName("cpw.mods.fml.common.registry.GameRegistry");
-      Method m = registry.getMethod("findUniqueIdentifierFor", itemClass);
-      return m.invoke(null, item);
+      Class<?> itemClass = classForName("net.minecraft.item.Item");
+      Class<?> registry = classForName("cpw.mods.fml.common.registry.GameRegistry");
+      Method m = findMethod(registry, "findUniqueIdentifierFor", new Class[] {itemClass});
+      return m != null ? m.invoke(null, item) : null;
     } catch (Throwable ignored) {
       return null;
     }
@@ -681,10 +883,10 @@ public final class GregGPTMEExportMod {
 
   private static Object uniqueIdentifierForBlock(Object block) {
     try {
-      Class<?> blockClass = Class.forName("net.minecraft.block.Block");
-      Class<?> registry = Class.forName("cpw.mods.fml.common.registry.GameRegistry");
-      Method m = registry.getMethod("findUniqueIdentifierFor", blockClass);
-      return m.invoke(null, block);
+      Class<?> blockClass = classForName("net.minecraft.block.Block");
+      Class<?> registry = classForName("cpw.mods.fml.common.registry.GameRegistry");
+      Method m = findMethod(registry, "findUniqueIdentifierFor", new Class[] {blockClass});
+      return m != null ? m.invoke(null, block) : null;
     } catch (Throwable ignored) {
       return null;
     }
@@ -692,12 +894,13 @@ public final class GregGPTMEExportMod {
 
   private static int itemID(Object item) {
     try {
-      Class<?> itemClass = Class.forName("net.minecraft.item.Item");
-      Method m;
-      try {
-        m = itemClass.getMethod("getIdFromItem", itemClass);
-      } catch (NoSuchMethodException ignored) {
-        m = itemClass.getMethod("func_150891_b", itemClass);
+      Class<?> itemClass = classForName("net.minecraft.item.Item");
+      Method m = findMethod(itemClass, "getIdFromItem", new Class[] {itemClass});
+      if (m == null) {
+        m = findMethod(itemClass, "func_150891_b", new Class[] {itemClass});
+      }
+      if (m == null) {
+        return 0;
       }
       Object v = m.invoke(null, item);
       return v instanceof Number ? ((Number) v).intValue() : 0;
@@ -723,12 +926,13 @@ public final class GregGPTMEExportMod {
       return 0;
     }
     try {
-      Class<?> blockClass = Class.forName("net.minecraft.block.Block");
-      Method m;
-      try {
-        m = blockClass.getMethod("getIdFromBlock", blockClass);
-      } catch (NoSuchMethodException ignored) {
-        m = blockClass.getMethod("func_149682_b", blockClass);
+      Class<?> blockClass = classForName("net.minecraft.block.Block");
+      Method m = findMethod(blockClass, "getIdFromBlock", new Class[] {blockClass});
+      if (m == null) {
+        m = findMethod(blockClass, "func_149682_b", new Class[] {blockClass});
+      }
+      if (m == null) {
+        return 0;
       }
       Object v = m.invoke(null, block);
       return v instanceof Number ? ((Number) v).intValue() : 0;
@@ -751,14 +955,14 @@ public final class GregGPTMEExportMod {
 
   private static String inventorySource(Object te) {
     try {
-      Class<?> sided = Class.forName("net.minecraft.inventory.ISidedInventory");
+      Class<?> sided = classForName("net.minecraft.inventory.ISidedInventory");
       if (sided.isInstance(te)) {
         return "ISidedInventory";
       }
     } catch (Throwable ignored) {
     }
     try {
-      Class<?> inv = Class.forName("net.minecraft.inventory.IInventory");
+      Class<?> inv = classForName("net.minecraft.inventory.IInventory");
       if (inv.isInstance(te)) {
         return "IInventory";
       }

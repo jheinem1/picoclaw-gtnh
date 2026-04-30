@@ -34,8 +34,11 @@ type Config struct {
 	PlayersInterval    time.Duration
 	ChestsInterval     time.Duration
 	MEInterval         time.Duration
+	MEStaleAfter       time.Duration
 	MEExportPaths      []string
+	QuestsInterval     time.Duration
 	BlockInvInterval   time.Duration
+	BlockInvStaleAfter time.Duration
 	BlockInvPaths      []string
 	BlocksInterval     time.Duration
 	HTTPTimeout        time.Duration
@@ -69,11 +72,14 @@ type BlockBounds struct {
 }
 
 type RuntimeState struct {
-	LastPlayersScan  string `json:"last_players_scan"`
-	LastChestsScan   string `json:"last_chests_scan"`
-	LastMEScan       string `json:"last_me_scan"`
-	LastBlockInvScan string `json:"last_block_inventories_scan"`
-	LastBlocksScan   string `json:"last_blocks_scan"`
+	LastPlayersScan     string `json:"last_players_scan"`
+	LastChestsScan      string `json:"last_chests_scan"`
+	LastMEScan          string `json:"last_me_scan"`
+	LastMEAttempt       string `json:"last_me_fetch_attempt,omitempty"`
+	LastQuestsScan      string `json:"last_quests_scan"`
+	LastBlockInvScan    string `json:"last_block_inventories_scan"`
+	LastBlockInvAttempt string `json:"last_block_inventories_fetch_attempt,omitempty"`
+	LastBlocksScan      string `json:"last_blocks_scan"`
 }
 
 type RefreshRequest struct {
@@ -322,8 +328,11 @@ func loadConfig() (Config, error) {
 		PlayersInterval:    time.Duration(max(60, getenvInt("INVENTORY_PLAYERS_INTERVAL_SECONDS", 600))) * time.Second,
 		ChestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_CHESTS_INTERVAL_SECONDS", 21600))) * time.Second,
 		MEInterval:         time.Duration(max(60, getenvInt("INVENTORY_ME_INTERVAL_SECONDS", 300))) * time.Second,
+		MEStaleAfter:       time.Duration(max(1, getenvInt("INVENTORY_ME_STALE_AFTER_SECONDS", 900))) * time.Second,
 		MEExportPaths:      parseCSV(getenv("INVENTORY_ME_EXPORT_PATHS", "world/greggpt/me_index.json,world/picoclaw/me_index.json")),
+		QuestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_QUESTS_INTERVAL_SECONDS", 1800))) * time.Second,
 		BlockInvInterval:   time.Duration(max(60, getenvInt("INVENTORY_BLOCK_INVENTORIES_INTERVAL_SECONDS", 300))) * time.Second,
+		BlockInvStaleAfter: time.Duration(max(1, getenvInt("INVENTORY_BLOCK_INVENTORIES_STALE_AFTER_SECONDS", 900))) * time.Second,
 		BlockInvPaths:      parseCSV(getenv("INVENTORY_BLOCK_INVENTORY_EXPORT_PATHS", "world/picoclaw/block_inventories.json,world/greggpt/block_inventories.json")),
 		BlocksInterval:     time.Duration(max(300, getenvInt("INVENTORY_BLOCKS_INTERVAL_SECONDS", 86400))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
@@ -495,6 +504,23 @@ func parseRFC3339(v string) time.Time {
 	return t
 }
 
+func dueSince(last string, now time.Time, interval time.Duration) bool {
+	t := parseRFC3339(last)
+	return t.IsZero() || now.Sub(t) >= interval
+}
+
+func fetchDue(lastAttempt, lastScan string, now time.Time, interval time.Duration) bool {
+	if strings.TrimSpace(lastAttempt) != "" {
+		return dueSince(lastAttempt, now, interval)
+	}
+	return dueSince(lastScan, now, interval)
+}
+
+func sourceIsStale(scanAt string, now time.Time, staleAfter time.Duration) bool {
+	t := parseRFC3339(scanAt)
+	return t.IsZero() || now.Sub(t) > staleAfter
+}
+
 func statePath(workDir, base, name string) string {
 	if filepath.IsAbs(base) {
 		return base
@@ -565,7 +591,7 @@ func loadRefreshRequest(path string) (RefreshRequest, bool) {
 		return RefreshRequest{}, false
 	}
 	s := strings.ToLower(strings.TrimSpace(req.Scope))
-	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "block-inventories" && s != "block_inventories" && s != "blocks" && s != "all" {
+	if s != "players" && s != "chests" && s != "containers" && s != "me" && s != "quests" && s != "block-inventories" && s != "block_inventories" && s != "blocks" && s != "all" {
 		req.Scope = "all"
 	} else if s == "containers" {
 		req.Scope = "chests"
@@ -2286,15 +2312,17 @@ func main() {
 	stateFile := cfg.StateFile
 	indexFile := filepath.Join(cfg.WorkDir, "state", "inventory_index.json")
 	statusFile := filepath.Join(cfg.WorkDir, "state", "inventory_status.json")
+	questIndexFile := filepath.Join(cfg.WorkDir, "state", "quest_index.json")
+	questStatusFile := filepath.Join(cfg.WorkDir, "state", "quest_status.json")
 	refreshFile := filepath.Join(cfg.WorkDir, "state", "inventory_refresh.json")
 
 	client := &http.Client{Timeout: cfg.HTTPTimeout + 3*time.Second}
 	state := loadRuntimeState(stateFile)
 
 	if cfg.ChestBounds != nil {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s block_inventory_interval=%s blocks_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlockInvInterval, cfg.BlocksInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s quests_interval=%s block_inventory_interval=%s blocks_interval=%s chest_bounds=%d,%d,%d,%d,%d", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.QuestsInterval, cfg.BlockInvInterval, cfg.BlocksInterval, cfg.ChestBounds.Dim, cfg.ChestBounds.MinX, cfg.ChestBounds.MinZ, cfg.ChestBounds.MaxX, cfg.ChestBounds.MaxZ)
 	} else {
-		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s block_inventory_interval=%s blocks_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.BlockInvInterval, cfg.BlocksInterval)
+		log.Printf("event=inventory_startup_ok enabled=%t workdir=%q state_file=%q players_interval=%s chests_interval=%s me_interval=%s quests_interval=%s block_inventory_interval=%s blocks_interval=%s", cfg.Enabled, cfg.WorkDir, stateFile, cfg.PlayersInterval, cfg.ChestsInterval, cfg.MEInterval, cfg.QuestsInterval, cfg.BlockInvInterval, cfg.BlocksInterval)
 	}
 
 	for {
@@ -2304,11 +2332,12 @@ func main() {
 		}
 
 		now := time.Now().UTC()
-		playersDue := parseRFC3339(state.LastPlayersScan).IsZero() || now.Sub(parseRFC3339(state.LastPlayersScan)) >= cfg.PlayersInterval
-		chestsDue := parseRFC3339(state.LastChestsScan).IsZero() || now.Sub(parseRFC3339(state.LastChestsScan)) >= cfg.ChestsInterval
-		meDue := parseRFC3339(state.LastMEScan).IsZero() || now.Sub(parseRFC3339(state.LastMEScan)) >= cfg.MEInterval
-		blockInvDue := parseRFC3339(state.LastBlockInvScan).IsZero() || now.Sub(parseRFC3339(state.LastBlockInvScan)) >= cfg.BlockInvInterval
-		blocksDue := (cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0) && (parseRFC3339(state.LastBlocksScan).IsZero() || now.Sub(parseRFC3339(state.LastBlocksScan)) >= cfg.BlocksInterval)
+		playersDue := dueSince(state.LastPlayersScan, now, cfg.PlayersInterval)
+		chestsDue := dueSince(state.LastChestsScan, now, cfg.ChestsInterval)
+		meDue := fetchDue(state.LastMEAttempt, state.LastMEScan, now, cfg.MEInterval)
+		questsDue := dueSince(state.LastQuestsScan, now, cfg.QuestsInterval)
+		blockInvDue := fetchDue(state.LastBlockInvAttempt, state.LastBlockInvScan, now, cfg.BlockInvInterval)
+		blocksDue := (cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0) && dueSince(state.LastBlocksScan, now, cfg.BlocksInterval)
 
 		refreshReq, hasRefresh := loadRefreshRequest(refreshFile)
 		if hasRefresh {
@@ -2319,6 +2348,8 @@ func main() {
 				chestsDue = true
 			case "me":
 				meDue = true
+			case "quests":
+				questsDue = true
 			case "block-inventories":
 				blockInvDue = true
 			case "blocks":
@@ -2327,12 +2358,13 @@ func main() {
 				playersDue = true
 				chestsDue = true
 				meDue = true
+				questsDue = true
 				blockInvDue = true
 				blocksDue = cfg.BlockBounds != nil || len(cfg.BlockAllowlist) > 0
 			}
 		}
 
-		if !playersDue && !chestsDue && !meDue && !blockInvDue && !blocksDue {
+		if !playersDue && !chestsDue && !meDue && !questsDue && !blockInvDue && !blocksDue {
 			time.Sleep(cfg.LoopSleep)
 			continue
 		}
@@ -2397,10 +2429,15 @@ func main() {
 		}
 
 		if meDue {
+			attemptAt := nowUTC()
+			state.LastMEAttempt = attemptAt
 			networks, meScanAt, meStacks, err := scanME(client, cfg)
 			if err != nil {
 				errorsMap["me"] = err.Error()
 				log.Printf("event=inventory_me_scan_error err=%q", err.Error())
+			} else if sourceIsStale(meScanAt, now, cfg.MEStaleAfter) {
+				errorsMap["me"] = fmt.Sprintf("stale ME export generated_at=%s stale_after=%s", meScanAt, cfg.MEStaleAfter)
+				log.Printf("event=inventory_me_scan_stale generated_at=%q stale_after=%s", meScanAt, cfg.MEStaleAfter)
 			} else {
 				me = networks
 				state.LastMEScan = meScanAt
@@ -2408,6 +2445,23 @@ func main() {
 				source.MEVersion++
 				stats.MENetworkCount = len(me)
 				stats.MEStacks = meStacks
+			}
+		}
+
+		if questsDue {
+			questIndex, err := scanQuests(client, cfg, source.DatHostSyncAt)
+			if err != nil {
+				errorsMap["quests"] = err.Error()
+				log.Printf("event=inventory_quests_scan_error err=%q", err.Error())
+			} else {
+				state.LastQuestsScan = questIndex.Source.QuestsScanAt
+				if err := atomicWriteJSON(questIndexFile, questIndex); err != nil {
+					log.Printf("event=quest_index_write_error file=%q err=%q", questIndexFile, err.Error())
+					errorsMap["quest_index_write"] = err.Error()
+				}
+				if err := atomicWriteJSON(questStatusFile, statusFromQuestIndex(questIndex, nil)); err != nil {
+					log.Printf("event=quest_status_write_error file=%q err=%q", questStatusFile, err.Error())
+				}
 			}
 		}
 
@@ -2428,10 +2482,15 @@ func main() {
 		}
 
 		if blockInvDue {
+			attemptAt := nowUTC()
+			state.LastBlockInvAttempt = attemptAt
 			c, b, blockInvScanAt, blockInvStacks, err := scanBlockInventories(client, cfg)
 			if err != nil {
 				errorsMap["block_inventories"] = err.Error()
 				log.Printf("event=inventory_block_inventories_scan_error err=%q", err.Error())
+			} else if sourceIsStale(blockInvScanAt, now, cfg.BlockInvStaleAfter) {
+				errorsMap["block_inventories"] = fmt.Sprintf("stale block inventory export generated_at=%s stale_after=%s", blockInvScanAt, cfg.BlockInvStaleAfter)
+				log.Printf("event=inventory_block_inventories_scan_stale generated_at=%q stale_after=%s", blockInvScanAt, cfg.BlockInvStaleAfter)
 			} else {
 				chests = mergeChestRecords(chests, c, "block_export")
 				blocks = mergeBlockRecords(blocks, b)
@@ -2462,10 +2521,10 @@ func main() {
 			Stats:       index.Stats,
 			BlockStatus: index.BlockStatus,
 			Stale: map[string]bool{
-				"players":           parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
-				"chests":            parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
-				"me":                parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
-				"block_inventories": parseRFC3339(index.Source.BlockInvScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlockInvScanAt)) > 10*time.Minute,
+				"players":           sourceIsStale(index.Source.PlayersScanAt, now2, 30*time.Minute),
+				"chests":            sourceIsStale(index.Source.ChestsScanAt, now2, 24*time.Hour),
+				"me":                sourceIsStale(index.Source.MEScanAt, now2, cfg.MEStaleAfter),
+				"block_inventories": sourceIsStale(index.Source.BlockInvScanAt, now2, cfg.BlockInvStaleAfter),
 				"blocks":            index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
 			},
 			Errors: errorsMap,
@@ -2479,7 +2538,7 @@ func main() {
 			clearRefreshRequest(refreshFile)
 		}
 
-		log.Printf("event=inventory_cycle_complete players=%d chests=%d me_networks=%d blocks=%d item_keys=%d block_keys=%d", index.Stats.PlayerCount, index.Stats.ChestCount, index.Stats.MENetworkCount, index.Stats.BlockCount, index.Stats.IndexedItemKeys, index.Stats.IndexedBlockKeys)
+		log.Printf("event=inventory_cycle_complete players=%d chests=%d me_networks=%d blocks=%d item_keys=%d block_keys=%d quests_due=%t", index.Stats.PlayerCount, index.Stats.ChestCount, index.Stats.MENetworkCount, index.Stats.BlockCount, index.Stats.IndexedItemKeys, index.Stats.IndexedBlockKeys, questsDue)
 		time.Sleep(cfg.LoopSleep)
 	}
 }
@@ -2497,10 +2556,10 @@ func writeOutputs(indexFile, statusFile string, index InventoryIndex, errorsMap 
 		Stats:       index.Stats,
 		BlockStatus: index.BlockStatus,
 		Stale: map[string]bool{
-			"players":           parseRFC3339(index.Source.PlayersScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.PlayersScanAt)) > 30*time.Minute,
-			"chests":            parseRFC3339(index.Source.ChestsScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.ChestsScanAt)) > 24*time.Hour,
-			"me":                parseRFC3339(index.Source.MEScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.MEScanAt)) > 10*time.Minute,
-			"block_inventories": parseRFC3339(index.Source.BlockInvScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlockInvScanAt)) > 10*time.Minute,
+			"players":           sourceIsStale(index.Source.PlayersScanAt, now2, 30*time.Minute),
+			"chests":            sourceIsStale(index.Source.ChestsScanAt, now2, 24*time.Hour),
+			"me":                sourceIsStale(index.Source.MEScanAt, now2, 15*time.Minute),
+			"block_inventories": sourceIsStale(index.Source.BlockInvScanAt, now2, 15*time.Minute),
 			"blocks":            index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),
 		},
 		Errors: errorsMap,

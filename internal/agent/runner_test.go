@@ -66,6 +66,25 @@ func TestRunnerLoadsWorkspaceAgentsInstructions(t *testing.T) {
 	}
 }
 
+func TestRunnerFormatsMultilineContextAsDelimitedBlock(t *testing.T) {
+	client := &fakeClient{responses: []ModelResponse{{FinalText: "ok"}}}
+	runner := NewRunner(Config{}, client, newFakeRegistry())
+
+	if _, err := runner.Run(context.Background(), Request{
+		Channel: ChannelDiscord,
+		Message: "current prompt",
+		Context: map[string]string{
+			"discord_recent_messages": "old: first\nold: second",
+		},
+	}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	content := client.requests[0].Input[0].Content
+	if !strings.Contains(content, "discord_recent_messages:\n<<<\nold: first\nold: second\n>>>\nmessage:\ncurrent prompt") {
+		t.Fatalf("multiline context was not delimited before current message: %q", content)
+	}
+}
+
 func TestRunnerSingleTool(t *testing.T) {
 	client := &fakeClient{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{toolCall("call-1", "lookup", `{"q":"steel"}`)}},

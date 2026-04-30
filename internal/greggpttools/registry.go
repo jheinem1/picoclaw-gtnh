@@ -19,6 +19,8 @@ var (
 	memoryScopeEnum  = []any{"global", "channel", "user"}
 )
 
+const nextActionTimeout = 3 * time.Minute
+
 type Registry struct {
 	cfg    Config
 	memory *MemoryStore
@@ -213,6 +215,42 @@ func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
 				scope = "all"
 			}
 			return []string{"sh", "gtnh_inventory", "refresh", "--" + scope}, nil
+		}),
+
+		tool("quest_status", GroupQuest, "Show BetterQuesting quest index freshness and stats.", short, object(), func(Arguments) ([]string, error) {
+			return []string{"sh", "gtnh_quests", "status"}, nil
+		}),
+		tool("quest_open_json", GroupQuest, "Show open BetterQuesting quests as JSON.", medium, object(
+			optional("limit", intSpec("Maximum open quests to return.", 1, 200, 50)),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_quests", "open-json"}
+			if limit := intArg(a, "limit", 0); limit > 0 {
+				argv = append(argv, "--limit", strconv.Itoa(limit))
+			}
+			return argv, nil
+		}),
+		tool("quest_show", GroupQuest, "Show one BetterQuesting quest by id.", short, object(
+			required("id", stringSpec("Quest ID.")),
+		), func(a Arguments) ([]string, error) {
+			return []string{"sh", "gtnh_quests", "show", stringArg(a, "id")}, nil
+		}),
+
+		tool("next_action_recommendation", GroupNext, "Use the gtnh-next-action skill-backed analyzer for requests like 'greg what do I need to do' or 'what should I do next'. Returns exactly one quest/task recommendation using questbook, task log, GTNH lookup, and all indexed inventory materials.", nextActionTimeout, object(
+			optional("user", stringSpec("Requesting user or player name.")),
+			optional("channel", enumStringSpec("Request channel.", []any{"minecraft", "discord"}, nil)),
+			optional("message", stringSpec("Original user request.")),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_next_action", "recommend"}
+			if user := stringArg(a, "user"); user != "" {
+				argv = append(argv, "--user", user)
+			}
+			if channel := stringArg(a, "channel"); channel != "" {
+				argv = append(argv, "--channel", channel)
+			}
+			if message := stringArg(a, "message"); message != "" {
+				argv = append(argv, "--message", message)
+			}
+			return argv, nil
 		}),
 
 		tool("task_board", GroupTask, "Show the GTNH task board.", short, object(), func(Arguments) ([]string, error) {

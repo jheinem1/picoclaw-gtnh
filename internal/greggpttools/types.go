@@ -10,6 +10,8 @@ type Group string
 const (
 	GroupGTNHQuery Group = "gtnh_query"
 	GroupInventory Group = "inventory"
+	GroupQuest     Group = "quest"
+	GroupNext      Group = "next_action"
 	GroupTask      Group = "task"
 	GroupMinecraft Group = "minecraft"
 	GroupMemory    Group = "memory"

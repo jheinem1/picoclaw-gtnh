@@ -19,6 +19,8 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `workspace/gtnh_find_item`, `workspace/gtnh_resolve_recipes`, `workspace/gtnh_search_recipes`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
 - `workspace/gtnh_inventory`: inventory/chest lookup API for GregGPT prompts
+- `workspace/gtnh_quests`: BetterQuesting questbook progress lookup API
+- `workspace/gtnh_next_action`: skill-backed next-action analyzer for “what should I do next?”
 - `workspace/tools/search_gtnh.sh`: convenience wrapper for indexed item search
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
 - `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
@@ -175,6 +177,25 @@ Core env vars in `deploy/env/greggpt.env`:
 
 The bot workspace policy (`workspace/AGENTS.md`) is configured to prefer this API-first path.
 
+## Questbook and next-action workflow
+BetterQuesting progress is indexed from DatHost files by `inventory-sync`:
+- `world/betterquesting/QuestDatabase.json`
+- `world/betterquesting/QuestingParties.json`
+- `world/betterquesting/NameCache.json`
+- `world/betterquesting/QuestProgress/*.json`
+
+Quest index outputs:
+- `state/quest_index.json`
+- `state/quest_status.json`
+
+Commands from workspace root:
+- `sh gtnh_quests status`
+- `sh gtnh_quests open-json [--limit <n>]`
+- `sh gtnh_quests show <quest_id>`
+- `sh gtnh_next_action recommend`
+
+The next-action analyzer follows `workspace/skills/gtnh-next-action/SKILL.md`. It combines open questbook data, freeform task-log entries, GTNH lookups, and all indexed inventory scopes to return one recommendation with evidence. Freeform task requirements are treated as inferred unless explicitly listed in the task description.
+
 ## Inventory lookup sync service
 `inventory-sync` builds a deterministic inventory index from DatHost server files:
 - player inventories + positions from `world/playerdata/*.dat`
@@ -226,6 +247,13 @@ The same mod also writes loaded tile-entity inventories to:
 
 `inventory-sync` merges those records into Containers and uses their block names for `find-block --block "<name>"`.
 
+Exporter defaults are intentionally conservative for live servers:
+- ME export: enabled, every 300 seconds (`-Dgreggpt.me_export_enabled=true`, `-Dgreggpt.me_export_interval_seconds=300`)
+- Block inventory export: enabled, every 300 seconds (`-Dgreggpt.block_inventory_export_enabled=true`, `-Dgreggpt.block_inventory_export_interval_seconds=300`)
+- Block inventory work is budgeted across ticks (`-Dgreggpt.block_inventory_tiles_per_tick=2`, `-Dgreggpt.block_inventory_budget_ms=2`)
+
+The mod only reads Minecraft world/tile/entity state on the server thread. File writes use immutable JSON payloads and run on a background writer thread.
+
 ## True Ore-Dict Cache Workflow
 To build a real GTNH ore-dictionary cache without checking large dumps into the runtime dataset:
 
@@ -255,7 +283,12 @@ Env vars in `deploy/env/greggpt.env`:
 - `INVENTORY_PLAYERS_INTERVAL_SECONDS`
 - `INVENTORY_CHESTS_INTERVAL_SECONDS`
 - `INVENTORY_ME_INTERVAL_SECONDS`
+- `INVENTORY_ME_STALE_AFTER_SECONDS`
+- `INVENTORY_QUESTS_INTERVAL_SECONDS`
 - `INVENTORY_ME_EXPORT_PATHS` (comma-separated DatHost paths; defaults to `world/greggpt/me_index.json,world/picoclaw/me_index.json`)
+- `INVENTORY_BLOCK_INVENTORIES_INTERVAL_SECONDS`
+- `INVENTORY_BLOCK_INVENTORIES_STALE_AFTER_SECONDS`
+- `INVENTORY_BLOCK_INVENTORY_EXPORT_PATHS`
 - `INVENTORY_MAX_RESULTS`
 - `INVENTORY_DEFAULT_LIMIT`
 - `INVENTORY_HTTP_TIMEOUT_SECONDS`

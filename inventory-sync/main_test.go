@@ -313,6 +313,63 @@ func TestScanMEFallsBackToPicoClawPath(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ExportStaleThresholds(t *testing.T) {
+	t.Setenv("DATHOST_SERVER_ID", "server-1")
+	t.Setenv("DATHOST_API_TOKEN", "token")
+	t.Setenv("INVENTORY_ME_STALE_AFTER_SECONDS", "")
+	t.Setenv("INVENTORY_BLOCK_INVENTORIES_STALE_AFTER_SECONDS", "")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig failed: %v", err)
+	}
+	if cfg.MEStaleAfter != 900*time.Second {
+		t.Fatalf("unexpected default ME stale threshold: %s", cfg.MEStaleAfter)
+	}
+	if cfg.BlockInvStaleAfter != 900*time.Second {
+		t.Fatalf("unexpected default block inventory stale threshold: %s", cfg.BlockInvStaleAfter)
+	}
+
+	t.Setenv("INVENTORY_ME_STALE_AFTER_SECONDS", "120")
+	t.Setenv("INVENTORY_BLOCK_INVENTORIES_STALE_AFTER_SECONDS", "45")
+
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig with custom thresholds failed: %v", err)
+	}
+	if cfg.MEStaleAfter != 120*time.Second {
+		t.Fatalf("unexpected ME stale threshold: %s", cfg.MEStaleAfter)
+	}
+	if cfg.BlockInvStaleAfter != 45*time.Second {
+		t.Fatalf("unexpected block inventory stale threshold: %s", cfg.BlockInvStaleAfter)
+	}
+}
+
+func TestFetchDueUsesAttemptTimestampOverExportGeneratedAt(t *testing.T) {
+	now := time.Date(2026, 4, 30, 12, 20, 0, 0, time.UTC)
+	lastExport := "2026-04-30T12:00:00Z"
+	lastAttempt := "2026-04-30T12:19:00Z"
+
+	if !fetchDue("", lastExport, now, 5*time.Minute) {
+		t.Fatal("expected export timestamp alone to be due")
+	}
+	if fetchDue(lastAttempt, lastExport, now, 5*time.Minute) {
+		t.Fatal("expected recent fetch attempt to suppress retry even when export generated_at is old")
+	}
+}
+
+func TestSourceIsStaleUsesConfiguredThreshold(t *testing.T) {
+	now := time.Date(2026, 4, 30, 12, 20, 0, 0, time.UTC)
+	generatedAt := "2026-04-30T12:05:30Z"
+
+	if sourceIsStale(generatedAt, now, 15*time.Minute) {
+		t.Fatal("expected export inside configured stale threshold to be fresh")
+	}
+	if !sourceIsStale(generatedAt, now, 10*time.Minute) {
+		t.Fatal("expected export outside configured stale threshold to be stale")
+	}
+}
+
 func TestIndexFromData_IncludesMEHits(t *testing.T) {
 	index := indexFromData(nil, nil, []MERecord{
 		{
@@ -431,5 +488,65 @@ func TestIndexFromData_IncludesBlockHits(t *testing.T) {
 	}
 	if index.Stats.BlockCount != 1 || index.Stats.IndexedBlockKeys != 1 {
 		t.Fatalf("unexpected block stats: %#v", index.Stats)
+	}
+}
+
+func TestParseQuestDatabaseExtractsOpenQuestItems(t *testing.T) {
+	raw := []byte(`{
+	  "questDatabase:9": {
+	    "42": {
+	      "questID:3": 42,
+	      "properties:10": {
+	        "name:8": "Make Steel",
+	        "desc:8": "Submit steel ingots"
+	      },
+	      "tasks:9": [{
+	        "taskID:8": "bq_standard:retrieval",
+	        "requiredItems:9": [{
+	          "id:3": 7437,
+	          "damage:3": 11305,
+	          "Count": 16,
+	          "displayName": "Steel Ingot"
+	        }]
+	      }]
+	    }
+	  }
+	}`)
+
+	quests, err := parseQuestDatabase(raw)
+	if err != nil {
+		t.Fatalf("parseQuestDatabase failed: %v", err)
+	}
+	if len(quests) != 1 {
+		t.Fatalf("expected one quest, got %#v", quests)
+	}
+	q := quests[0]
+	if q.ID != "42" || q.Title != "Make Steel" || q.Description != "Submit steel ingots" {
+		t.Fatalf("unexpected quest metadata: %#v", q)
+	}
+	if len(q.Tasks) != 1 || len(q.Tasks[0].RequiredItems) != 1 {
+		t.Fatalf("expected one required item, got %#v", q.Tasks)
+	}
+	item := q.Tasks[0].RequiredItems[0]
+	if item.ID != 7437 || item.Damage != 11305 || item.Count != 16 || item.DisplayName != "Steel Ingot" {
+		t.Fatalf("unexpected required item: %#v", item)
+	}
+}
+
+func TestParseQuestProgressMarksCompletedIDs(t *testing.T) {
+	raw := []byte(`{
+	  "questProgress": {
+	    "42": {"questID:3": 42, "completed": true},
+	    "43": {"questID:3": 43, "completed": false},
+	    "44": true
+	  }
+	}`)
+
+	got := parseQuestProgress(raw)
+	if !got["42"] || !got["44"] {
+		t.Fatalf("expected completed quest ids 42 and 44, got %#v", got)
+	}
+	if got["43"] {
+		t.Fatalf("quest 43 should not be complete: %#v", got)
 	}
 }

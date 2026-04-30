@@ -204,16 +204,26 @@ func TestFormatDiscordHistoryTruncatesChronologicalContext(t *testing.T) {
 		{AuthorName: "oldest", Content: "first message"},
 	}
 
-	got := formatDiscordHistory(history, false, 45)
+	got := formatDiscordHistory(history, false, 180)
 
-	if !strings.HasPrefix(got, "oldest: first message\nmiddle: second") {
-		t.Fatalf("history should be oldest-first before truncation, got %q", got)
+	if strings.Contains(got, "oldest: first message") {
+		t.Fatalf("oldest history should be dropped first when truncating: %q", got)
 	}
-	if len(got) > 45 {
+	if !strings.Contains(got, "middle: second message\nlatest: third message") {
+		t.Fatalf("retained history should stay chronological and preserve newest messages, got %q", got)
+	}
+	if len(got) > 180 {
 		t.Fatalf("history exceeded max chars: len=%d text=%q", len(got), got)
 	}
-	if !strings.HasSuffix(got, "...") {
-		t.Fatalf("truncated history should end with ellipsis: %q", got)
+	if !strings.HasPrefix(got, "Prior Discord context only.") {
+		t.Fatalf("history should be explicitly labeled as prior context: %q", got)
+	}
+}
+
+func TestCleanBotMentionTextPreservesOtherMentions(t *testing.T) {
+	got := cleanBotMentionText("<@123> what does <@456> need?", "123")
+	if got != "what does <@456> need?" {
+		t.Fatalf("unexpected cleaned mention text: %q", got)
 	}
 }
 
@@ -230,6 +240,9 @@ func TestFormatDiscordHistoryExcludesBotMessagesByDefault(t *testing.T) {
 	}
 	if !strings.Contains(got, "player: player question") {
 		t.Fatalf("player message missing from history: %q", got)
+	}
+	if !strings.Contains(got, "current request is in the message field") {
+		t.Fatalf("history missing prior-context warning: %q", got)
 	}
 }
 

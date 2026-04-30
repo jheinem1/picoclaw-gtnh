@@ -302,7 +302,7 @@ func (r *Runner) requestContent(req Request) (string, error) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			fmt.Fprintf(&b, "%s: %s\n", k, req.Context[k])
+			writeContextValue(&b, k, req.Context[k])
 		}
 	}
 	if r.cfg.MemoryEnabled {
@@ -318,6 +318,18 @@ func (r *Runner) requestContent(req Request) (string, error) {
 	b.WriteString("message:\n")
 	b.WriteString(strings.TrimSpace(req.Message))
 	return b.String(), nil
+}
+
+func writeContextValue(b *strings.Builder, key, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		fmt.Fprintf(b, "%s:\n<<<\n%s\n>>>\n", key, value)
+		return
+	}
+	fmt.Fprintf(b, "%s: %s\n", key, value)
 }
 
 func (r *Runner) injectedMemory(req Request) (string, error) {

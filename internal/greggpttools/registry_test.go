@@ -74,6 +74,10 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"inventory_find_block_name", `{"block":"Super Chest I","limit":5}`, []string{"sh", "gtnh_inventory", "find-block", "--block", "Super Chest I", "--limit", "5"}},
 		{"inventory_find_block", `{"id":300,"meta":5,"limit":9}`, []string{"sh", "gtnh_inventory", "find-block", "--id", "300", "--meta", "5", "--limit", "9"}},
 		{"inventory_refresh", `{"scope":"containers"}`, []string{"sh", "gtnh_inventory", "refresh", "--containers"}},
+		{"quest_status", `{}`, []string{"sh", "gtnh_quests", "status"}},
+		{"quest_open_json", `{"limit":10}`, []string{"sh", "gtnh_quests", "open-json", "--limit", "10"}},
+		{"quest_show", `{"id":"42"}`, []string{"sh", "gtnh_quests", "show", "42"}},
+		{"next_action_recommendation", `{"user":"Snow","channel":"discord","message":"what do I need to do"}`, []string{"sh", "gtnh_next_action", "recommend", "--user", "Snow", "--channel", "discord", "--message", "what do I need to do"}},
 		{"task_board", `{}`, []string{"sh", "gtnh_tasks", "board"}},
 		{"task_board_json", `{}`, []string{"sh", "gtnh_tasks", "board-json"}},
 		{"task_in_progress_json", `{}`, []string{"sh", "gtnh_tasks", "in-progress-json"}},
@@ -114,6 +118,17 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 				t.Fatalf("tool used shell command string: %#v", got)
 			}
 		})
+	}
+}
+
+func TestNextActionRecommendationUsesAnalyzerTimeout(t *testing.T) {
+	registry := testRegistry(t, DefaultConfig())
+	def, ok := registry.Definition("next_action_recommendation")
+	if !ok {
+		t.Fatal("next_action_recommendation definition not found")
+	}
+	if def.Timeout != "3m0s" {
+		t.Fatalf("next_action_recommendation timeout = %q, want 3m0s", def.Timeout)
 	}
 }
 
