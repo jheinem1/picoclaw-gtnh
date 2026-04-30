@@ -1285,7 +1285,7 @@ func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string
 			continue
 		}
 		items := parseExportedBlockInventoryItems(toList(m["items"]), firstNonEmptyString(m["source"], m["inventory_type"], m["inventoryType"]))
-		label := firstNonEmptyString(m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["block_reg_name"], m["blockRegName"], m["tile_id"], m["tileId"], m["tile_class"], m["tileClass"])
+		label := firstNonEmptyString(m["gt_meta_name"], m["gtMetaName"], m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["block_reg_name"], m["blockRegName"], m["tile_id"], m["tileId"], m["tile_class"], m["tileClass"])
 		chests = append(chests, ChestRecord{
 			Dimension: numberToInt(firstPresent(m, "dim", "dimension")),
 			X:         numberToInt(m["x"]),
@@ -1298,7 +1298,7 @@ func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string
 		stackCount += len(items)
 
 		id := numberToInt(firstPresent(m, "block_id", "blockId", "id"))
-		meta := numberToInt(firstPresent(m, "block_meta", "blockMeta", "meta", "damage"))
+		meta := numberToInt(firstPresent(m, "gt_meta_id", "gtMetaId", "block_meta", "blockMeta", "meta", "damage"))
 		if id > 0 {
 			blocks = append(blocks, BlockRecord{
 				Dimension: numberToInt(firstPresent(m, "dim", "dimension")),
@@ -1308,7 +1308,7 @@ func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string
 				ID:        id,
 				Meta:      meta,
 				RegName:   firstNonEmptyString(m["block_reg_name"], m["blockRegName"], m["reg_name"], m["registry_name"]),
-				Name:      firstNonEmptyString(m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["name"]),
+				Name:      firstNonEmptyString(m["gt_meta_name"], m["gtMetaName"], m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["name"]),
 			})
 		}
 	}

@@ -213,7 +213,10 @@ public final class GregGPTMEExportMod {
     if (uid != null) {
       reg = String.valueOf(getFieldQuiet(uid, "modId")) + ":" + String.valueOf(getFieldQuiet(uid, "name"));
     }
-    String displayName = blockDisplayName(block);
+    Object gtMeta = gregTechMetaTileEntity(te);
+    int gtMetaID = gregTechMetaID(gtMeta);
+    String gtMetaName = gregTechMetaName(gtMeta);
+    String displayName = firstNonEmptyString(gtMetaName, blockDisplayName(block));
     String source = inventorySource(te);
 
     w.print("{\"dim\":");
@@ -232,6 +235,15 @@ public final class GregGPTMEExportMod {
     w.print(blockID(block));
     w.print(",\"block_meta\":");
     w.print(meta);
+    if (gtMetaID > 0) {
+      w.print(",\"gt_meta_id\":");
+      w.print(gtMetaID);
+    }
+    if (gtMetaName.length() > 0) {
+      w.print(",\"gt_meta_name\":\"");
+      w.print(escape(gtMetaName));
+      w.print("\"");
+    }
     w.print(",\"block_reg_name\":\"");
     w.print(escape(reg));
     w.print("\",\"block_display_name\":\"");
@@ -734,6 +746,42 @@ public final class GregGPTMEExportMod {
     } catch (Throwable ignored) {
     }
     return "tile-fields";
+  }
+
+  private static Object gregTechMetaTileEntity(Object te) {
+    Object meta = invokeQuiet(te, new String[] {"getMetaTileEntity"}, new Class[0], new Object[0]);
+    if (meta != null) {
+      return meta;
+    }
+    return firstNonNull(
+        getFieldQuiet(te, "mMetaTileEntity"),
+        getFieldQuiet(te, "metaTileEntity"),
+        getFieldQuiet(te, "mMetaTile"));
+  }
+
+  private static int gregTechMetaID(Object meta) {
+    if (meta == null) {
+      return 0;
+    }
+    int id = intInvoke(meta, "getMetaTileID", "getMetaTileId", "getID", "getId");
+    if (id > 0) {
+      return id;
+    }
+    return intField(meta, "mID", "mId", "mMetaTileID", "mMetaTileId");
+  }
+
+  private static String gregTechMetaName(Object meta) {
+    if (meta == null) {
+      return "";
+    }
+    return firstNonEmptyString(
+        invokeQuiet(meta, new String[] {"getLocalName"}, new Class[0], new Object[0]),
+        invokeQuiet(meta, new String[] {"getInventoryName", "func_145825_b"}, new Class[0], new Object[0]),
+        invokeQuiet(meta, new String[] {"getMetaName"}, new Class[0], new Object[0]),
+        invokeQuiet(meta, new String[] {"getName"}, new Class[0], new Object[0]),
+        getFieldQuiet(meta, "mName"),
+        getFieldQuiet(meta, "mLocalName"),
+        getFieldQuiet(meta, "mMetaName"));
   }
 
   private static Object firstNonNull(Object... values) {

@@ -205,9 +205,11 @@ func TestParseBlockInventoryExport_SuperChest(t *testing.T) {
 	    "z":-25,
 	    "tile_class":"gregtech.common.tileentities.storage.GT_MetaTileEntity_DigitalChest",
 	    "block_id":2442,
-	    "block_meta":135,
+	    "block_meta":0,
+	    "gt_meta_id":135,
+	    "gt_meta_name":"Super Chest I",
 	    "block_reg_name":"gregtech:gt.blockmachines",
-	    "block_display_name":"Super Chest I",
+	    "block_display_name":"Machine",
 	    "source":"gregtech-direct",
 	    "items":[
 	      {"id":7437,"damage":11305,"count":32768,"slot":0,"source":"gregtech-direct","display_name":"Steel Ingot"}
@@ -228,7 +230,7 @@ func TestParseBlockInventoryExport_SuperChest(t *testing.T) {
 	if chests[0].Items[0].ID != 7437 || chests[0].Items[0].Count != 32768 || chests[0].Items[0].Source != "gregtech-direct" {
 		t.Fatalf("unexpected exported stack: %#v", chests[0].Items[0])
 	}
-	if len(blocks) != 1 || blocks[0].RegName != "gregtech:gt.blockmachines" || blocks[0].Name != "Super Chest I" {
+	if len(blocks) != 1 || blocks[0].Meta != 135 || blocks[0].RegName != "gregtech:gt.blockmachines" || blocks[0].Name != "Super Chest I" {
 		t.Fatalf("unexpected block records: %#v", blocks)
 	}
 }
