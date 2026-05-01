@@ -20,19 +20,24 @@ import (
 	"time"
 
 	agentcore "greggpt-gtnh/internal/agent"
+	"greggpt-gtnh/internal/agent/history"
 )
 
 type Config struct {
-	BridgeURL     string
-	PollInterval  time.Duration
-	ConsoleLines  int
-	ReplyMaxChars int
-	MaxReplyParts int
-	StateFile     string
-	SessionPrefix string
-	AgentTimeout  time.Duration
-	HTTPTimeout   time.Duration
-	Workspace     string
+	BridgeURL          string
+	PollInterval       time.Duration
+	ConsoleLines       int
+	ReplyMaxChars      int
+	MaxReplyParts      int
+	StateFile          string
+	SessionPrefix      string
+	AgentTimeout       time.Duration
+	HTTPTimeout        time.Duration
+	Workspace          string
+	HistoryEnabled     bool
+	HistoryPath        string
+	HistoryMaxMessages int
+	RecallMaxItems     int
 }
 
 type State struct {
@@ -62,9 +67,11 @@ const (
 )
 
 type AgentRequest struct {
-	Channel string
-	Session string
-	Message string
+	Channel         string
+	Session         string
+	Message         string
+	RecentHistory   []history.Message
+	RecalledContext []history.RecallItem
 }
 
 type AgentResponse struct {
@@ -73,6 +80,12 @@ type AgentResponse struct {
 
 type AgentRunner interface {
 	Run(context.Context, AgentRequest) (AgentResponse, error)
+}
+
+type HistoryStore interface {
+	AppendMessage(context.Context, history.Message) error
+	Recent(context.Context, history.Query) ([]history.Message, error)
+	Recall(context.Context, history.Query) ([]history.RecallItem, error)
 }
 
 type sharedAgentRunner struct {
@@ -87,14 +100,17 @@ func (r *sharedAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentRes
 	if r == nil || r.runner == nil {
 		return AgentResponse{}, errors.New("agent runner is nil")
 	}
-	text, err := r.runner.Run(ctx, agentcore.Request{
+	coreReq := agentcore.Request{
 		Channel: agentcore.Channel(req.Channel),
 		User:    req.Session,
 		Message: req.Message,
 		Context: map[string]string{
 			"session": req.Session,
 		},
-	})
+		History:         append([]history.Message(nil), req.RecentHistory...),
+		RecalledContext: append([]history.RecallItem(nil), req.RecalledContext...),
+	}
+	text, err := r.runner.Run(ctx, coreReq)
 	if err != nil {
 		return AgentResponse{}, err
 	}
@@ -142,6 +158,21 @@ func getenvInt(key string, fallback int) int {
 	return n
 }
 
+func getenvBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 func loadConfig() Config {
 	poll := getenvInt("DATHOST_POLL_INTERVAL_SECONDS", 10)
 	if poll < 2 {
@@ -149,16 +180,20 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		BridgeURL:     strings.TrimRight(getenv("DATHOST_BRIDGE_URL", "http://dathost-bridge:8080"), "/"),
-		PollInterval:  time.Duration(poll) * time.Second,
-		ConsoleLines:  getenvInt("DATHOST_CONSOLE_LINES", 500),
-		ReplyMaxChars: getenvInt("MC_REPLY_MAX_CHARS", 180),
-		MaxReplyParts: getenvInt("MC_REPLY_MAX_PARTS", 4),
-		StateFile:     getenv("MC_RELAY_STATE_FILE", "/var/lib/mc-relay/state.json"),
-		SessionPrefix: getenv("MC_RELAY_SESSION", "mc:relay"),
-		AgentTimeout:  time.Duration(getenvInt(greggptEnvAgentTimeout, 60)) * time.Second,
-		HTTPTimeout:   time.Duration(getenvInt("MC_RELAY_HTTP_TIMEOUT_SECONDS", 20)) * time.Second,
-		Workspace:     getenv(greggptEnvWorkspace, greggptDefaultWorkspace),
+		BridgeURL:          strings.TrimRight(getenv("DATHOST_BRIDGE_URL", "http://dathost-bridge:8080"), "/"),
+		PollInterval:       time.Duration(poll) * time.Second,
+		ConsoleLines:       getenvInt("DATHOST_CONSOLE_LINES", 500),
+		ReplyMaxChars:      getenvInt("MC_REPLY_MAX_CHARS", 180),
+		MaxReplyParts:      getenvInt("MC_REPLY_MAX_PARTS", 4),
+		StateFile:          getenv("MC_RELAY_STATE_FILE", "/var/lib/mc-relay/state.json"),
+		SessionPrefix:      getenv("MC_RELAY_SESSION", "mc:relay"),
+		AgentTimeout:       time.Duration(getenvInt(greggptEnvAgentTimeout, 60)) * time.Second,
+		HTTPTimeout:        time.Duration(getenvInt("MC_RELAY_HTTP_TIMEOUT_SECONDS", 20)) * time.Second,
+		Workspace:          getenv(greggptEnvWorkspace, greggptDefaultWorkspace),
+		HistoryEnabled:     getenvBool(agentcore.EnvHistoryEnabled, true),
+		HistoryPath:        getenv(agentcore.EnvHistoryPath, agentcore.DefaultHistoryPath),
+		HistoryMaxMessages: getenvInt(agentcore.EnvHistoryMaxMessages, agentcore.DefaultHistoryMessages),
+		RecallMaxItems:     getenvInt(agentcore.EnvRecallMaxItems, agentcore.DefaultRecallMaxItems),
 	}
 }
 
@@ -199,6 +234,29 @@ func saveState(path string, st State) {
 	if err := os.Rename(tmp, path); err != nil {
 		log.Printf("event=state_rename_error file=%q err=%q", path, err.Error())
 	}
+}
+
+func newHistoryStore(cfg Config) HistoryStore {
+	if !cfg.HistoryEnabled {
+		return nil
+	}
+	store, err := history.Open(resolveHistoryPath(cfg))
+	if err != nil {
+		log.Printf("event=history_open_error path=%q err=%q", resolveHistoryPath(cfg), err.Error())
+		return nil
+	}
+	return store
+}
+
+func resolveHistoryPath(cfg Config) string {
+	path := strings.TrimSpace(cfg.HistoryPath)
+	if path == "" {
+		path = agentcore.DefaultHistoryPath
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(cfg.Workspace, path)
 }
 
 func pruneSeen(st *State, max int) {
@@ -270,13 +328,15 @@ func trimChars(s string, max int) string {
 	return string(r[:max])
 }
 
-func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string) (string, error) {
+func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string, recent []history.Message, recalled []history.RecallItem) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.AgentTimeout)
 	defer cancel()
 	out, err := runner.Run(ctx, AgentRequest{
-		Channel: agentChannelMinecraft,
-		Session: session,
-		Message: prompt,
+		Channel:         agentChannelMinecraft,
+		Session:         session,
+		Message:         prompt,
+		RecentHistory:   append([]history.Message(nil), recent...),
+		RecalledContext: append([]history.RecallItem(nil), recalled...),
 	})
 	if err != nil {
 		return "", fmt.Errorf("agent call failed: %w", err)
@@ -288,7 +348,7 @@ func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string) 
 	return text, nil
 }
 
-func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, mustVerify bool) (string, error) {
+func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, mustVerify bool, recent []history.Message, recalled []history.RecallItem) (string, error) {
 	prompt := fmt.Sprintf("Minecraft player '%s' asked: %q. Reply as GregGPT in GTNH context by default. Keep it concise, plain text, no markdown.", ev.Player, ev.Text)
 	prompt += "\nTool execution rule: execute one direct workspace command only; do not use cd, &&, pipes, or chained shell fragments."
 	prompt += "\nDo not claim a command was blocked by safety guard unless a tool call in this same turn returned stderr containing that exact phrase."
@@ -326,7 +386,7 @@ func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, m
 		prompt += "\nDo not claim you need the user to provide a page before searching. Try one lookup first, then clarify only if results are ambiguous."
 	}
 
-	reply, err := askAgentWithPrompt(runner, cfg, session, prompt)
+	reply, err := askAgentWithPrompt(runner, cfg, session, prompt, recent, recalled)
 	if err == nil {
 		return reply, nil
 	}
@@ -335,7 +395,7 @@ func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, m
 	retryPrompt := fmt.Sprintf(
 		"Reply concisely. Prefer GTNH context. Do not run more than one tool call. If lookup fails, say you could not resolve it from current snapshot.",
 	)
-	retryReply, retryErr := askAgentWithPrompt(runner, cfg, session+":retry", retryPrompt+"\n\nUser: "+ev.Text)
+	retryReply, retryErr := askAgentWithPrompt(runner, cfg, session+":retry", retryPrompt+"\n\nUser: "+ev.Text, recent, recalled)
 	if retryErr == nil {
 		return retryReply, nil
 	}
@@ -637,6 +697,14 @@ func fallbackID(ev ConsoleEvent) string {
 }
 
 func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner) {
+	history := newHistoryStore(cfg)
+	if closer, ok := history.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
+	processOnceWithHistory(client, cfg, st, runner, history)
+}
+
+func processOnceWithHistory(client *http.Client, cfg Config, st *State, runner AgentRunner, history HistoryStore) {
 	resp, err := getConsole(client, cfg)
 	if err != nil {
 		log.Printf("event=poll_error err=%q", err.Error())
@@ -669,6 +737,7 @@ func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner)
 			continue
 		}
 		st.Seen[id] = now
+		recordMinecraftChat(history, ev)
 		if !ev.Triggered {
 			continue
 		}
@@ -695,13 +764,15 @@ func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner)
 			}
 			if sent > 0 {
 				repliedCount++
+				recordMinecraftReply(history, ev, strings.Join(parts[:sent], " "))
 				log.Printf("event=reply_sent event_id=%q player=%q parts=%d reply_preview=%q", id, ev.Player, sent, parts[0])
 			}
 			continue
 		}
 
 		mustVerify := needsVerification(ev.Text)
-		reply, err := askAgent(runner, cfg, ev, sessionForEvent(cfg, id), mustVerify)
+		recent, recalled := historyContext(history, cfg, ev)
+		reply, err := askAgent(runner, cfg, ev, sessionForEvent(cfg, id), mustVerify, recent, recalled)
 		if err != nil {
 			fallbackCount++
 			log.Printf("event=agent_error event_id=%q player=%q err=%q", id, ev.Player, err.Error())
@@ -726,6 +797,7 @@ func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner)
 			continue
 		}
 		repliedCount++
+		recordMinecraftReply(history, ev, strings.Join(parts[:sent], " "))
 		log.Printf("event=reply_sent event_id=%q player=%q parts=%d reply_preview=%q", id, ev.Player, sent, parts[0])
 	}
 
@@ -734,14 +806,88 @@ func processOnce(client *http.Client, cfg Config, st *State, runner AgentRunner)
 	log.Printf("event=poll_success events=%d trigger_count=%d replied=%d fallback_count=%d", len(resp.Events), triggerCount, repliedCount, fallbackCount)
 }
 
+func recordMinecraftChat(history HistoryStore, ev ConsoleEvent) {
+	if history == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := history.AppendMessage(ctx, historyMessageFromEvent(ev)); err != nil {
+		log.Printf("event=history_record_chat_error event_id=%q player=%q err=%q", firstNonEmpty(ev.EventID, fallbackID(ev)), ev.Player, err.Error())
+	}
+}
+
+func recordMinecraftReply(history HistoryStore, ev ConsoleEvent, reply string) {
+	if history == nil || strings.TrimSpace(reply) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	msg := historyMessageFromEvent(ev)
+	msg.AuthorID = "greggpt"
+	msg.AuthorName = "GregGPT"
+	msg.Content = reply
+	msg.ExternalMessageID = firstNonEmpty(ev.EventID, fallbackID(ev)) + ":reply"
+	msg.Timestamp = time.Now().UTC()
+	msg.IsBot = true
+	if err := history.AppendMessage(ctx, msg); err != nil {
+		log.Printf("event=history_record_reply_error event_id=%q player=%q err=%q", firstNonEmpty(ev.EventID, fallbackID(ev)), ev.Player, err.Error())
+	}
+}
+
+func historyContext(store HistoryStore, cfg Config, ev ConsoleEvent) ([]history.Message, []history.RecallItem) {
+	if store == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	recent, err := store.Recent(ctx, history.Query{
+		Limit:       cfg.HistoryMaxMessages,
+		IncludeBots: true,
+	})
+	if err != nil {
+		log.Printf("event=history_recent_error event_id=%q player=%q err=%q", firstNonEmpty(ev.EventID, fallbackID(ev)), ev.Player, err.Error())
+	}
+	recalled, err := store.Recall(ctx, history.Query{
+		Text:        ev.Text,
+		Limit:       cfg.RecallMaxItems,
+		IncludeBots: true,
+	})
+	if err != nil {
+		log.Printf("event=history_recall_error event_id=%q player=%q err=%q", firstNonEmpty(ev.EventID, fallbackID(ev)), ev.Player, err.Error())
+	}
+	return recent, recalled
+}
+
+func historyMessageFromEvent(ev ConsoleEvent) history.Message {
+	ts := time.Now().UTC()
+	if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(ev.Timestamp)); err == nil {
+		ts = parsed.UTC()
+	}
+	return history.Message{
+		Source:            agentChannelMinecraft,
+		ChannelID:         agentChannelMinecraft,
+		ChannelName:       "Minecraft",
+		AuthorID:          strings.TrimSpace(ev.Player),
+		AuthorName:        strings.TrimSpace(ev.Player),
+		Content:           strings.TrimSpace(ev.Text),
+		Timestamp:         ts,
+		ExternalMessageID: firstNonEmpty(ev.EventID, fallbackID(ev)),
+	}
+}
+
 func newAgentRunner(cfg Config) AgentRunner {
 	runner, err := agentcore.NewDefaultRunner(agentcore.Config{
-		Model:           getenv(agentcore.EnvModel, agentcore.DefaultModel),
-		ReasoningEffort: getenv(agentcore.EnvReasoningEffort, agentcore.DefaultReasoningEffort),
-		Workspace:       cfg.Workspace,
-		AuthFile:        getenv(agentcore.EnvAuthFile, agentcore.DefaultAuthFile),
-		Timeout:         cfg.AgentTimeout,
-		MaxToolCalls:    getenvInt(agentcore.EnvMaxToolCalls, agentcore.DefaultMaxToolCalls),
+		Model:              getenv(agentcore.EnvModel, agentcore.DefaultModel),
+		ReasoningEffort:    getenv(agentcore.EnvReasoningEffort, agentcore.DefaultReasoningEffort),
+		Workspace:          cfg.Workspace,
+		AuthFile:           getenv(agentcore.EnvAuthFile, agentcore.DefaultAuthFile),
+		Timeout:            cfg.AgentTimeout,
+		MaxToolCalls:       getenvInt(agentcore.EnvMaxToolCalls, agentcore.DefaultMaxToolCalls),
+		HistoryEnabled:     cfg.HistoryEnabled,
+		HistoryPath:        cfg.HistoryPath,
+		HistoryMaxMessages: cfg.HistoryMaxMessages,
+		RecallMaxItems:     cfg.RecallMaxItems,
 	})
 	if err != nil {
 		return startupErrorAgentRunner{err: err}

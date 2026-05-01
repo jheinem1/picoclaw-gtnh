@@ -145,6 +145,15 @@ GregGPT can use a local JSON memory store when enabled:
 
 Memory is selected by scope at request time: `global`, matching `channel`, and matching `user`. Writes are explicit through `memory_remember`; reads use `memory_search` or `memory_list`; deletes use `memory_forget` with a reason. The OpenAI response request still uses `Store=false`.
 
+## GregGPT conversation history
+GregGPT uses one local SQLite history database for Discord and Minecraft chat context when enabled:
+- Default path: `workspace/state/greggpt_history.sqlite` (`GREGGPT_HISTORY_PATH=state/greggpt_history.sqlite` inside the container workspace)
+- Enable/disable: `GREGGPT_HISTORY_ENABLED`
+- Request context limit: `GREGGPT_HISTORY_MAX_MESSAGES`
+- Recalled context limits: `GREGGPT_RECALLED_CONTEXT_MAX_ITEMS` and `GREGGPT_RECALLED_CONTEXT_MAX_BYTES`
+
+Recall in v1 is SQLite-backed full-text search (FTS) over the unified message history. True vector embeddings and an external vector database are deferred non-goals for v1.
+
 ## Discord Kanban sync service
 `kanban-sync` supports two Discord outputs:
 - Board sync: one pinned board embed from `sh gtnh_tasks board-json`

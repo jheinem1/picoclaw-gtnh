@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"greggpt-gtnh/internal/agent/history"
 )
 
 type fakeAgentRunner struct {
@@ -23,6 +25,30 @@ func (f *fakeAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentRespo
 		return AgentResponse{}, f.err
 	}
 	return AgentResponse{Text: f.reply}, nil
+}
+
+type fakeHistoryStore struct {
+	recordedChats   []history.Message
+	recordedReplies []history.Message
+	recent          []history.Message
+	recalled        []history.RecallItem
+}
+
+func (f *fakeHistoryStore) AppendMessage(ctx context.Context, msg history.Message) error {
+	if msg.IsBot {
+		f.recordedReplies = append(f.recordedReplies, msg)
+	} else {
+		f.recordedChats = append(f.recordedChats, msg)
+	}
+	return nil
+}
+
+func (f *fakeHistoryStore) Recent(ctx context.Context, q history.Query) ([]history.Message, error) {
+	return append([]history.Message(nil), f.recent...), nil
+}
+
+func (f *fakeHistoryStore) Recall(ctx context.Context, q history.Query) ([]history.RecallItem, error) {
+	return append([]history.RecallItem(nil), f.recalled...), nil
 }
 
 func TestSplitForMC(t *testing.T) {
@@ -104,7 +130,9 @@ func TestAskAgentUsesRunner(t *testing.T) {
 	cfg := Config{AgentTimeout: time.Second}
 	ev := ConsoleEvent{Player: "Steve", Text: "greg what pipe should I make?"}
 
-	got, err := askAgent(runner, cfg, ev, "mc:relay:test", false)
+	recent := []history.Message{{Source: agentChannelMinecraft, AuthorName: "Alex", Content: "I need a wrench"}}
+	recalled := []history.RecallItem{{Message: history.Message{Source: agentChannelMinecraft, AuthorName: "Alex", Content: "The wrench was in the LV chest"}, Reason: "fts"}}
+	got, err := askAgent(runner, cfg, ev, "mc:relay:test", false, recent, recalled)
 	if err != nil {
 		t.Fatalf("askAgent failed: %v", err)
 	}
@@ -123,6 +151,12 @@ func TestAskAgentUsesRunner(t *testing.T) {
 	}
 	if !strings.Contains(call.Message, "Minecraft player 'Steve' asked") {
 		t.Fatalf("prompt did not include player context: %q", call.Message)
+	}
+	if !reflect.DeepEqual(call.RecentHistory, recent) {
+		t.Fatalf("recent history was not passed through: got=%#v want=%#v", call.RecentHistory, recent)
+	}
+	if !reflect.DeepEqual(call.RecalledContext, recalled) {
+		t.Fatalf("recalled context was not passed through: got=%#v want=%#v", call.RecalledContext, recalled)
 	}
 }
 
@@ -167,8 +201,12 @@ func TestProcessOnceUsesFakeAgentRunnerAndSaysReply(t *testing.T) {
 	}
 	state := State{Initialized: true, Seen: map[string]int64{}}
 	runner := &fakeAgentRunner{reply: "Your wrench is at (1,2,3):4"}
+	history := &fakeHistoryStore{
+		recent:   []history.Message{{Source: agentChannelMinecraft, AuthorName: "Alex", Content: "I put the wrench away"}},
+		recalled: []history.RecallItem{{Message: history.Message{Source: agentChannelMinecraft, AuthorName: "Alex", Content: "I put the wrench away"}, Reason: "fts"}},
+	}
 
-	processOnce(server.Client(), cfg, &state, runner)
+	processOnceWithHistory(server.Client(), cfg, &state, runner, history)
 
 	if len(runner.calls) != 1 {
 		t.Fatalf("expected one runner call, got %d", len(runner.calls))
@@ -181,6 +219,74 @@ func TestProcessOnceUsesFakeAgentRunnerAndSaysReply(t *testing.T) {
 		t.Fatalf("unexpected say text: got=%q want=%q", said[0], want)
 	}
 	if _, ok := state.Seen["event-1"]; !ok {
+		t.Fatalf("event was not marked seen")
+	}
+	if len(history.recordedChats) != 1 {
+		t.Fatalf("expected one recorded chat, got %#v", history.recordedChats)
+	}
+	if len(history.recordedReplies) != 1 {
+		t.Fatalf("expected one recorded reply, got %#v", history.recordedReplies)
+	}
+	if !reflect.DeepEqual(runner.calls[0].RecentHistory, history.recent) {
+		t.Fatalf("recent history was not passed to runner: got=%#v", runner.calls[0].RecentHistory)
+	}
+	if !reflect.DeepEqual(runner.calls[0].RecalledContext, history.recalled) {
+		t.Fatalf("recalled context was not passed to runner: got=%#v", runner.calls[0].RecalledContext)
+	}
+}
+
+func TestProcessOnceRecordsNonTriggeredChatWithoutAgentCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mc/console":
+			_ = json.NewEncoder(w).Encode(ConsoleResponse{
+				OK:    true,
+				Count: 1,
+				Events: []ConsoleEvent{{
+					EventID:   "event-2",
+					Timestamp: "2026-04-28T00:00:00Z",
+					Player:    "Alex",
+					Text:      "anyone have spare rubber?",
+					Triggered: false,
+				}},
+			})
+		case "/mc/say":
+			t.Fatalf("unexpected /mc/say call")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		BridgeURL:     server.URL,
+		ConsoleLines:  10,
+		ReplyMaxChars: 180,
+		MaxReplyParts: 4,
+		StateFile:     t.TempDir() + "/state.json",
+		SessionPrefix: "mc:relay",
+		AgentTimeout:  time.Second,
+		HTTPTimeout:   time.Second,
+	}
+	state := State{Initialized: true, Seen: map[string]int64{}}
+	runner := &fakeAgentRunner{reply: "should not be called"}
+	history := &fakeHistoryStore{}
+
+	processOnceWithHistory(server.Client(), cfg, &state, runner, history)
+
+	if len(runner.calls) != 0 {
+		t.Fatalf("expected no runner calls, got %d", len(runner.calls))
+	}
+	if len(history.recordedChats) != 1 {
+		t.Fatalf("expected one recorded chat, got %#v", history.recordedChats)
+	}
+	if history.recordedChats[0].Content != "anyone have spare rubber?" {
+		t.Fatalf("unexpected recorded chat: %#v", history.recordedChats[0])
+	}
+	if len(history.recordedReplies) != 0 {
+		t.Fatalf("expected no recorded replies, got %#v", history.recordedReplies)
+	}
+	if _, ok := state.Seen["event-2"]; !ok {
 		t.Fatalf("event was not marked seen")
 	}
 }

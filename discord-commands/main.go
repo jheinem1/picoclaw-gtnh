@@ -9,12 +9,15 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"greggpt-gtnh/internal/agent"
+	"greggpt-gtnh/internal/agent/history"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -78,6 +81,8 @@ type Service struct {
 	cfg    Config
 	s      *discordgo.Session
 	runner DiscordAgentRunner
+	histMu sync.Mutex
+	hist   discordHistoryBackend
 }
 
 var legacyInventoryIntentRe = regexp.MustCompile(`(?i)\b(how\s+much|how\s+many|do we have|where (?:is|are)|who has|which chest|in storage|inventory|stored|in me|me system)\b`)
@@ -91,13 +96,15 @@ type DiscordAgentRunner interface {
 }
 
 type DiscordAgentRequest struct {
-	Channel          agent.Channel   `json:"channel"`
-	Text             string          `json:"text"`
-	UserID           string          `json:"user_id"`
-	Username         string          `json:"username,omitempty"`
-	DiscordChannelID string          `json:"discord_channel_id"`
-	MessageID        string          `json:"message_id"`
-	RecentMessages   string          `json:"recent_messages,omitempty"`
+	Channel          agent.Channel `json:"channel"`
+	Text             string        `json:"text"`
+	UserID           string        `json:"user_id"`
+	Username         string        `json:"username,omitempty"`
+	DiscordChannelID string        `json:"discord_channel_id"`
+	MessageID        string        `json:"message_id"`
+	RecentMessages   string        `json:"recent_messages,omitempty"`
+	History          []history.Message
+	RecalledContext  []history.RecallItem
 	RetryInventory   *InventoryRetry `json:"retry_inventory,omitempty"`
 }
 
@@ -140,6 +147,16 @@ type discordHistoryAttachment struct {
 	Size        int
 	Width       int
 	Height      int
+}
+
+type discordHistoryBackend interface {
+	AppendMessage(context.Context, history.Message) error
+	Recent(context.Context, history.Query) ([]history.Message, error)
+	Recall(context.Context, history.Query) ([]history.RecallItem, error)
+}
+
+var openDiscordHistoryBackend = func(path string) (discordHistoryBackend, error) {
+	return history.Open(path)
 }
 
 type mentionProcessResult struct {
@@ -198,12 +215,17 @@ func loadConfig() (Config, error) {
 	}
 
 	agentCfg := agent.Config{
-		Model:           getenv(agent.EnvModel, agent.DefaultModel),
-		ReasoningEffort: getenv(agent.EnvReasoningEffort, agent.DefaultReasoningEffort),
-		Workspace:       getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
-		AuthFile:        getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
-		Timeout:         getenvDurationSeconds(agent.EnvAgentTimeout, 90*time.Second),
-		MaxToolCalls:    getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
+		Model:              getenv(agent.EnvModel, agent.DefaultModel),
+		ReasoningEffort:    getenv(agent.EnvReasoningEffort, agent.DefaultReasoningEffort),
+		Workspace:          getenv(agent.EnvWorkspace, agent.DefaultWorkspace),
+		AuthFile:           getenv(agent.EnvAuthFile, agent.DefaultAuthFile),
+		Timeout:            getenvDurationSeconds(agent.EnvAgentTimeout, 90*time.Second),
+		MaxToolCalls:       getenvInt(agent.EnvMaxToolCalls, agent.DefaultMaxToolCalls),
+		HistoryEnabled:     getenvBool(agent.EnvHistoryEnabled, true),
+		HistoryPath:        getenv(agent.EnvHistoryPath, agent.DefaultHistoryPath),
+		HistoryMaxMessages: getenvInt(agent.EnvHistoryMaxMessages, agent.DefaultHistoryMessages),
+		RecallMaxItems:     getenvInt(agent.EnvRecallMaxItems, agent.DefaultRecallMaxItems),
+		RecallMaxBytes:     getenvInt(agent.EnvRecallMaxBytes, agent.DefaultRecallMaxBytes),
 	}
 
 	cfg := Config{
@@ -606,10 +628,12 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 		MentionsBot: s.mentionsBot(m),
 	}
 	if !s.cfg.MentionAgent || !msg.MentionsBot {
+		s.recordObservedDiscordMessage(context.Background(), m.Message)
 		return
 	}
 	if !s.allowedDiscordUser(msg.AuthorID) {
 		log.Printf("message_agent_skip reason=not_allowed user_id=%s channel_id=%s", m.Author.ID, m.ChannelID)
+		s.recordObservedDiscordMessage(context.Background(), m.Message)
 		return
 	}
 	log.Printf("message_agent_start user_id=%s channel_id=%s message_id=%s content_len=%d", m.Author.ID, m.ChannelID, m.ID, len(m.Content))
@@ -619,13 +643,16 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 	if s.cfg.DiscordHistoryEnabled || isRetry {
 		history = s.resolveDiscordHistory(dg, m, s.cfg.DiscordHistoryLimit)
 	}
+	cleanText := cleanBotMentionText(m.Content, msg.BotID)
+	recentHistory, recalledContext := s.resolveAgentHistoryContext(context.Background(), cleanText)
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Agent.Config.Timeout)
 	defer cancel()
 	stopTyping := s.startTyping(dg, m.ChannelID, ctx)
 	defer stopTyping()
 
-	result := s.processGregGPTMention(ctx, msg, history)
+	result := s.processGregGPTMention(ctx, msg, history, recentHistory, recalledContext)
+	s.recordObservedDiscordMessage(context.Background(), m.Message)
 	if !result.Handled {
 		log.Printf("message_agent_skip reason=%s user_id=%s channel_id=%s content_len=%d", result.Reason, m.Author.ID, m.ChannelID, len(m.Content))
 		return
@@ -636,10 +663,16 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 	}
 	reply := result.Reply
 	reply = truncate(reply, s.cfg.ReplyLimit)
-	if _, sendErr := dg.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); sendErr != nil {
+	sent, sendErr := dg.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
+	if sendErr != nil {
 		log.Printf("message_agent_reply_error user_id=%s channel_id=%s err=%q", m.Author.ID, m.ChannelID, sendErr.Error())
 		return
 	}
+	sentID := ""
+	if sent != nil {
+		sentID = sent.ID
+	}
+	s.recordGregGPTDiscordReply(context.Background(), msg, reply, sentID)
 	log.Printf("message_agent_reply_ok reason=%s user_id=%s channel_id=%s message_id=%s reply_len=%d", result.Reason, m.Author.ID, m.ChannelID, m.ID, len(reply))
 }
 
@@ -689,6 +722,124 @@ func (s *Service) resolveDiscordHistory(dg *discordgo.Session, m *discordgo.Mess
 	return history
 }
 
+func (s *Service) resolveAgentHistoryContext(ctx context.Context, query string) ([]history.Message, []history.RecallItem) {
+	if !s.historyEnabled() {
+		return nil, nil
+	}
+	backend := s.historyBackend()
+	if backend == nil {
+		return nil, nil
+	}
+	recent, err := backend.Recent(ctx, history.Query{
+		Limit:       s.historyMaxMessages(),
+		IncludeBots: s.cfg.DiscordHistoryIncludeBot,
+	})
+	if err != nil {
+		log.Printf("agent_history_recent_error err=%q", err.Error())
+	}
+	recalled, err := backend.Recall(ctx, history.Query{
+		Text:        strings.TrimSpace(query),
+		Limit:       s.recallMaxItems(),
+		IncludeBots: s.cfg.DiscordHistoryIncludeBot,
+	})
+	if err != nil {
+		log.Printf("agent_history_recall_error err=%q", err.Error())
+	}
+	return recent, recalled
+}
+
+func (s *Service) recordObservedDiscordMessage(ctx context.Context, msg *discordgo.Message) {
+	if msg == nil || !s.historyEnabled() {
+		return
+	}
+	record := historyMessageFromDiscord(msg)
+	if strings.TrimSpace(record.Content) == "" {
+		return
+	}
+	if record.IsBot && !s.cfg.DiscordHistoryIncludeBot {
+		return
+	}
+	s.recordHistoryMessage(ctx, record)
+}
+
+func (s *Service) recordGregGPTDiscordReply(ctx context.Context, source discordMentionMessage, reply, sentMessageID string) {
+	if strings.TrimSpace(reply) == "" || !s.historyEnabled() {
+		return
+	}
+	record := history.Message{
+		Source:            "discord",
+		ChannelID:         source.ChannelID,
+		ExternalMessageID: strings.TrimSpace(sentMessageID),
+		AuthorID:          source.BotID,
+		AuthorName:        "GregGPT",
+		Content:           strings.TrimSpace(reply),
+		IsBot:             true,
+		Timestamp:         time.Now().UTC(),
+	}
+	s.recordHistoryMessage(ctx, record)
+}
+
+func (s *Service) recordHistoryMessage(ctx context.Context, msg history.Message) {
+	backend := s.historyBackend()
+	if backend == nil {
+		return
+	}
+	if err := backend.AppendMessage(ctx, msg); err != nil {
+		log.Printf("agent_history_record_error source=%s channel_id=%s err=%q", msg.Source, msg.ChannelID, err.Error())
+	}
+}
+
+func (s *Service) historyBackend() discordHistoryBackend {
+	s.histMu.Lock()
+	defer s.histMu.Unlock()
+	if s.hist != nil {
+		return s.hist
+	}
+	path := strings.TrimSpace(s.cfg.Agent.Config.HistoryPath)
+	if path == "" {
+		path = agent.DefaultHistoryPath
+	}
+	if !filepath.IsAbs(path) {
+		workspace := s.cfg.Agent.Config.Workspace
+		if workspace == "" {
+			workspace = agent.DefaultWorkspace
+		}
+		path = filepath.Join(workspace, path)
+	}
+	backend, err := openDiscordHistoryBackend(path)
+	if err != nil {
+		log.Printf("agent_history_open_error path=%q err=%q", path, err.Error())
+		return nil
+	}
+	s.hist = backend
+	return backend
+}
+
+func (s *Service) historyEnabled() bool {
+	return s.cfg.Agent.Config.HistoryEnabled
+}
+
+func (s *Service) historyMaxMessages() int {
+	if s.cfg.Agent.Config.HistoryMaxMessages > 0 {
+		return s.cfg.Agent.Config.HistoryMaxMessages
+	}
+	return agent.DefaultHistoryMessages
+}
+
+func (s *Service) recallMaxItems() int {
+	if s.cfg.Agent.Config.RecallMaxItems > 0 {
+		return s.cfg.Agent.Config.RecallMaxItems
+	}
+	return agent.DefaultRecallMaxItems
+}
+
+func (s *Service) recallMaxBytes() int {
+	if s.cfg.Agent.Config.RecallMaxBytes > 0 {
+		return s.cfg.Agent.Config.RecallMaxBytes
+	}
+	return agent.DefaultRecallMaxBytes
+}
+
 func discordHistoryMessageFromDiscord(msg *discordgo.Message) discordHistoryMessage {
 	h := discordHistoryMessage{
 		Content: strings.TrimSpace(msg.Content),
@@ -714,6 +865,40 @@ func discordHistoryMessageFromDiscord(msg *discordgo.Message) discordHistoryMess
 		}
 	}
 	return h
+}
+
+func historyMessageFromDiscord(msg *discordgo.Message) history.Message {
+	h := discordHistoryMessageFromDiscord(msg)
+	content := discordHistoryMessageContent(h)
+	return history.Message{
+		Source:            "discord",
+		ChannelID:         strings.TrimSpace(msg.ChannelID),
+		ChannelName:       strings.TrimSpace(msg.ChannelID),
+		ExternalMessageID: strings.TrimSpace(msg.ID),
+		AuthorID:          h.AuthorID,
+		AuthorName:        h.AuthorName,
+		Content:           content,
+		IsBot:             h.IsBot,
+		Timestamp:         discordMessageTimestamp(msg),
+	}
+}
+
+func discordHistoryMessageContent(msg discordHistoryMessage) string {
+	parts := make([]string, 0, 1+len(msg.Attachments))
+	if content := strings.TrimSpace(strings.Join(strings.Fields(msg.Content), " ")); content != "" {
+		parts = append(parts, content)
+	}
+	for _, a := range msg.Attachments {
+		parts = append(parts, formatDiscordHistoryAttachment(a))
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func discordMessageTimestamp(msg *discordgo.Message) time.Time {
+	if msg != nil && !msg.Timestamp.IsZero() {
+		return msg.Timestamp.UTC()
+	}
+	return time.Now().UTC()
 }
 
 func inventoryQueryFromText(text string) (string, string) {
@@ -743,7 +928,7 @@ func (s *Service) allowedDiscordUser(userID string) bool {
 	return ok
 }
 
-func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionMessage, history []discordHistoryMessage) mentionProcessResult {
+func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionMessage, discordHistory []discordHistoryMessage, recentHistory []history.Message, recalledContext []history.RecallItem) mentionProcessResult {
 	if !s.cfg.MentionAgent {
 		return mentionProcessResult{Reason: "disabled"}
 	}
@@ -761,7 +946,7 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 
 	var retry *InventoryRetry
 	if isInventoryRetryRequest(text) {
-		query, scope := resolveRetryInventoryQueryFromHistory(discordHistoryTexts(history))
+		query, scope := resolveRetryInventoryQueryFromHistory(discordHistoryTexts(discordHistory))
 		if query == "" {
 			return mentionProcessResult{
 				Handled: true,
@@ -784,7 +969,9 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 		Username:         msg.AuthorName,
 		DiscordChannelID: msg.ChannelID,
 		MessageID:        msg.MessageID,
-		RecentMessages:   formatDiscordHistory(history, s.cfg.DiscordHistoryIncludeBot, s.cfg.DiscordHistoryMaxChars),
+		RecentMessages:   formatDiscordHistory(discordHistory, s.cfg.DiscordHistoryIncludeBot, s.cfg.DiscordHistoryMaxChars),
+		History:          append([]history.Message(nil), recentHistory...),
+		RecalledContext:  append([]history.RecallItem(nil), recalledContext...),
 		RetryInventory:   retry,
 	})
 	if err != nil {
@@ -1456,10 +1643,12 @@ func (r *commandAgentRunner) Run(ctx context.Context, req DiscordAgentRequest) (
 		contextValues["discord_recent_messages"] = strings.TrimSpace(req.RecentMessages)
 	}
 	text, err := r.runner.Run(ctx, agent.Request{
-		Channel: req.Channel,
-		User:    user,
-		Message: req.Text,
-		Context: contextValues,
+		Channel:         req.Channel,
+		User:            user,
+		Message:         req.Text,
+		Context:         contextValues,
+		History:         req.History,
+		RecalledContext: req.RecalledContext,
 	})
 	if err != nil {
 		var timeoutErr agent.TimeoutSummaryError

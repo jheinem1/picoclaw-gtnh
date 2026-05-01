@@ -23,7 +23,7 @@ func NewDefaultRunner(cfg Config) (*Runner, error) {
 	if cfg.AuthFile == "" {
 		cfg.AuthFile = DefaultAuthFile
 	}
-	cfg = applyMemoryEnv(cfg)
+	cfg = applyEnv(cfg)
 	toolCfg := greggpttools.ConfigFromEnv()
 	toolCfg.Workspace = cfg.Workspace
 	toolCfg.MemoryEnabled = cfg.MemoryEnabled
@@ -39,7 +39,7 @@ func NewDefaultRunner(cfg Config) (*Runner, error) {
 	return NewRunner(cfg, client, tools), nil
 }
 
-func applyMemoryEnv(cfg Config) Config {
+func applyEnv(cfg Config) Config {
 	if boolEnv(EnvMemoryEnabled) {
 		cfg.MemoryEnabled = true
 	}
@@ -54,6 +54,19 @@ func applyMemoryEnv(cfg Config) Config {
 	}
 	if n := positiveIntEnv(EnvMemoryDefaultTTL); n > 0 {
 		cfg.MemoryDefaultTTL = time.Duration(n) * time.Second
+	}
+	cfg.HistoryEnabled = boolEnvDefault(EnvHistoryEnabled, true)
+	if path := strings.TrimSpace(os.Getenv(EnvHistoryPath)); path != "" {
+		cfg.HistoryPath = path
+	}
+	if n := positiveIntEnv(EnvHistoryMaxMessages); n > 0 {
+		cfg.HistoryMaxMessages = n
+	}
+	if n := positiveIntEnv(EnvRecallMaxItems); n > 0 {
+		cfg.RecallMaxItems = n
+	}
+	if n := positiveIntEnv(EnvRecallMaxBytes); n > 0 {
+		cfg.RecallMaxBytes = n
 	}
 	return cfg
 }
@@ -76,6 +89,21 @@ func boolEnv(key string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func boolEnvDefault(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
 	}
 }
 

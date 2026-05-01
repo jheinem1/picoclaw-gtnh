@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"greggpt-gtnh/internal/agent/history"
 	"greggpt-gtnh/internal/greggpttools"
 )
 
@@ -82,6 +84,54 @@ func TestRunnerFormatsMultilineContextAsDelimitedBlock(t *testing.T) {
 	content := client.requests[0].Input[0].Content
 	if !strings.Contains(content, "discord_recent_messages:\n<<<\nold: first\nold: second\n>>>\nmessage:\ncurrent prompt") {
 		t.Fatalf("multiline context was not delimited before current message: %q", content)
+	}
+}
+
+func TestRunnerFormatsStructuredHistoryAndRecall(t *testing.T) {
+	client := &fakeClient{responses: []ModelResponse{{FinalText: "ok"}}}
+	runner := NewRunner(Config{}, client, newFakeRegistry())
+
+	if _, err := runner.Run(context.Background(), Request{
+		Channel: ChannelDiscord,
+		Message: "current prompt",
+		History: []history.Message{{
+			Source:     "discord",
+			ChannelID:  "general",
+			AuthorName: "Alice",
+			Content:    "prior discord context",
+			Timestamp:  time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+		}, {
+			Source:     "minecraft",
+			ChannelID:  "minecraft",
+			AuthorName: "Steve",
+			Content:    "prior minecraft context",
+			Timestamp:  time.Date(2026, 4, 30, 12, 1, 0, 0, time.UTC),
+		}},
+		RecalledContext: []history.RecallItem{{
+			Message: history.Message{
+				Source:     "discord",
+				AuthorName: "Bob",
+				Content:    "matched recalled context",
+			},
+			Reason: "fts",
+			Score:  0.75,
+		}},
+	}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	content := client.requests[0].Input[0].Content
+	for _, want := range []string{
+		"recent_history:\n<<<",
+		"Prior unified Discord/Minecraft context only",
+		"discord/general 2026-04-30T12:00:00Z Alice: prior discord context",
+		"minecraft/minecraft 2026-04-30T12:01:00Z Steve: prior minecraft context",
+		"recalled_context:\n<<<",
+		"matched recalled context",
+		"message:\ncurrent prompt",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("request content missing %q: %s", want, content)
+		}
 	}
 }
 

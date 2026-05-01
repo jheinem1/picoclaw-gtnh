@@ -10,6 +10,10 @@ const (
 	DefaultMaxToolCalls    = 100
 	DefaultMemoryMaxBytes  = 3000
 	DefaultMemoryMaxItems  = 8
+	DefaultHistoryPath     = "state/greggpt_history.sqlite"
+	DefaultHistoryMessages = 20
+	DefaultRecallMaxBytes  = 5000
+	DefaultRecallMaxItems  = 12
 )
 
 const (
@@ -24,6 +28,11 @@ const (
 	EnvMemoryMaxInjectedBytes = "GREGGPT_MEMORY_MAX_INJECTED_BYTES"
 	EnvMemoryMaxInjectedItems = "GREGGPT_MEMORY_MAX_INJECTED_ITEMS"
 	EnvMemoryDefaultTTL       = "GREGGPT_MEMORY_DEFAULT_TTL_SECONDS"
+	EnvHistoryEnabled         = "GREGGPT_HISTORY_ENABLED"
+	EnvHistoryPath            = "GREGGPT_HISTORY_PATH"
+	EnvHistoryMaxMessages     = "GREGGPT_HISTORY_MAX_MESSAGES"
+	EnvRecallMaxItems         = "GREGGPT_RECALLED_CONTEXT_MAX_ITEMS"
+	EnvRecallMaxBytes         = "GREGGPT_RECALLED_CONTEXT_MAX_BYTES"
 )
 
 type Config struct {
@@ -38,6 +47,11 @@ type Config struct {
 	MemoryMaxInjectedBytes int
 	MemoryMaxInjectedItems int
 	MemoryDefaultTTL       time.Duration
+	HistoryEnabled         bool
+	HistoryPath            string
+	HistoryMaxMessages     int
+	RecallMaxItems         int
+	RecallMaxBytes         int
 }
 
 type Channel string

@@ -5,6 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"greggpt-gtnh/internal/agent"
+	"greggpt-gtnh/internal/agent/history"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 type fakeAgentRunner struct {
@@ -16,6 +22,45 @@ type fakeAgentRunner struct {
 func (f *fakeAgentRunner) Run(ctx context.Context, req DiscordAgentRequest) (DiscordAgentResponse, error) {
 	f.requests = append(f.requests, req)
 	return f.resp, f.err
+}
+
+type fakeHistoryBackend struct {
+	records []history.Message
+	recent  []history.Message
+	recall  []history.RecallItem
+}
+
+func (f *fakeHistoryBackend) AppendMessage(ctx context.Context, msg history.Message) error {
+	f.records = append(f.records, msg)
+	return nil
+}
+
+func (f *fakeHistoryBackend) Recent(ctx context.Context, q history.Query) ([]history.Message, error) {
+	return append([]history.Message(nil), f.recent...), nil
+}
+
+func (f *fakeHistoryBackend) Recall(ctx context.Context, q history.Query) ([]history.RecallItem, error) {
+	return append([]history.RecallItem(nil), f.recall...), nil
+}
+
+type capturingAgentClient struct {
+	requests []agent.ModelRequest
+	final    string
+}
+
+func (c *capturingAgentClient) CreateResponse(ctx context.Context, req agent.ModelRequest) (agent.ModelResponse, error) {
+	c.requests = append(c.requests, req)
+	return agent.ModelResponse{FinalText: c.final}, nil
+}
+
+type emptyToolRegistry struct{}
+
+func (emptyToolRegistry) Tools(context.Context) ([]agent.ToolDefinition, error) {
+	return nil, nil
+}
+
+func (emptyToolRegistry) Execute(context.Context, agent.ToolCall) (string, error) {
+	return "", nil
 }
 
 func TestSplitNames(t *testing.T) {
@@ -99,7 +144,7 @@ func TestGregGPTMentionUnauthorizedUser(t *testing.T) {
 		ChannelID:   "channel",
 		MessageID:   "message",
 		MentionsBot: true,
-	}, nil)
+	}, nil, nil, nil)
 
 	if !result.Handled || result.Reason != "not_allowed" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -122,7 +167,7 @@ func TestGregGPTMentionNonMentionIgnored(t *testing.T) {
 		ChannelID:   "channel",
 		MessageID:   "message",
 		MentionsBot: false,
-	}, nil)
+	}, nil, nil, nil)
 
 	if result.Handled || result.Reason != "not_mentioned" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -145,7 +190,7 @@ func TestGregGPTMentionInventoryRoutesToAgent(t *testing.T) {
 		ChannelID:   "channel",
 		MessageID:   "message",
 		MentionsBot: true,
-	}, nil)
+	}, nil, nil, nil)
 
 	if !result.Handled || result.Reply != "circuits: 42" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -155,6 +200,103 @@ func TestGregGPTMentionInventoryRoutesToAgent(t *testing.T) {
 	}
 	if got := runner.requests[0].Text; got != "how many LV circuits are in ME?" {
 		t.Fatalf("unexpected agent text: %q", got)
+	}
+}
+
+func TestGregGPTMentionPassesStructuredHistoryAndRecall(t *testing.T) {
+	runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "ok"}}
+	recent := []history.Message{{
+		Source:     "discord",
+		ChannelID:  "discord-channel",
+		AuthorID:   "other-user",
+		AuthorName: "Other User",
+		Content:    "prior discord note",
+		Timestamp:  time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+	}, {
+		Source:     "minecraft",
+		ChannelID:  "minecraft",
+		AuthorName: "Player",
+		Content:    "prior minecraft note",
+		Timestamp:  time.Date(2026, 4, 30, 12, 1, 0, 0, time.UTC),
+	}}
+	recall := []history.RecallItem{{
+		Message: history.Message{
+			Source:     "discord",
+			AuthorName: "Other User",
+			Content:    "remembered context",
+		},
+		Reason: "remembered",
+		Score:  0.9,
+	}}
+	svc := &Service{
+		cfg:    Config{MentionAgent: true},
+		runner: runner,
+	}
+
+	result := svc.processGregGPTMention(context.Background(), discordMentionMessage{
+		Content:     "<@123> summarize prior context",
+		AuthorID:    "user",
+		AuthorName:  "User",
+		ChannelID:   "discord-channel",
+		MessageID:   "message",
+		MentionsBot: true,
+	}, nil, recent, recall)
+
+	if !result.Handled || result.Reason != "ok" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if len(runner.requests) != 1 {
+		t.Fatalf("expected one runner request, got %#v", runner.requests)
+	}
+	req := runner.requests[0]
+	if len(req.History) != len(recent) || req.History[0].Content != "prior discord note" || req.History[1].Source != "minecraft" {
+		t.Fatalf("structured history was not passed through: %#v", req.History)
+	}
+	if len(req.RecalledContext) != 1 || req.RecalledContext[0].Message.Content != "remembered context" {
+		t.Fatalf("recalled context was not passed through: %#v", req.RecalledContext)
+	}
+}
+
+func TestCommandAgentRunnerPassesStructuredHistoryAndRecall(t *testing.T) {
+	client := &capturingAgentClient{final: "ok"}
+	r := &commandAgentRunner{
+		runner: agent.NewRunner(agent.Config{}, client, &emptyToolRegistry{}),
+	}
+	recent := []history.Message{{
+		Source:     "discord",
+		AuthorName: "player",
+		Content:    "recent history",
+	}}
+	recall := []history.RecallItem{{
+		Message: history.Message{
+			Source:     "minecraft",
+			AuthorName: "player",
+			Content:    "recalled item",
+		},
+		Reason: "match",
+	}}
+
+	resp, err := r.Run(context.Background(), DiscordAgentRequest{
+		Channel:         agent.ChannelDiscord,
+		Text:            "what changed?",
+		UserID:          "user",
+		History:         recent,
+		RecalledContext: recall,
+	})
+	if err != nil {
+		t.Fatalf("unexpected runner error: %v", err)
+	}
+	if resp.Reply != "ok" {
+		t.Fatalf("unexpected reply: %#v", resp)
+	}
+	if len(client.requests) != 1 || len(client.requests[0].Input) != 1 {
+		t.Fatalf("expected one model request, got %#v", client.requests)
+	}
+	content := client.requests[0].Input[0].Content
+	for _, want := range []string{"recent_history:", "discord player: recent history", "recalled_context:", "minecraft player: recalled item"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("agent request content missing %q: %s", want, content)
+		}
 	}
 }
 
@@ -182,7 +324,7 @@ func TestGregGPTMentionRecipeWikiAndTaskMutationsRouteToAgent(t *testing.T) {
 				ChannelID:   "channel",
 				MessageID:   "message",
 				MentionsBot: true,
-			}, nil)
+			}, nil, nil, nil)
 
 			if !result.Handled || result.Reason != "ok" {
 				t.Fatalf("unexpected result: %#v", result)
@@ -271,6 +413,97 @@ func TestFormatDiscordHistoryIncludesAttachmentMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestRecordObservedDiscordMessageStoresNonMentionContentAndAttachmentMetadata(t *testing.T) {
+	hist := &fakeHistoryBackend{}
+	svc := &Service{
+		cfg: Config{
+			Agent: AgentConfig{Config: agent.Config{HistoryEnabled: true}},
+		},
+		hist: hist,
+	}
+	timestamp := time.Date(2026, 4, 30, 13, 0, 0, 0, time.UTC)
+
+	svc.recordObservedDiscordMessage(context.Background(), &discordgo.Message{
+		ID:        "message-id",
+		ChannelID: "channel-id",
+		Content:   "  non mention context  ",
+		Timestamp: timestamp,
+		Author: &discordgo.User{
+			ID:       "user-id",
+			Username: "User",
+		},
+		Attachments: []*discordgo.MessageAttachment{{
+			Filename:    "setup.png",
+			ContentType: "image/png",
+			Size:        123,
+			Width:       64,
+			Height:      32,
+		}},
+	})
+
+	if len(hist.records) != 1 {
+		t.Fatalf("expected one history record, got %#v", hist.records)
+	}
+	got := hist.records[0]
+	if got.Source != "discord" || got.ChannelID != "channel-id" || got.ExternalMessageID != "message-id" {
+		t.Fatalf("unexpected history identity: %#v", got)
+	}
+	for _, want := range []string{"non mention context", "filename=setup.png", "content_type=image/png", "size=123", "dimensions=64x32"} {
+		if !strings.Contains(got.Content, want) {
+			t.Fatalf("recorded content missing %q: %#v", want, got)
+		}
+	}
+	if !got.Timestamp.Equal(timestamp) {
+		t.Fatalf("unexpected timestamp: %s", got.Timestamp)
+	}
+}
+
+func TestRecordObservedDiscordMessageHonorsBotIncludeConfig(t *testing.T) {
+	hist := &fakeHistoryBackend{}
+	svc := &Service{
+		cfg: Config{
+			DiscordHistoryIncludeBot: false,
+			Agent:                    AgentConfig{Config: agent.Config{HistoryEnabled: true}},
+		},
+		hist: hist,
+	}
+
+	svc.recordObservedDiscordMessage(context.Background(), &discordgo.Message{
+		ID:        "bot-message",
+		ChannelID: "channel-id",
+		Content:   "bot context",
+		Author:    &discordgo.User{ID: "bot-id", Username: "Bot", Bot: true},
+	})
+
+	if len(hist.records) != 0 {
+		t.Fatalf("bot message should not be recorded when include bots is disabled: %#v", hist.records)
+	}
+}
+
+func TestRecordGregGPTDiscordReplyStoresAfterSendPath(t *testing.T) {
+	hist := &fakeHistoryBackend{}
+	svc := &Service{
+		cfg: Config{
+			Agent: AgentConfig{Config: agent.Config{HistoryEnabled: true}},
+		},
+		hist: hist,
+	}
+
+	svc.recordGregGPTDiscordReply(context.Background(), discordMentionMessage{
+		BotID:     "bot-id",
+		ChannelID: "channel-id",
+		MessageID: "source-message",
+	}, " reply text ", "sent-message")
+
+	if len(hist.records) != 1 {
+		t.Fatalf("expected reply record, got %#v", hist.records)
+	}
+	got := hist.records[0]
+	if !got.IsBot || got.AuthorID != "bot-id" || got.AuthorName != "GregGPT" || got.Content != "reply text" || got.ExternalMessageID != "sent-message" {
+		t.Fatalf("unexpected reply record: %#v", got)
+	}
+}
+
 func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 	runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "retried"}}
 	svc := &Service{
@@ -290,7 +523,7 @@ func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 		MentionsBot: true,
 	}, []discordHistoryMessage{
 		{AuthorName: "GregGPT", Content: `previous output: gtnh_inventory find-item --query "stainless steel dust" --scope me`, IsBot: true},
-	})
+	}, nil, nil)
 
 	if !result.Handled || result.Reply != "retried" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -323,7 +556,7 @@ func TestGregGPTMentionAgentErrorReply(t *testing.T) {
 		ChannelID:   "channel",
 		MessageID:   "message",
 		MentionsBot: true,
-	}, nil)
+	}, nil, nil, nil)
 
 	if !result.Handled || result.Reason != "agent_error" {
 		t.Fatalf("unexpected result: %#v", result)
@@ -349,7 +582,7 @@ func TestGregGPTMentionTimeoutSummaryReply(t *testing.T) {
 		ChannelID:   "channel",
 		MessageID:   "message",
 		MentionsBot: true,
-	}, nil)
+	}, nil, nil, nil)
 
 	if !result.Handled || result.Reason != "agent_timeout_summary" {
 		t.Fatalf("unexpected result: %#v", result)
