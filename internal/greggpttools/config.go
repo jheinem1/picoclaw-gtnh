@@ -13,12 +13,14 @@ const (
 	DefaultToolTimeout     = 20 * time.Second
 	DefaultMaxOutputLength = 12000
 	DefaultMemoryPath      = "state/greggpt_memory.json"
+	DefaultRecipeSQLPath   = "gtnh-data/index/greggpt_recipes.sqlite"
 )
 
 const (
 	EnvWorkspace        = "GREGGPT_WORKSPACE"
 	EnvToolTimeout      = "GREGGPT_TOOL_TIMEOUT_SECONDS"
 	EnvMaxOutputBytes   = "GREGGPT_TOOL_MAX_OUTPUT_BYTES"
+	EnvRecipeSQLPath    = "GREGGPT_RECIPE_SQLITE_PATH"
 	EnvMemoryEnabled    = "GREGGPT_MEMORY_ENABLED"
 	EnvMemoryPath       = "GREGGPT_MEMORY_PATH"
 	EnvMemoryDefaultTTL = "GREGGPT_MEMORY_DEFAULT_TTL_SECONDS"
@@ -28,6 +30,7 @@ type Config struct {
 	Workspace        string
 	ToolTimeout      time.Duration
 	MaxOutputBytes   int
+	RecipeSQLPath    string
 	MemoryEnabled    bool
 	MemoryPath       string
 	MemoryDefaultTTL time.Duration
@@ -38,6 +41,7 @@ func DefaultConfig() Config {
 		Workspace:      DefaultWorkspace,
 		ToolTimeout:    DefaultToolTimeout,
 		MaxOutputBytes: DefaultMaxOutputLength,
+		RecipeSQLPath:  DefaultRecipeSQLPath,
 		MemoryPath:     DefaultMemoryPath,
 	}
 }
@@ -53,6 +57,9 @@ func ConfigFromEnv() Config {
 	if maxOutput := positiveIntEnv(EnvMaxOutputBytes); maxOutput > 0 {
 		cfg.MaxOutputBytes = maxOutput
 	}
+	if path := strings.TrimSpace(os.Getenv(EnvRecipeSQLPath)); path != "" {
+		cfg.RecipeSQLPath = path
+	}
 	cfg.MemoryEnabled = boolEnv(EnvMemoryEnabled)
 	if path := strings.TrimSpace(os.Getenv(EnvMemoryPath)); path != "" {
 		cfg.MemoryPath = path
@@ -61,6 +68,21 @@ func ConfigFromEnv() Config {
 		cfg.MemoryDefaultTTL = time.Duration(ttl) * time.Second
 	}
 	return cfg
+}
+
+func (c Config) resolvedRecipeSQLPath() string {
+	path := strings.TrimSpace(c.RecipeSQLPath)
+	if path == "" {
+		path = DefaultRecipeSQLPath
+	}
+	if filepath.IsAbs(path) || path == ":memory:" {
+		return path
+	}
+	workspace := c.Workspace
+	if workspace == "" {
+		workspace = DefaultWorkspace
+	}
+	return filepath.Join(workspace, path)
 }
 
 func (c Config) resolvedMemoryPath() string {

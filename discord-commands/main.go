@@ -470,7 +470,7 @@ func inventoryCommand() *discordgo.ApplicationCommand {
 func queryCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "query",
-		Description: "GTNH item, recipe, and wiki lookup",
+		Description: "GTNH item and wiki lookup",
 		Options: []*discordgo.ApplicationCommandOption{
 			subcommand("find_item", "Search for a matching item",
 				stringOption("query", "Search text", true),
@@ -478,12 +478,6 @@ func queryCommand() *discordgo.ApplicationCommand {
 			),
 			subcommand("item", "Show an exact item",
 				stringOption("slug", "Exact item slug", true),
-			),
-			subcommand("resolve_recipes", "Resolve a recipe chain",
-				stringOption("item", "Item name", true),
-			),
-			subcommand("search_recipes", "Search recipes",
-				stringOption("query", "Recipe query", true),
 			),
 			subcommand("wiki_page", "Show a GTNH wiki page",
 				stringOption("title", "Page title", true),
@@ -1459,10 +1453,6 @@ func (s *Service) dispatchQuery(ctx context.Context, opts []*discordgo.Applicati
 		return s.run(ctx, args...)
 	case "item":
 		return s.run(ctx, "sh", "gtnh_query", "item", optString(subOpts, "slug"))
-	case "resolve_recipes":
-		return s.run(ctx, "sh", "gtnh_resolve_recipes", optString(subOpts, "item"))
-	case "search_recipes":
-		return s.run(ctx, "sh", "gtnh_search_recipes", optString(subOpts, "query"))
 	case "wiki_page":
 		out, err := s.run(ctx, "sh", "gtnh_wiki_page", optString(subOpts, "title"))
 		return formatWikiPageOutput(out), err

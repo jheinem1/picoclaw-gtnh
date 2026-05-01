@@ -125,11 +125,12 @@ var unresolvedRe = regexp.MustCompile(`(?i)(could not resolve|no exact recipe ch
 var turnIntoRe = regexp.MustCompile(`(?i)turn\s+(.+?)\s+into\s+(.+?)(?:\?|$)`)
 var refineIntoRe = regexp.MustCompile(`(?i)what does\s+(.+?)\s+refine into(?:\?|$)`)
 var makeRe = regexp.MustCompile(`(?i)(?:how much .* to )?make\s+(?:a|an|the)?\s*(.+?)(?:\?|$)`)
-var specificGTRe = regexp.MustCompile(`(?i)\b(recipe|recipes|refine|smelt|craft|make|turn .* into|what does .* (do|refine)|ore|dust|ingot|plate|rod|pickaxe|tool material)\b`)
+var specificGTRe = regexp.MustCompile(`(?i)\b(recipe|recipes|refine|smelt|craft|make|turn .* into|what does .* (do|refine)|ore|dust|ingot|plate|rod|pickaxe|tool material|supplies|materials|missing)\b`)
 var gtnhDomainRe = regexp.MustCompile(`(?i)\b(gtnh|gregtech|steam|pipe|fluid|throughput|boiler|turbine|lv|mv|hv|ev|iv|luv|zpm|uv|machine|multiblock|ore|dust|ingot|plate|rod|cable|wire)\b`)
 var taskBoardRe = regexp.MustCompile(`(?i)\b(task\s*board|tasks?\s+board|open\s+tasks?|task\s+list)\b`)
 var taskMutationIntentRe = regexp.MustCompile(`(?i)\b(assign|reassign|move|pause|unpause|resume|reopen|describe|description|update|status update|progress update)\b`)
-var inventoryIntentRe = regexp.MustCompile(`(?i)\b(who has|where is|which chest|inventory|inventories|in chests?|in my chest|has item|holding|stored|in me|me system|do we have)\b`)
+var inventoryIntentRe = regexp.MustCompile(`(?i)\b(who has|where is|which chest|inventory|inventories|in chests?|in my chest|has item|holding|stored|storage|already have|in me|me system|do we have)\b`)
+var materialIntentRe = regexp.MustCompile(`(?i)\b(supplies|materials|missing|already have|in storage|stored)\b`)
 var safetyGuardReplyRe = regexp.MustCompile(`(?i)safety guard|dangerous pattern`)
 var coordTupleCountRe = regexp.MustCompile(`\((-?\d+),(-?\d+),(-?\d+)\)(?:×|:)(\d+)`)
 var coordTupleDimCountRe = regexp.MustCompile(`\((-?\d+),(-?\d+),(-?\d+)\)\s*dim\s*=?\s*(-?\d+)\s*count\s*=?\s*(\d+)`)
@@ -375,13 +376,13 @@ func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, m
 		prompt += "\nMinecraft coordinate format: use JourneyMap-style tags like [x:<num>, y:<num>, z:<num>, dim:<num>] and include count=<num> outside the brackets when relevant."
 	}
 	if mustVerify {
-		prompt += "\nVerification is required for this question. Prefer hosted web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use local gtnh_query data as fallback/cross-check."
-		prompt += "\nBefore answering, you must use either hosted web search or one concrete local lookup command and base the reply on that output."
+		prompt += "\nVerification is required for this question. Prefer hosted web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use recipe_sql for local recipe data and gtnh_find_item for item identity."
+		prompt += "\nBefore answering, you must use either hosted web search, recipe_sql, or one concrete local lookup command and base the reply on that output."
 		prompt += "\nUse the command that matches user intent:"
 		prompt += "\n- specific wiki page summary: sh gtnh_wiki_page \"<title>\""
 		prompt += "\n- fuzzy item lookup: sh gtnh_find_item \"<query>\""
-		prompt += "\n- recipe search across close matches: sh gtnh_search_recipes \"<query>\""
-		prompt += "\n- exact item recipes: sh gtnh_resolve_recipes \"<item>\""
+		prompt += "\n- recipe lookup: use recipe_sql to query greggpt_recipes.sqlite"
+		prompt += "\nFor recipe or missing-material questions with multiple recipe rows, list concise choices and ask which recipe path to use unless the user named a machine/path."
 		prompt += "\nIf lookup is ambiguous or missing, ask one concise clarifying question and do not present failure as final."
 		prompt += "\nDo not claim you need the user to provide a page before searching. Try one lookup first, then clarify only if results are ambiguous."
 	}
@@ -654,6 +655,9 @@ func splitForMC(text string, maxChars, maxParts int) []string {
 func needsVerification(question string) bool {
 	q := normalizeQueryText(question)
 	if specificGTRe.MatchString(q) {
+		return true
+	}
+	if materialIntentRe.MatchString(q) && inventoryIntentRe.MatchString(q) {
 		return true
 	}
 	return strings.Contains(question, "?") && gtnhDomainRe.MatchString(question)

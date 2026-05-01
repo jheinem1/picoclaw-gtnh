@@ -14,6 +14,8 @@ dist/
 *.jar
 *.test
 relay/greggpt-gtnh-mc-relay
+relay/prebuilt/
+discord-commands/prebuilt/
 workspace/tools/__pycache__/
 .gradle-bin/
 

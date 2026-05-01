@@ -1,2 +1,2 @@
-Workspace runtime GTNH indexes.
+Workspace runtime GTNH data.
 Do not add full raw dumps here.

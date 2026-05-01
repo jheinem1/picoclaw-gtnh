@@ -9,14 +9,27 @@ WS_DST="$ROOT/workspace/gtnh-data"
 mkdir -p "$DST/index"
 mkdir -p "$WS_DST/index"
 
-for f in item_index.tsv recipe_index.tsv; do
-  if [[ ! -f "$SRC/index/$f" ]]; then
-    echo "missing required index: $SRC/index/$f" >&2
-    exit 1
+rm -f "$DST/index/recipe_index.tsv" "$DST/index/recipe_index.tsv.xz"
+rm -f "$WS_DST/index/recipe_index.tsv" "$WS_DST/index/recipe_index.tsv.xz"
+
+copy_required_index() {
+  local f="$1"
+  if [[ -s "$SRC/index/$f" ]]; then
+    cp -f "$SRC/index/$f" "$DST/index/$f"
+    cp -f "$SRC/index/$f" "$WS_DST/index/$f"
+    return
   fi
-  cp -f "$SRC/index/$f" "$DST/index/$f"
-  cp -f "$SRC/index/$f" "$WS_DST/index/$f"
-done
+  if [[ -f "$SRC/index/$f.xz" ]]; then
+    xz -dc "$SRC/index/$f.xz" > "$DST/index/$f"
+    cp -f "$DST/index/$f" "$WS_DST/index/$f"
+    return
+  fi
+  echo "missing required runtime artifact: $SRC/index/$f" >&2
+  exit 1
+}
+
+copy_required_index item_index.tsv
+copy_required_index greggpt_recipes.sqlite
 
 if [[ -f "$SRC/index/oredict_index.tsv" ]]; then
   cp -f "$SRC/index/oredict_index.tsv" "$DST/index/oredict_index.tsv"
@@ -26,17 +39,17 @@ fi
 cat > "$DST/README.txt" <<'EOF'
 Runtime GTNH dataset for GregGPT.
 
-This directory intentionally excludes large raw dumps (recipes.json, recipes_stacks.json)
+This directory intentionally excludes large raw dumps
 to prevent accidental full-file reads and OOM/restarts.
 
 Use indexed files under index/:
 - item_index.tsv
-- recipe_index.tsv
+- greggpt_recipes.sqlite (SQLite recipe database)
 - oredict_index.tsv (optional; only present after importing a real ore-dict dump)
 EOF
 
 cat > "$WS_DST/README.txt" <<'EOF'
-Workspace runtime GTNH indexes.
+Workspace runtime GTNH data.
 Do not add full raw dumps here.
 EOF
 

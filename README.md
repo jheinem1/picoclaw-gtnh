@@ -13,23 +13,26 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `kanban-sync/`: deterministic Discord embed renderer for GTNH Kanban board
 - `inventory-sync/`: deterministic DatHost file indexer for player inventories and chest coordinates
 - `workspace/AGENTS.md`: GTNH-specific behavior constraints
-- `workspace/tools/build_item_index.py`: builds search index from `recipes_stacks.json`
-- `workspace/tools/build_recipe_index.py`: builds recipe index TSV from `recipes.json`
-- `workspace/gtnh_query`: runtime GTNH query API (shell + awk/grep, no Python dependency in container)
-- `workspace/gtnh_find_item`, `workspace/gtnh_resolve_recipes`, `workspace/gtnh_search_recipes`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
+- `workspace/tools/build_item_index.py`: builds the item search index when a stack dump is available
+- `workspace/gtnh_find_item`, `workspace/gtnh_item`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
 - `workspace/gtnh_inventory`: inventory/chest lookup API for GregGPT prompts
 - `workspace/gtnh_quests`: BetterQuesting questbook progress lookup API
 - `workspace/gtnh_next_action`: skill-backed next-action analyzer for “what should I do next?”
 - `workspace/tools/search_gtnh.sh`: convenience wrapper for indexed item search
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
-- `scripts/sync_gtnh_data.sh`: copy GTNH snapshots and build indexes
+- `scripts/build_recipe_dump_mod.sh`: build a GTNH Forge mod that dumps recipes directly to SQLite
+- `scripts/install_recipe_dump_mod.sh`: install the recipe dump mod into a local PrismLauncher GTNH instance
+- `scripts/import_recipe_db.sh`: import a generated `greggpt_recipes.sqlite`
+- `scripts/sync_gtnh_data.sh`: copy GTNH indexes and build runtime data
 - `scripts/build_oredict_dump_mod.sh`: build a GTNH Forge mod that dumps the live ore dictionary
 - `scripts/install_oredict_dump_mod.sh`: install the dump mod into a local PrismLauncher GTNH instance
 - `scripts/import_oredict_dump.sh`: import a generated `greggpt_oredict_dump.tsv` and build `oredict_index.tsv`
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
 - `scripts/deploy_to_pi.sh`: rsync project to Pi
+- `scripts/deploy_prebuilt_to_pi.sh`: cross-compile Pi Go binaries locally, deploy them, and rebuild the affected Pi images from prebuilt binaries
+- `scripts/build_pi_images.sh`: cross-compile Go binaries and build/export ARM64 Podman images locally for Pi deployment
 - `scripts/install_user_service.sh`: install `systemd --user` service on Pi
 - `scripts/login_greggpt_oauth_on_pi.sh`: run OpenAI device-code OAuth login in container
 - `scripts/set_discord_token_from_op.sh`: read Discord token from 1Password and apply
@@ -88,24 +91,27 @@ Why this matters:
 Scripts that use this exact access pattern:
 - `scripts/setup_pi_runtime.sh`
 - `scripts/deploy_to_pi.sh`
+- `scripts/deploy_prebuilt_to_pi.sh`
 - `scripts/install_user_service.sh`
 - `scripts/login_greggpt_oauth_on_pi.sh`
 - `scripts/set_discord_token.sh`
 - `scripts/sync_gtnh_data.sh`
 
 ## GTNH query workflow
-Runtime mount is index-only (`data/gtnh_runtime`), intentionally excluding full raw JSON dumps.
+Runtime mount is index-only (`data/gtnh_runtime`), intentionally excluding full raw dumps.
 Use indexed queries:
-- Build/refresh indexes: `workspace/tools/build_item_index.py` and `workspace/tools/build_recipe_index.py`
+- Build/refresh runtime data: `scripts/sync_gtnh_data.sh`
+- Build recipe SQLite dump mod: `scripts/build_recipe_dump_mod.sh`
+- Install recipe SQLite dump mod: `scripts/install_recipe_dump_mod.sh "/path/to/instance/minecraft"`
+- Import generated recipe DB: `scripts/import_recipe_db.sh "/path/to/instance/minecraft/dumps/greggpt_recipes.sqlite"`
 - Build ore-dict index after importing a real dump: `workspace/tools/build_oredict_index.py`
 - Prepare runtime dataset: `scripts/prepare_runtime_data.sh`
-- Find item: `sh gtnh_query find-item "copper nugget"`
-- Resolve item + recipes: `sh gtnh_query resolve-recipes "copper nugget"`
+- Find item: `sh workspace/gtnh_find_item "copper nugget"`
+- Recipe data for GregGPT: use the single `recipe_sql` tool against `gtnh-data/index/greggpt_recipes.sqlite`
 - Wiki topic verification uses the hosted OpenAI web search tool restricted to `wiki.gtnewhorizons.com`.
 - Focused commands:
   - `sh gtnh_find_item "copper nugget"`
-  - `sh gtnh_search_recipes "potin fluid pipe"`
-  - `sh gtnh_resolve_recipes "bronze fluid pipe"`
+  - `sh gtnh_item "<slug>"`
   - `sh gtnh_wiki_page "Steam Machines"`
 
 ## GTNH task board workflow

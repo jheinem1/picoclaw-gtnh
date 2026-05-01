@@ -1,0 +1,10 @@
+services:
+  mc-relay:
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile.prebuilt
+
+  discord-commands:
+    build:
+      context: ..
+      dockerfile: discord-commands/Dockerfile.prebuilt

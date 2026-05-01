@@ -16,6 +16,13 @@ This file is for coding agents working on the `picoclaw-gtnh` repository. Runtim
 - Store Podman/container images on the mounted flash drive, not the Pi boot drive.
 - The boot drive has limited free space; use the flash drive for image storage to avoid filling `/`.
 
+## Deployment Build Flow
+- Do not compile Go services on the Raspberry Pi during normal deploys; it is slow and can stall on the Pi's limited memory/CPU.
+- Build Linux ARM64 Go binaries on the workstation first, then build the Podman images locally before deploying those image artifacts to the Pi.
+- Keep `mc-relay`, `discord-commands`, and shared helper binaries such as `gtnh_inventory_query` on the local-prebuilt path. Use `scripts/build_pi_images.sh` before any Pi image deploy.
+- Prefer `scripts/deploy_prebuilt_to_pi.sh` for Go-service deploys; it builds ARM64 images locally, transfers the image archive, loads it on the Pi, and recreates the services with `--no-build`.
+- Only fall back to Pi-side image builds for debugging, and use the prebuilt Dockerfiles so the Pi never runs `go build`.
+
 ## Validation
 - Prefer repo-level validation after cross-service changes: `go test ./...`.
 - For compose sanity, use `podman compose -f deploy/compose.yaml config` and `podman compose -f deploy/compose.yaml build --dry-run` when available.

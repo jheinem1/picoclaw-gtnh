@@ -16,14 +16,10 @@ printf '%s\n' "$PI_PUBKEY" > "$SSH_KEY_FILE"
 SSH_CMD="ssh -o IdentitiesOnly=yes -o IdentityAgent=$HOME/.1password/agent.sock -i $SSH_KEY_FILE"
 
 MANDATORY=(
-  "recipes.json"
-  "recipes_stacks.json"
+  "greggpt_recipes.sqlite"
 )
 
 OPTIONAL=(
-  "recipes.tar.gz"
-  "notenoughrecipedumps-v1.0-beta.jar"
-  "gtnhlib-0.8.15.jar"
 )
 
 mkdir -p "$DEST_DIR"
@@ -50,8 +46,14 @@ for f in "${OPTIONAL[@]}"; do
   copy_if_exists "$f"
 done
 
-"$ROOT/workspace/tools/build_item_index.py"
-"$ROOT/workspace/tools/build_recipe_index.py"
+if [[ -f "$SOURCE_DIR/recipes_stacks.json" ]]; then
+  copy_if_exists "recipes_stacks.json"
+  "$ROOT/workspace/tools/build_item_index.py"
+elif [[ ! -f "$ROOT/data/gtnh/index/item_index.tsv" && ! -f "$ROOT/data/gtnh/index/item_index.tsv.xz" ]]; then
+  echo "missing item index and no recipes_stacks.json available to rebuild it" >&2
+  exit 1
+fi
+"$ROOT/scripts/import_recipe_db.sh" "$SOURCE_DIR/greggpt_recipes.sqlite"
 if [[ -f "$ROOT/data/gtnh/oredict_dump.tsv" ]]; then
   "$ROOT/workspace/tools/build_oredict_index.py"
 else

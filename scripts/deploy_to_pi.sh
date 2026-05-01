@@ -13,6 +13,7 @@ SSH_CMD="ssh -o IdentitiesOnly=yes -o IdentityAgent=$HOME/.1password/agent.sock 
 rsync -av --delete \
   -e "$SSH_CMD" \
   --exclude '.git/' \
+  --exclude 'build/' \
   --exclude 'runtime/' \
   --exclude 'deploy/env/*.env' \
   --exclude 'workspace/memory/' \

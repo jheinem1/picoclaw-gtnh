@@ -86,15 +86,14 @@ Last updated: 2026-04-29
 
 ### Indexed query tools
 - Item TSV index builder: `workspace/tools/build_item_index.py`
-- Recipe TSV index builder: `workspace/tools/build_recipe_index.py`
-- Runtime query API: `workspace/gtnh_query` (shell)
-  - Use command form `sh gtnh_query ...` from workspace root.
-  - This avoids container dependency on Python/Node and works with available binaries (`sh`, `awk`, `grep`, `sed`).
+- Recipe DB importer: `scripts/import_recipe_db.sh`
+- Runtime recipe artifact: `gtnh-data/index/greggpt_recipes.sqlite`
+- Runtime recipe API: GregGPT `recipe_sql` tool only
 
 ### Query commands
-- `sh gtnh_query find-item "copper nugget"`
-- `sh gtnh_query item "<slug>"`
-- `sh gtnh_query resolve-recipes "copper nugget"`
+- `sh workspace/gtnh_find_item "copper nugget"`
+- `sh workspace/gtnh_item "<slug>"`
+- Recipe queries use `recipe_sql`; old recipe wrapper commands are intentionally absent.
 
 ## Storage layout
 - SD root free space check command: `df -h /`

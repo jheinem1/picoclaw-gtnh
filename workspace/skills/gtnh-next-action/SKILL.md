@@ -16,7 +16,7 @@ Return exactly one actionable GTNH recommendation. Prefer evidence-backed work t
 - Questbook facts must come from `sh gtnh_quests ...`.
 - Task-log facts must come from `sh gtnh_tasks ...`.
 - Inventory/material facts must come from `sh gtnh_inventory ...`.
-- Recipe and item identity facts must come from `sh gtnh_find_item`, `sh gtnh_resolve_recipes`, or `sh gtnh_search_recipes`.
+- Recipe facts must come from `recipe_sql`; item identity facts must come from `sh gtnh_find_item` or `sh gtnh_item`.
 - Do not invent quest progress, item counts, or material availability.
 
 ## Workflow

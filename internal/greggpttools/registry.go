@@ -43,7 +43,7 @@ func NewRegistry(cfg Config) (*Registry, error) {
 	if cfg.MemoryEnabled {
 		r.memory = NewMemoryStore(cfg.resolvedMemoryPath(), cfg.MemoryDefaultTTL)
 	}
-	for _, tool := range buildTools(cfg.ToolTimeout, r.memory) {
+	for _, tool := range buildTools(cfg, r.memory) {
 		name := tool.definition.Name
 		if _, exists := r.tools[name]; exists {
 			return nil, fmt.Errorf("duplicate tool definition %q", name)
@@ -88,7 +88,8 @@ func (r *Registry) Validate(name string, raw json.RawMessage) error {
 	return err
 }
 
-func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
+func buildTools(cfg Config, memory *MemoryStore) []Tool {
+	defaultTimeout := cfg.ToolTimeout
 	short := minDuration(defaultTimeout, 10*time.Second)
 	medium := minDuration(defaultTimeout, 20*time.Second)
 	network := minDuration(defaultTimeout, 30*time.Second)
@@ -109,16 +110,7 @@ func buildTools(defaultTimeout time.Duration, memory *MemoryStore) []Tool {
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_item", stringArg(a, "slug")}, nil
 		}),
-		tool("gtnh_resolve_recipes", GroupGTNHQuery, "Resolve an item name and return matching recipes.", medium, object(
-			required("item", stringSpec("Item name to resolve.")),
-		), func(a Arguments) ([]string, error) {
-			return []string{"sh", "gtnh_resolve_recipes", stringArg(a, "item")}, nil
-		}),
-		tool("gtnh_search_recipes", GroupGTNHQuery, "Search GTNH recipes by text.", medium, object(
-			required("query", stringSpec("Recipe search text.")),
-		), func(a Arguments) ([]string, error) {
-			return []string{"sh", "gtnh_search_recipes", stringArg(a, "query")}, nil
-		}),
+		recipeSQLTool(cfg, medium),
 		tool("gtnh_wiki_page", GroupGTNHQuery, "Fetch a GTNH wiki page summary.", network, object(
 			required("title", stringSpec("Wiki page title.")),
 		), func(a Arguments) ([]string, error) {

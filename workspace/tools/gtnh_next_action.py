@@ -189,8 +189,8 @@ def recommend(args):
         queries = infer_queries(text_of(obj))
         inferred = [f"inferred deliverable: {q}" for q in queries]
         for q in queries[:2]:
-            recipes = run_workspace(["sh", "gtnh_resolve_recipes", q], ws)
-            evidence.append(f"recipe_lookup[{q}]=" + one_line(recipes, 240))
+            item = run_workspace(["sh", "gtnh_find_item", q], ws)
+            evidence.append(f"item_lookup[{q}]=" + one_line(item, 240))
             inv = run_workspace(["sh", "gtnh_inventory", "find-item", "--query", q, "--scope", "all", "--limit", "5"], ws)
             evidence.append(f"inventory_lookup[{q}]=" + one_line(inv, 240))
             if "Inventory find" in inv or "Resolved item" in inv:

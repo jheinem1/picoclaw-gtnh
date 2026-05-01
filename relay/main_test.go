@@ -107,6 +107,19 @@ func TestInventoryIntent_MEQuestion(t *testing.T) {
 	}
 }
 
+func TestMaterialStorageQuestionRequiresVerification(t *testing.T) {
+	question := "greg what supplies do we need for the distillation towers that we don't already have in storage?"
+	if !inventoryIntentRe.MatchString(question) {
+		t.Fatalf("expected material storage question to match inventory intent")
+	}
+	if !materialIntentRe.MatchString(question) {
+		t.Fatalf("expected material storage question to match material intent")
+	}
+	if !needsVerification(question) {
+		t.Fatalf("expected material storage question to require recipe verification")
+	}
+}
+
 func TestFormatCoordinatesForMC_TupleCount(t *testing.T) {
 	in := "Chests with glass: (-1173,20,3525):63; (-1256,50,-8798):57"
 	got := formatCoordinatesForMC(in)
@@ -157,6 +170,26 @@ func TestAskAgentUsesRunner(t *testing.T) {
 	}
 	if !reflect.DeepEqual(call.RecalledContext, recalled) {
 		t.Fatalf("recalled context was not passed through: got=%#v want=%#v", call.RecalledContext, recalled)
+	}
+}
+
+func TestAskAgentRecipePromptUsesRecipeSQL(t *testing.T) {
+	runner := &fakeAgentRunner{reply: "choose recipe"}
+	cfg := Config{AgentTimeout: time.Second}
+	ev := ConsoleEvent{Player: "Steve", Text: "greg what recipe should I use for a distillation tower?"}
+
+	if _, err := askAgent(runner, cfg, ev, "mc:relay:recipe", true, nil, nil); err != nil {
+		t.Fatalf("askAgent failed: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one runner call, got %d", len(runner.calls))
+	}
+	prompt := runner.calls[0].Message
+	if !strings.Contains(prompt, "recipe_sql") {
+		t.Fatalf("prompt missing recipe_sql guidance: %q", prompt)
+	}
+	if strings.Contains(prompt, "gtnh_resolve_recipes") || strings.Contains(prompt, "gtnh_search_recipes") {
+		t.Fatalf("prompt still references old recipe wrappers: %q", prompt)
 	}
 }
 

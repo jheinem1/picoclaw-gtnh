@@ -63,8 +63,6 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 	}{
 		{"gtnh_find_item", `{"query":"steel ingot","oredict":true}`, []string{"sh", "gtnh_find_item", "steel ingot", "--oredict"}},
 		{"gtnh_item", `{"slug":"7437d11305"}`, []string{"sh", "gtnh_item", "7437d11305"}},
-		{"gtnh_resolve_recipes", `{"item":"bronze fluid pipe"}`, []string{"sh", "gtnh_resolve_recipes", "bronze fluid pipe"}},
-		{"gtnh_search_recipes", `{"query":"potin fluid pipe"}`, []string{"sh", "gtnh_search_recipes", "potin fluid pipe"}},
 		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
 		{"inventory_find", `{"item":"gregtech:gt.metaitem.01:11305","any_damage":true,"player":"Snow","scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01:11305", "--any-damage", "--player", "Snow", "--scope", "players", "--limit", "5"}},
@@ -101,8 +99,8 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"mc_say", `{"text":"hello base"}`, []string{"sh", "mc_say", "hello base"}},
 	}
 
-	if len(tests) != len(registry.Definitions()) {
-		t.Fatalf("test table covers %d tools, registry has %d", len(tests), len(registry.Definitions()))
+	if len(tests) != countArgvTools(registry) {
+		t.Fatalf("test table covers %d argv tools, registry has %d", len(tests), countArgvTools(registry))
 	}
 
 	for _, tt := range tests {
@@ -118,6 +116,27 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 				t.Fatalf("tool used shell command string: %#v", got)
 			}
 		})
+	}
+}
+
+func TestRecipeToolRegistrySurface(t *testing.T) {
+	registry := testRegistry(t, DefaultConfig())
+	var recipeTools []string
+	for _, def := range registry.Definitions() {
+		if strings.Contains(def.Name, "recipe") {
+			recipeTools = append(recipeTools, def.Name)
+		}
+	}
+	if !reflect.DeepEqual(recipeTools, []string{"recipe_sql"}) {
+		t.Fatalf("recipe tool surface = %#v, want only recipe_sql", recipeTools)
+	}
+	for _, name := range []string{"gtnh_resolve_recipes", "gtnh_search_recipes"} {
+		if _, ok := registry.Definition(name); ok {
+			t.Fatalf("%s should not be registered", name)
+		}
+		if err := registry.Validate(name, json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+			t.Fatalf("Validate(%s) error = %v, want unknown tool", name, err)
+		}
 	}
 }
 
@@ -228,4 +247,14 @@ func writeScript(t *testing.T, dir, name, body string) {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write script %s: %v", name, err)
 	}
+}
+
+func countArgvTools(registry *Registry) int {
+	count := 0
+	for _, tool := range registry.tools {
+		if tool.buildArgv != nil {
+			count++
+		}
+	}
+	return count
 }
