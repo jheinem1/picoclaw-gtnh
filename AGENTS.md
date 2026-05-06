@@ -7,6 +7,9 @@ This file is for coding agents working on the `picoclaw-gtnh` repository. Runtim
 - Use `workspace/AGENTS.md` only for GregGPT runtime behavior, GTNH query policy, Discord/Minecraft response constraints, and bot tool-use rules.
 - Do not add project deployment or host-access instructions to `workspace/AGENTS.md`.
 
+## Commit Attribution
+- When Codex contributes to a change, include `Co-authored-by: Codex <noreply@openai.com>` in the commit message.
+
 ## Pi Access
 - Connect to the Raspberry Pi over Tailscale for deploy, restart, log, and smoke-test operations.
 - Do not assume the Pi LAN address is reachable from the current environment.
