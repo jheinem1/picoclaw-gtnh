@@ -533,6 +533,100 @@ func TestParseQuestDatabaseExtractsOpenQuestItems(t *testing.T) {
 	}
 }
 
+func TestParseQuestDatabaseExtractsNBTStyleBetterQuestingIDs(t *testing.T) {
+	raw := []byte(`{
+	  "questDatabase:9": {
+	    "0:10": {
+	      "questIDLow:4": -4782315901562449638,
+	      "questIDHigh:4": -337303635474561203,
+	      "tasks:9": {
+	        "0:10": {
+	          "taskID:8": "bq_standard:retrieval",
+	          "requiredItems:9": {
+	            "0:10": {
+	              "Damage:2": 148,
+	              "id:8": "gregtech:gt.blockmachines",
+	              "Count:3": 1
+	            }
+	          }
+	        }
+	      },
+	      "properties:10": {
+	        "betterquesting:10": {
+	          "name:8": "Something From Nothing pt 2",
+	          "desc:8": "Build the multiblock"
+	        }
+	      }
+	    }
+	  }
+	}`)
+
+	quests, err := parseQuestDatabase(raw)
+	if err != nil {
+		t.Fatalf("parseQuestDatabase failed: %v", err)
+	}
+	if len(quests) != 1 {
+		t.Fatalf("expected one quest, got %#v", quests)
+	}
+	q := quests[0]
+	if q.ID != "-337303635474561203:-4782315901562449638" || q.Title != "Something From Nothing pt 2" || q.Description != "Build the multiblock" {
+		t.Fatalf("unexpected quest metadata: %#v", q)
+	}
+	if len(q.Tasks) != 1 || len(q.Tasks[0].RequiredItems) != 1 {
+		t.Fatalf("expected one task item, got %#v", q.Tasks)
+	}
+	item := q.Tasks[0].RequiredItems[0]
+	if item.RegName != "gregtech:gt.blockmachines" || item.Damage != 148 || item.Count != 1 {
+		t.Fatalf("unexpected required item: %#v", item)
+	}
+}
+
+func TestParseQuestLinesMapsTierLineToQuests(t *testing.T) {
+	raw := []byte(`{
+	  "questLines:9": {
+	    "6:10": {
+	      "order:3": 6,
+	      "questLineIDLow:4": 6,
+	      "questLineIDHigh:4": 0,
+	      "properties:10": {
+	        "betterquesting:10": {
+	          "name:8": "Tier 4 - EV"
+	        }
+	      },
+	      "quests:9": {
+	        "0:10": {
+	          "questIDLow:4": -7880854746900516763,
+	          "questIDHigh:4": -3190394247917321884,
+	          "x:3": 348,
+	          "y:3": 132
+	        },
+	        "1:10": {
+	          "questIDLow:4": 212,
+	          "questIDHigh:4": 0,
+	          "x:3": 480,
+	          "y:3": 276
+	        }
+	      }
+	    }
+	  }
+	}`)
+
+	byQuest, lines := parseQuestLines(raw)
+	if len(lines) != 1 {
+		t.Fatalf("expected one quest line, got %#v", lines)
+	}
+	line := lines[0]
+	if line.ID != "6" || line.Name != "Tier 4 - EV" || line.Order != 6 || !line.Tier {
+		t.Fatalf("unexpected tier line: %#v", line)
+	}
+	if byQuest["-3190394247917321884:-7880854746900516763"].Name != "Tier 4 - EV" {
+		t.Fatalf("high/low quest id was not mapped: %#v", byQuest)
+	}
+	if byQuest["212"].Name != "Tier 4 - EV" {
+		t.Fatalf("numeric quest id was not mapped: %#v", byQuest)
+	}
+}
+
 func TestParseQuestProgressMarksCompletedIDs(t *testing.T) {
 	raw := []byte(`{
 	  "questProgress": {
@@ -549,4 +643,203 @@ func TestParseQuestProgressMarksCompletedIDs(t *testing.T) {
 	if got["43"] {
 		t.Fatalf("quest 43 should not be complete: %#v", got)
 	}
+}
+
+func TestParseQuestProgressMarksNBTStyleCompletedIDs(t *testing.T) {
+	raw := []byte(`{
+	  "questProgress:9": {
+	    "0:10": {
+	      "questIDLow:4": -5367828810714122460,
+	      "questIDHigh:4": 3813996469394622463,
+	      "tasks:9": {
+	        "0:10": {
+	          "completeUsers:9": {"0:8": "0cc6814a-f873-44eb-b8fd-494effdc0126"},
+	          "taskID:8": "bq_standard:retrieval"
+	        }
+	      },
+	      "completed:9": {
+	        "0:10": {
+	          "uuid:8": "0cc6814a-f873-44eb-b8fd-494effdc0126",
+	          "claimed:1": 0
+	        }
+	      }
+	    }
+	  }
+	}`)
+
+	got := parseQuestProgress(raw)
+	if !got["3813996469394622463:-5367828810714122460"] {
+		t.Fatalf("expected high:low quest id completed, got %#v", got)
+	}
+	if got["0"] {
+		t.Fatalf("task completion should not be treated as quest id 0: %#v", got)
+	}
+}
+
+func TestParseQuestingPartiesResolvesNoobSquadMembers(t *testing.T) {
+	raw := []byte(`{
+	  "questingParties:9": {
+	    "7": {
+	      "partyID:3": 7,
+	      "name:8": "Noob Squad",
+	      "members:9": [
+	        {"uuid:8": "11111111-1111-1111-1111-111111111111"},
+	        {"uuid:8": "22222222222222222222222222222222"}
+	      ]
+	    }
+	  }
+	}`)
+
+	parties := parseQuestingParties(raw, map[string]string{
+		"11111111111111111111111111111111": "SugarYCoffee",
+		"22222222222222222222222222222222": "Stevobbo",
+	})
+	if len(parties) != 1 {
+		t.Fatalf("expected one party, got %#v", parties)
+	}
+	party := parties[0]
+	if party.Name != "Noob Squad" || party.ID != "7" || party.MemberCount != 2 {
+		t.Fatalf("unexpected party metadata: %#v", party)
+	}
+	if party.Members[0].Name != "Stevobbo" || party.Members[1].Name != "SugarYCoffee" {
+		t.Fatalf("expected resolved sorted members, got %#v", party.Members)
+	}
+}
+
+func TestScanQuestsUsesSelectedPartyProgressOnly(t *testing.T) {
+	files := map[string]string{
+		"world/betterquesting/QuestDatabase.json": `{
+		  "questDatabase:9": {
+		    "42": {"questID:3": 42, "properties:10": {"name:8": "Make Steel"}},
+		    "43": {"questID:3": 43, "properties:10": {"name:8": "Make Bronze"}}
+		  },
+		  "questLines:9": {
+		    "6:10": {
+		      "order:3": 6,
+		      "questLineIDLow:4": 6,
+		      "questLineIDHigh:4": 0,
+		      "properties:10": {"betterquesting:10": {"name:8": "Tier 4 - EV"}},
+		      "quests:9": {
+		        "0:10": {"questIDLow:4": 42, "questIDHigh:4": 0},
+		        "1:10": {"questIDLow:4": 43, "questIDHigh:4": 0}
+		      }
+		    }
+		  }
+		}`,
+		"world/betterquesting/NameCache.json": `{
+		  "nameCache:9": {
+		    "a": {"uuid:8": "11111111-1111-1111-1111-111111111111", "name:8": "SugarYCoffee"},
+		    "b": {"uuid:8": "22222222-2222-2222-2222-222222222222", "name:8": "Stevobbo"},
+		    "c": {"uuid:8": "33333333-3333-3333-3333-333333333333", "name:8": "OtherPlayer"}
+		  }
+		}`,
+		"world/betterquesting/QuestingParties.json": `{
+		  "questingParties:9": {
+		    "7": {
+		      "partyID:3": 7,
+		      "name:8": "Noob Squad",
+		      "members:9": [
+		        {"uuid:8": "11111111-1111-1111-1111-111111111111"},
+		        {"uuid:8": "22222222-2222-2222-2222-222222222222"}
+		      ]
+		    }
+		  }
+		}`,
+		"world/betterquesting/QuestProgress/11111111-1111-1111-1111-111111111111.json": `{"questProgress":{"42":{"questID:3":42,"completed":true}}}`,
+		"world/betterquesting/QuestProgress/22222222-2222-2222-2222-222222222222.json": `{"questProgress":{"42":{"questID:3":42,"completed":true}}}`,
+		"world/betterquesting/QuestProgress/33333333-3333-3333-3333-333333333333.json": `{"questProgress":{"43":{"questID:3":43,"completed":true}}}`,
+	}
+	server := questFileServer(t, files)
+	defer server.Close()
+
+	index, err := scanQuests(&http.Client{}, Config{
+		DatHostBase:    server.URL,
+		DatHostServer:  "srv",
+		QuestPartyName: "Noob Squad",
+		HTTPTimeout:    time.Second,
+	}, "2026-05-02T00:00:00Z")
+	if err != nil {
+		t.Fatalf("scanQuests failed: %v", err)
+	}
+	if index.Party.Name != "Noob Squad" || index.Party.MemberCount != 2 {
+		t.Fatalf("unexpected selected party: %#v", index.Party)
+	}
+	if index.Source.ProgressFiles != 3 || index.Source.MatchedProgressFiles != 2 {
+		t.Fatalf("unexpected progress file counts: %#v", index.Source)
+	}
+	if index.Stats.CompletedCount != 1 || index.Stats.OpenCount != 1 {
+		t.Fatalf("unexpected quest stats: %#v", index.Stats)
+	}
+	if len(index.QuestLines) != 1 || index.QuestLines[0].Name != "Tier 4 - EV" || index.QuestLines[0].OpenCount != 1 || index.QuestLines[0].CompletedCount != 1 {
+		t.Fatalf("unexpected quest line stats: %#v", index.QuestLines)
+	}
+	byID := map[string]QuestRecord{}
+	for _, quest := range index.Quests {
+		byID[quest.ID] = quest
+	}
+	if !byID["42"].Completed || strings.Join(byID["42"].CompletedBy, ",") != "Stevobbo,SugarYCoffee" {
+		t.Fatalf("expected quest 42 completed by party members, got %#v", byID["42"])
+	}
+	if byID["43"].Completed {
+		t.Fatalf("quest 43 should ignore non-party progress: %#v", byID["43"])
+	}
+	if byID["43"].QuestLine != "Tier 4 - EV" || !byID["43"].TierQuestLine {
+		t.Fatalf("quest 43 should be mapped to tier quest line: %#v", byID["43"])
+	}
+}
+
+func TestScanQuestsWarnsWhenSelectedPartyMissing(t *testing.T) {
+	files := map[string]string{
+		"world/betterquesting/QuestDatabase.json":   `{"questDatabase:9":{"42":{"questID:3":42,"properties:10":{"name:8":"Make Steel"}}}}`,
+		"world/betterquesting/NameCache.json":       `{"nameCache:9":{}}`,
+		"world/betterquesting/QuestingParties.json": `{"questingParties:9":{}}`,
+	}
+	server := questFileServer(t, files)
+	defer server.Close()
+
+	index, err := scanQuests(&http.Client{}, Config{
+		DatHostBase:    server.URL,
+		DatHostServer:  "srv",
+		QuestPartyName: "Noob Squad",
+		HTTPTimeout:    time.Second,
+	}, "")
+	if err != nil {
+		t.Fatalf("scanQuests failed: %v", err)
+	}
+	joined := strings.Join(index.Warnings, "\n")
+	if !strings.Contains(joined, `quest party "Noob Squad" not found`) {
+		t.Fatalf("missing selected party warning: %#v", index.Warnings)
+	}
+	if index.Stats.CompletedCount != 0 || index.Stats.OpenCount != 1 {
+		t.Fatalf("unexpected stats for missing party: %#v", index.Stats)
+	}
+}
+
+func questFileServer(t *testing.T, files map[string]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("path") == "world/betterquesting/QuestProgress/" {
+			var entries []string
+			for path := range files {
+				if strings.HasPrefix(path, "world/betterquesting/QuestProgress/") {
+					entries = append(entries, `{"path":"`+path+`"}`)
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[" + strings.Join(entries, ",") + "]"))
+			return
+		}
+		const prefix = "/game-servers/srv/files/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			http.NotFound(w, r)
+			return
+		}
+		path := strings.TrimPrefix(r.URL.Path, prefix)
+		if data, ok := files[path]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(data))
+			return
+		}
+		http.NotFound(w, r)
+	}))
 }

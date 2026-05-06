@@ -98,11 +98,56 @@ def quest_score(quest):
     for task in tasks:
         item_count += len(task.get("required_items") or [])
     score = 40
+    if quest.get("tier_quest_line"):
+        score += 80
+    if quest.get("quest_line"):
+        score += 10
     if item_count:
         score += min(30, item_count * 6)
     if quest.get("description"):
         score += 4
     return score
+
+
+def current_tier_line(quest_index):
+    lines = quest_index.get("quest_lines") if isinstance(quest_index, dict) else []
+    current = None
+    for line in lines or []:
+        if not line.get("tier"):
+            continue
+        if (line.get("completed_count") or 0) <= 0 or (line.get("open_count") or 0) <= 0:
+            continue
+        if current is None or (line.get("order") or 0) > (current.get("order") or 0):
+            current = line
+    return (current or {}).get("name") or ""
+
+
+def scored_quest(quest, active_tier_line):
+    score = quest_score(quest)
+    line = quest.get("quest_line") or ""
+    if active_tier_line and line == active_tier_line:
+        score += 100
+    elif quest.get("tier_quest_line"):
+        score -= 40
+    return score
+
+
+def requested_tier(message):
+    message = message or ""
+    m = re.search(r"\btier\s*([0-9]+(?:\.[0-9]+)?)\b", message, re.I)
+    if m:
+        return "tier " + m.group(1)
+    voltage = re.search(r"\b(steam|lv|mv|hv|ev|iv|luv|zpm|uv|uhv|uev|uiv|umv)\b", message, re.I)
+    if voltage:
+        return voltage.group(1).lower()
+    return ""
+
+
+def matches_requested_tier(quest, tier):
+    if not tier:
+        return True
+    line = str(quest.get("quest_line") or "").lower()
+    return tier in line
 
 
 def task_score(row):
@@ -146,15 +191,20 @@ def recommend(args):
         tasks_json = {}
 
     candidates = []
+    tier_hint = requested_tier(args.message)
+    active_tier_line = current_tier_line(quest_index)
     for quest in quest_index.get("quests") or []:
         if quest.get("completed"):
             continue
-        candidates.append(("questbook", quest_score(quest), quest))
-
-    for row in task_rows(tasks_json):
-        if isinstance(row, dict) and str(row.get("kanban_status") or row.get("status") or "").lower() == "done":
+        if tier_hint and not matches_requested_tier(quest, tier_hint):
             continue
-        candidates.append(("task_log", task_score(row), row))
+        candidates.append(("questbook", scored_quest(quest, active_tier_line), quest))
+
+    if not tier_hint:
+        for row in task_rows(tasks_json):
+            if isinstance(row, dict) and str(row.get("kanban_status") or row.get("status") or "").lower() == "done":
+                continue
+            candidates.append(("task_log", task_score(row), row))
 
     if not candidates:
         return {
@@ -181,7 +231,13 @@ def recommend(args):
         title = obj.get("title") or f"Quest {obj.get('id')}"
         inferred, available, missing = material_summary_for_quest(obj)
         evidence.append(f"quest_id={obj.get('id')}")
-        why = "It is an open quest with concrete indexed questbook data."
+        if obj.get("quest_line"):
+            evidence.append(f"quest_line={obj.get('quest_line')}")
+        if obj.get("tier_quest_line"):
+            evidence.append("tier_quest_line=true")
+        if active_tier_line:
+            evidence.append(f"current_tier_line={active_tier_line}")
+        why = "It is an open main tier quest with concrete indexed questbook data." if obj.get("tier_quest_line") else "It is an open quest with concrete indexed questbook data."
         next_step = f"Open quest {obj.get('id')} and complete: {title}."
         confidence = "medium" if inferred else "low"
     else:
@@ -189,8 +245,6 @@ def recommend(args):
         queries = infer_queries(text_of(obj))
         inferred = [f"inferred deliverable: {q}" for q in queries]
         for q in queries[:2]:
-            item = run_workspace(["sh", "gtnh_find_item", q], ws)
-            evidence.append(f"item_lookup[{q}]=" + one_line(item, 240))
             inv = run_workspace(["sh", "gtnh_inventory", "find-item", "--query", q, "--scope", "all", "--limit", "5"], ws)
             evidence.append(f"inventory_lookup[{q}]=" + one_line(inv, 240))
             if "Inventory find" in inv or "Resolved item" in inv:

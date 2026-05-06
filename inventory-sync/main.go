@@ -37,6 +37,7 @@ type Config struct {
 	MEStaleAfter       time.Duration
 	MEExportPaths      []string
 	QuestsInterval     time.Duration
+	QuestPartyName     string
 	BlockInvInterval   time.Duration
 	BlockInvStaleAfter time.Duration
 	BlockInvPaths      []string
@@ -331,6 +332,7 @@ func loadConfig() (Config, error) {
 		MEStaleAfter:       time.Duration(max(1, getenvInt("INVENTORY_ME_STALE_AFTER_SECONDS", 900))) * time.Second,
 		MEExportPaths:      parseCSV(getenv("INVENTORY_ME_EXPORT_PATHS", "world/greggpt/me_index.json,world/picoclaw/me_index.json")),
 		QuestsInterval:     time.Duration(max(300, getenvInt("INVENTORY_QUESTS_INTERVAL_SECONDS", 1800))) * time.Second,
+		QuestPartyName:     getenv("INVENTORY_QUEST_PARTY_NAME", "Noob Squad"),
 		BlockInvInterval:   time.Duration(max(60, getenvInt("INVENTORY_BLOCK_INVENTORIES_INTERVAL_SECONDS", 300))) * time.Second,
 		BlockInvStaleAfter: time.Duration(max(1, getenvInt("INVENTORY_BLOCK_INVENTORIES_STALE_AFTER_SECONDS", 900))) * time.Second,
 		BlockInvPaths:      parseCSV(getenv("INVENTORY_BLOCK_INVENTORY_EXPORT_PATHS", "world/picoclaw/block_inventories.json,world/greggpt/block_inventories.json")),
