@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"greggpt-gtnh/internal/agent/history"
 	"greggpt-gtnh/internal/greggpttools"
@@ -51,6 +52,7 @@ type ModelRequest struct {
 	PreviousResponseID string
 	Input              []InputItem
 	Tools              []ToolDefinition
+	DisableTools       bool
 }
 
 type InputItem struct {
@@ -111,6 +113,13 @@ func NewRunner(cfg Config, client Client, registry Registry) *Runner {
 	}
 	if cfg.MaxToolCalls == 0 {
 		cfg.MaxToolCalls = DefaultMaxToolCalls
+	}
+	if cfg.TimeoutSummary == 0 {
+		if n := positiveIntEnv(EnvTimeoutSummary); n > 0 {
+			cfg.TimeoutSummary = time.Duration(n) * time.Second
+		} else {
+			cfg.TimeoutSummary = DefaultTimeoutSummary
+		}
 	}
 	if cfg.MemoryMaxInjectedBytes == 0 {
 		cfg.MemoryMaxInjectedBytes = DefaultMemoryMaxBytes
@@ -177,7 +186,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return "", TimeoutSummaryError{
-					Summary: profile.formatFinal(timeoutSummary(progress)),
+					Summary: r.recoverTimeoutSummary(profile, instructions, input, progress),
 					Cause:   err,
 				}
 			}
@@ -216,6 +225,63 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 			toolCalls++
 		}
 	}
+}
+
+func (r *Runner) recoverTimeoutSummary(profile Profile, instructions string, input []InputItem, progress []toolProgress) string {
+	fallback := profile.formatFinal(timeoutSummary(progress))
+	if r.cfg.TimeoutSummary <= 0 {
+		return fallback
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.TimeoutSummary)
+	defer cancel()
+
+	resp, err := r.client.CreateResponse(ctx, ModelRequest{
+		Model:           r.cfg.Model,
+		ReasoningEffort: r.cfg.ReasoningEffort,
+		Instructions:    timeoutSummaryInstructions(profile, instructions),
+		Input: []InputItem{{
+			Role:    roleUser,
+			Content: timeoutSummaryTranscript(input),
+		}},
+		DisableTools: true,
+	})
+	if err != nil || strings.TrimSpace(resp.FinalText) == "" {
+		return fallback
+	}
+	return profile.formatFinal(resp.FinalText)
+}
+
+func timeoutSummaryInstructions(profile Profile, base string) string {
+	var b strings.Builder
+	b.WriteString("The previous GregGPT response hit its deadline. Produce a concise timeout recovery summary using only the transcript and tool outputs provided by the user message. Do not call tools. Do not invent unresolved facts. State what was learned, what was not completed, and any concrete next step if the transcript supports one.")
+	if strings.TrimSpace(base) != "" {
+		b.WriteString("\n\nOriginal runtime instructions:\n")
+		b.WriteString(strings.TrimSpace(base))
+	}
+	if profile.ASCIIOnly {
+		b.WriteString("\nUse ASCII only.")
+	}
+	if !profile.Markdown {
+		b.WriteString("\nDo not use markdown.")
+	}
+	return b.String()
+}
+
+func timeoutSummaryTranscript(input []InputItem) string {
+	var b strings.Builder
+	b.WriteString("Summarize this timed-out agent transcript:\n")
+	for i, item := range input {
+		switch item.Role {
+		case roleUser:
+			fmt.Fprintf(&b, "\n[%d] User/request context:\n<<<\n%s\n>>>\n", i+1, strings.TrimSpace(item.Content))
+		case roleToolCall:
+			fmt.Fprintf(&b, "\n[%d] Tool call `%s` id=%s arguments:\n<<<\n%s\n>>>\n", i+1, strings.TrimSpace(item.ToolName), strings.TrimSpace(item.ToolCallID), strings.TrimSpace(defaultJSON(item.Content)))
+		case roleToolOutput:
+			fmt.Fprintf(&b, "\n[%d] Tool output `%s` id=%s:\n<<<\n%s\n>>>\n", i+1, strings.TrimSpace(item.ToolName), strings.TrimSpace(item.ToolCallID), strings.TrimSpace(item.Content))
+		}
+	}
+	return b.String()
 }
 
 func (r *Runner) runtimeInstructions(profile Profile) string {

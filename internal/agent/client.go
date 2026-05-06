@@ -225,31 +225,34 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 		}
 	}
 
-	tools := make([]responses.ToolUnionParam, 0, len(request.Tools)+1)
-	tools = append(tools, responses.ToolUnionParam{
-		OfWebSearch: &responses.WebSearchToolParam{
-			Type: responses.WebSearchToolTypeWebSearch,
-			Filters: responses.WebSearchToolFiltersParam{
-				AllowedDomains: []string{gtnhWikiSearchDomain},
-			},
-			SearchContextSize: responses.WebSearchToolSearchContextSizeMedium,
-		},
-	})
-	for _, tool := range request.Tools {
-		parameters := map[string]any{}
-		if len(tool.Parameters) != 0 {
-			if err := json.Unmarshal(tool.Parameters, &parameters); err != nil {
-				return ResponseRequest{}, fmt.Errorf("parse parameters for tool %q: %w", tool.Name, err)
-			}
-		}
+	var tools []responses.ToolUnionParam
+	if !request.DisableTools {
+		tools = make([]responses.ToolUnionParam, 0, len(request.Tools)+1)
 		tools = append(tools, responses.ToolUnionParam{
-			OfFunction: &responses.FunctionToolParam{
-				Name:        tool.Name,
-				Description: openai.String(tool.Description),
-				Parameters:  parameters,
-				Strict:      openai.Bool(false),
+			OfWebSearch: &responses.WebSearchToolParam{
+				Type: responses.WebSearchToolTypeWebSearch,
+				Filters: responses.WebSearchToolFiltersParam{
+					AllowedDomains: []string{gtnhWikiSearchDomain},
+				},
+				SearchContextSize: responses.WebSearchToolSearchContextSizeMedium,
 			},
 		})
+		for _, tool := range request.Tools {
+			parameters := map[string]any{}
+			if len(tool.Parameters) != 0 {
+				if err := json.Unmarshal(tool.Parameters, &parameters); err != nil {
+					return ResponseRequest{}, fmt.Errorf("parse parameters for tool %q: %w", tool.Name, err)
+				}
+			}
+			tools = append(tools, responses.ToolUnionParam{
+				OfFunction: &responses.FunctionToolParam{
+					Name:        tool.Name,
+					Description: openai.String(tool.Description),
+					Parameters:  parameters,
+					Strict:      openai.Bool(false),
+				},
+			})
+		}
 	}
 
 	out := ResponseRequest{
@@ -259,9 +262,11 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: input,
 		},
-		Tools:             tools,
-		Include:           []responses.ResponseIncludable{responses.ResponseIncludableWebSearchCallActionSources},
-		ParallelToolCalls: openai.Bool(true),
+		Tools: tools,
+	}
+	if !request.DisableTools {
+		out.Include = []responses.ResponseIncludable{responses.ResponseIncludableWebSearchCallActionSources}
+		out.ParallelToolCalls = openai.Bool(true)
 	}
 	if effort := reasoningEffort(request.ReasoningEffort); effort != "" {
 		out.Reasoning = shared.ReasoningParam{Effort: effort}

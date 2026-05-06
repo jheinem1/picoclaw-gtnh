@@ -301,6 +301,62 @@ func TestRunnerTimeoutSummarizesToolProgress(t *testing.T) {
 	}
 }
 
+func TestRunnerTimeoutUsesNoToolRecoverySummary(t *testing.T) {
+	client := &fakeClient{
+		responses: []ModelResponse{
+			{ToolCalls: []ToolCall{toolCall("call-1", "lookup", `{"q":"super chest"}`)}},
+			{FinalText: "I found the lookup failed because Super Chest is ambiguous; narrow the item name."},
+		},
+		errsByRequest: []error{nil, context.DeadlineExceeded, nil},
+	}
+	registry := newFakeRegistry()
+	registry.outputs["lookup"] = "error: ambiguous item query \"Super Chest\" matched 8 items"
+	runner := NewRunner(Config{}, client, registry)
+
+	got, err := runner.Run(context.Background(), Request{
+		Channel: ChannelDiscord,
+		User:    "exx",
+		Message: "where is the super chest?",
+	})
+	if err == nil {
+		t.Fatalf("expected timeout error")
+	}
+	var timeoutErr TimeoutSummaryError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected TimeoutSummaryError, got %T: %v", err, err)
+	}
+	if timeoutErr.Summary != "I found the lookup failed because Super Chest is ambiguous; narrow the item name." {
+		t.Fatalf("unexpected recovered summary: %q", timeoutErr.Summary)
+	}
+	if got != "" {
+		t.Fatalf("expected empty returned text with summary in error, got %q", got)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("expected initial, timed-out, and recovery requests; got %d", len(client.requests))
+	}
+	recovery := client.requests[2]
+	if !recovery.DisableTools {
+		t.Fatalf("recovery request did not disable tools: %#v", recovery)
+	}
+	if len(recovery.Tools) != 0 {
+		t.Fatalf("recovery request carried tools: %#v", recovery.Tools)
+	}
+	if !strings.Contains(recovery.Input[0].Content, "ambiguous item query") ||
+		!strings.Contains(recovery.Input[0].Content, "Tool output `lookup`") {
+		t.Fatalf("recovery transcript missing accumulated tool output: %q", recovery.Input[0].Content)
+	}
+}
+
+func TestNewRunnerReadsTimeoutSummarySeconds(t *testing.T) {
+	t.Setenv(EnvTimeoutSummary, "7")
+
+	runner := NewRunner(Config{}, &fakeClient{}, newFakeRegistry())
+
+	if runner.cfg.TimeoutSummary != 7*time.Second {
+		t.Fatalf("TimeoutSummary = %s, want 7s", runner.cfg.TimeoutSummary)
+	}
+}
+
 func TestRunnerInjectsSelectedMemory(t *testing.T) {
 	workspace := t.TempDir()
 	memoryPath := filepath.Join(workspace, "state", "greggpt_memory.json")
@@ -362,11 +418,19 @@ type fakeClient struct {
 	responses         []ModelResponse
 	requests          []ModelRequest
 	err               error
+	errsByRequest     []error
 	errAfterResponses error
 }
 
 func (f *fakeClient) CreateResponse(_ context.Context, req ModelRequest) (ModelResponse, error) {
 	f.requests = append(f.requests, req)
+	if len(f.errsByRequest) != 0 {
+		err := f.errsByRequest[0]
+		f.errsByRequest = f.errsByRequest[1:]
+		if err != nil {
+			return ModelResponse{}, err
+		}
+	}
 	if f.err != nil {
 		return ModelResponse{}, f.err
 	}

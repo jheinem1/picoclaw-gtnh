@@ -21,8 +21,8 @@ func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
 		Model:           "gpt-5",
 		ReasoningEffort: "medium",
 		Tools: []ToolDefinition{{
-			Name:        "gtnh_find_item",
-			Description: "Find GTNH items by text query.",
+			Name:        "recipe_sql",
+			Description: "Run a read-only recipe SQL query.",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
 		}},
 	})
@@ -52,8 +52,30 @@ func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
 	if req.Reasoning.Effort != "medium" {
 		t.Fatalf("Reasoning.Effort = %q, want medium", req.Reasoning.Effort)
 	}
-	if req.Tools[1].OfFunction == nil || req.Tools[1].OfFunction.Name != "gtnh_find_item" {
+	if req.Tools[1].OfFunction == nil || req.Tools[1].OfFunction.Name != "recipe_sql" {
 		t.Fatalf("second tool is not original function tool: %+v", req.Tools[1])
+	}
+}
+
+func TestToResponseRequestDisableToolsOmitsWebAndFunctionTools(t *testing.T) {
+	req, err := toResponseRequest(ModelRequest{
+		Model:        "gpt-5",
+		DisableTools: true,
+		Tools: []ToolDefinition{{
+			Name:        "recipe_sql",
+			Description: "Run a read-only recipe SQL query.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("toResponseRequest() error = %v", err)
+	}
+
+	if len(req.Tools) != 0 {
+		t.Fatalf("len(Tools) = %d, want 0: %+v", len(req.Tools), req.Tools)
+	}
+	if len(req.Include) != 0 {
+		t.Fatalf("Include = %#v, want empty", req.Include)
 	}
 }
 
