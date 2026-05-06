@@ -3,8 +3,8 @@ package agent
 import "time"
 
 const (
-	DefaultModel           = "gpt-5.3-codex-spark"
-	DefaultReasoningEffort = "medium"
+	DefaultModel           = "gpt-5.5"
+	DefaultReasoningEffort = "low"
 	DefaultWorkspace       = "/root/.greggpt/workspace"
 	DefaultAuthFile        = "/root/.greggpt/auth.json"
 	DefaultMaxToolCalls    = 100
