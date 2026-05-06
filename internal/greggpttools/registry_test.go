@@ -61,8 +61,6 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		args string
 		want []string
 	}{
-		{"gtnh_find_item", `{"query":"steel ingot","oredict":true}`, []string{"sh", "gtnh_find_item", "steel ingot", "--oredict"}},
-		{"gtnh_item", `{"slug":"7437d11305"}`, []string{"sh", "gtnh_item", "7437d11305"}},
 		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
 		{"inventory_find", `{"item":"gregtech:gt.metaitem.01:11305","any_damage":true,"player":"Snow","scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01:11305", "--any-damage", "--player", "Snow", "--scope", "players", "--limit", "5"}},
@@ -74,7 +72,9 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"inventory_refresh", `{"scope":"containers"}`, []string{"sh", "gtnh_inventory", "refresh", "--containers"}},
 		{"quest_status", `{}`, []string{"sh", "gtnh_quests", "status"}},
 		{"quest_open_json", `{"limit":10}`, []string{"sh", "gtnh_quests", "open-json", "--limit", "10"}},
+		{"quest_completed_json", `{"limit":10}`, []string{"sh", "gtnh_quests", "completed-json", "--limit", "10"}},
 		{"quest_show", `{"id":"42"}`, []string{"sh", "gtnh_quests", "show", "42"}},
+		{"quest_refresh", `{}`, []string{"sh", "gtnh_quests", "refresh"}},
 		{"next_action_recommendation", `{"user":"Snow","channel":"discord","message":"what do I need to do"}`, []string{"sh", "gtnh_next_action", "recommend", "--user", "Snow", "--channel", "discord", "--message", "what do I need to do"}},
 		{"task_board", `{}`, []string{"sh", "gtnh_tasks", "board"}},
 		{"task_board_json", `{}`, []string{"sh", "gtnh_tasks", "board-json"}},
@@ -130,7 +130,7 @@ func TestRecipeToolRegistrySurface(t *testing.T) {
 	if !reflect.DeepEqual(recipeTools, []string{"recipe_sql"}) {
 		t.Fatalf("recipe tool surface = %#v, want only recipe_sql", recipeTools)
 	}
-	for _, name := range []string{"gtnh_resolve_recipes", "gtnh_search_recipes"} {
+	for _, name := range []string{"gtnh_resolve_recipes", "gtnh_search_recipes", "gtnh_find_item", "gtnh_item"} {
 		if _, ok := registry.Definition(name); ok {
 			t.Fatalf("%s should not be registered", name)
 		}
@@ -159,8 +159,8 @@ func TestArgumentValidation(t *testing.T) {
 		args string
 		want string
 	}{
-		{"missing required", "gtnh_find_item", `{}`, `missing required argument "query"`},
-		{"unknown argument", "gtnh_find_item", `{"query":"steel","cmd":"rm -rf /"}`, `unknown argument "cmd"`},
+		{"missing required", "inventory_find_item", `{}`, `missing required argument "query"`},
+		{"unknown argument", "inventory_find_item", `{"query":"steel","cmd":"rm -rf /"}`, `unknown argument "cmd"`},
 		{"scope enum", "inventory_find", `{"item":"minecraft:stone","scope":"everywhere"}`, `argument "scope" must be one of`},
 		{"status enum", "task_move", `{"id":1,"status":"blocked"}`, `argument "status" must be one of`},
 		{"dim enum", "inventory_chest", `{"x":0,"y":64,"z":0,"dim":2}`, `argument "dim" must be one of`},

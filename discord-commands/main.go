@@ -55,19 +55,6 @@ type greggptConfig struct {
 	} `json:"channels"`
 }
 
-type wikiSearchResult struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
-}
-
-type wikiSearchResponse struct {
-	OK        bool               `json:"ok"`
-	Query     string             `json:"query"`
-	TotalHits int                `json:"total_hits"`
-	Results   []wikiSearchResult `json:"results"`
-	Source    string             `json:"source"`
-}
-
 type wikiPageResponse struct {
 	OK      bool   `json:"ok"`
 	Query   string `json:"query"`
@@ -470,15 +457,8 @@ func inventoryCommand() *discordgo.ApplicationCommand {
 func queryCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "query",
-		Description: "GTNH item and wiki lookup",
+		Description: "GTNH wiki lookup",
 		Options: []*discordgo.ApplicationCommandOption{
-			subcommand("find_item", "Search for a matching item",
-				stringOption("query", "Search text", true),
-				boolOption("oredict", "Use ore dictionary"),
-			),
-			subcommand("item", "Show an exact item",
-				stringOption("slug", "Exact item slug", true),
-			),
 			subcommand("wiki_page", "Show a GTNH wiki page",
 				stringOption("title", "Page title", true),
 			),
@@ -1445,14 +1425,6 @@ func (s *Service) dispatchInventory(ctx context.Context, opts []*discordgo.Appli
 func (s *Service) dispatchQuery(ctx context.Context, opts []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
 	sub, subOpts := firstSubcommand(opts)
 	switch sub {
-	case "find_item":
-		args := []string{"sh", "gtnh_find_item", optString(subOpts, "query")}
-		if optBool(subOpts, "oredict") {
-			args = append(args, "--oredict")
-		}
-		return s.run(ctx, args...)
-	case "item":
-		return s.run(ctx, "sh", "gtnh_query", "item", optString(subOpts, "slug"))
 	case "wiki_page":
 		out, err := s.run(ctx, "sh", "gtnh_wiki_page", optString(subOpts, "title"))
 		return formatWikiPageOutput(out), err
@@ -1709,39 +1681,6 @@ func wrapCodeBlock(content string) string {
 
 	safe := strings.ReplaceAll(content, "```", "`\u200b``")
 	return "```" + lang + "\n" + safe + "\n```"
-}
-
-func formatWikiSearchOutput(raw string) string {
-	var resp wikiSearchResponse
-	if err := json.Unmarshal([]byte(raw), &resp); err != nil || !resp.OK {
-		return raw
-	}
-
-	var b strings.Builder
-	if resp.Query != "" {
-		fmt.Fprintf(&b, "%s (%d hits)", resp.Query, resp.TotalHits)
-	} else {
-		fmt.Fprintf(&b, "Wiki search (%d hits)", resp.TotalHits)
-	}
-	if len(resp.Results) == 0 {
-		b.WriteString("\nNo clickable results were returned.")
-		return b.String()
-	}
-	count := 0
-	for _, result := range resp.Results {
-		title := strings.TrimSpace(result.Title)
-		if title == "" {
-			continue
-		}
-		count++
-		b.WriteString("\n")
-		if result.URL != "" {
-			fmt.Fprintf(&b, "%d. %s - %s", count, title, result.URL)
-		} else {
-			fmt.Fprintf(&b, "%d. %s", count, title)
-		}
-	}
-	return b.String()
 }
 
 func formatWikiPageOutput(raw string) string {

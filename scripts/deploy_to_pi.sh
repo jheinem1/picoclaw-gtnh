@@ -38,5 +38,5 @@ fi
 if [[ ! -f /home/jhein/greggpt-gtnh/deploy/env/dathost-bridge.env ]]; then
   cp /home/jhein/greggpt-gtnh/deploy/env/dathost-bridge.env.template /home/jhein/greggpt-gtnh/deploy/env/dathost-bridge.env
 fi
-chmod +x /home/jhein/greggpt-gtnh/workspace/gtnh_query /home/jhein/greggpt-gtnh/workspace/gtnh_inventory /home/jhein/greggpt-gtnh/workspace/mc_poll /home/jhein/greggpt-gtnh/workspace/mc_online /home/jhein/greggpt-gtnh/workspace/mc_say /home/jhein/greggpt-gtnh/workspace/tools/*.py /home/jhein/greggpt-gtnh/workspace/tools/*.sh /home/jhein/greggpt-gtnh/scripts/*.sh || true
+chmod +x /home/jhein/greggpt-gtnh/workspace/gtnh_inventory /home/jhein/greggpt-gtnh/workspace/gtnh_wiki_page /home/jhein/greggpt-gtnh/workspace/mc_poll /home/jhein/greggpt-gtnh/workspace/mc_online /home/jhein/greggpt-gtnh/workspace/mc_say /home/jhein/greggpt-gtnh/workspace/tools/*.py /home/jhein/greggpt-gtnh/workspace/tools/*.sh /home/jhein/greggpt-gtnh/scripts/*.sh || true
 '

@@ -20,7 +20,7 @@ var recipeSQLFirstKeyword = regexp.MustCompile(`(?is)^\s*(select|with)\b`)
 var recipeSQLSelectKeyword = regexp.MustCompile(`(?is)\bselect\b`)
 
 func recipeSQLTool(cfg Config, timeout time.Duration) Tool {
-	return nativeTool("recipe_sql", GroupGTNHQuery, "Run a read-only SELECT or WITH SELECT query against the indexed GTNH recipe SQLite database.", timeout, object(
+	return nativeTool("recipe_sql", GroupGTNHData, "Run a read-only SELECT or WITH SELECT query against the indexed GTNH recipe SQLite database.", timeout, object(
 		required("sql", stringSpec("Read-only SQLite query. Must be a single SELECT or WITH SELECT statement with no semicolon.")),
 		optional("max_rows", intSpec("Maximum rows to return.", 1, 100, defaultRecipeSQLRows)),
 	), func(ctx context.Context, a Arguments) (Result, error) {

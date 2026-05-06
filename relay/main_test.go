@@ -188,7 +188,10 @@ func TestAskAgentRecipePromptUsesRecipeSQL(t *testing.T) {
 	if !strings.Contains(prompt, "recipe_sql") {
 		t.Fatalf("prompt missing recipe_sql guidance: %q", prompt)
 	}
-	if strings.Contains(prompt, "gtnh_resolve_recipes") || strings.Contains(prompt, "gtnh_search_recipes") {
+	if !strings.Contains(prompt, "Preserve SQL quantities exactly") || !strings.Contains(prompt, "recipe_input_options.amount") || !strings.Contains(prompt, "recipe_inputs.amount") {
+		t.Fatalf("prompt missing recipe quantity preservation guidance: %q", prompt)
+	}
+	if strings.Contains(prompt, "gtnh_resolve_recipes") || strings.Contains(prompt, "gtnh_search_recipes") || strings.Contains(prompt, "gtnh_find_item") {
 		t.Fatalf("prompt still references old recipe wrappers: %q", prompt)
 	}
 }

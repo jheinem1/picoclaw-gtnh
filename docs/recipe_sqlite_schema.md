@@ -123,13 +123,42 @@ ORDER BY h.name, r.id
 LIMIT 20;
 ```
 
-List inputs and outputs for one recipe:
+List inputs for one recipe. Use this shape for user-facing ingredient counts;
+`recipe_input_options.amount` is the resolved option quantity when present, and
+falls back to `recipe_inputs.amount` for optionless rows.
 
 ```sql
-SELECT i.position, i.kind, i.amount, i.label
-FROM recipe_inputs i
-WHERE i.recipe_id = 123
-ORDER BY i.position;
+SELECT
+  ri.position,
+  rio.option_index,
+  COALESCE(rio.kind, ri.kind) AS kind,
+  COALESCE(rio.amount, ri.amount) AS amount,
+  COALESCE(item.display_name, fluid.localized_name, rio.ore_name, rio.label, ri.label) AS ingredient,
+  item.registry_name,
+  item.damage
+FROM recipe_inputs ri
+LEFT JOIN recipe_input_options rio ON rio.input_id = ri.id
+LEFT JOIN items item ON item.id = rio.item_id
+LEFT JOIN fluids fluid ON fluid.id = rio.fluid_id
+WHERE ri.recipe_id = 123
+ORDER BY ri.position, rio.option_index;
+```
+
+List outputs for one recipe:
+
+```sql
+SELECT
+  ro.position,
+  ro.kind,
+  ro.amount,
+  COALESCE(item.display_name, fluid.localized_name, ro.label) AS output,
+  item.registry_name,
+  item.damage
+FROM recipe_outputs ro
+LEFT JOIN items item ON item.id = ro.item_id
+LEFT JOIN fluids fluid ON fluid.id = ro.fluid_id
+WHERE ro.recipe_id = 123
+ORDER BY ro.position;
 ```
 
 Detect recipe rows with no material inputs:

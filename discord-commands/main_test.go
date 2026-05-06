@@ -93,17 +93,6 @@ func TestWrapCodeBlock(t *testing.T) {
 	}
 }
 
-func TestFormatWikiSearchOutput(t *testing.T) {
-	raw := `{"ok":true,"query":"electric blast furnace","total_hits":3,"results":[{"title":"Electric blast furnace","url":"https://wiki.gtnewhorizons.com/wiki/Electric_blast_furnace"},{"title":"Electric Blast Furnace","url":"https://wiki.gtnewhorizons.com/wiki/Electric_Blast_Furnace"}],"source":"wiki.gtnewhorizons.com/w/api.php"}`
-	got := formatWikiSearchOutput(raw)
-	if got == raw {
-		t.Fatalf("expected formatted output, got raw json")
-	}
-	if got != "electric blast furnace (3 hits)\n1. Electric blast furnace - https://wiki.gtnewhorizons.com/wiki/Electric_blast_furnace\n2. Electric Blast Furnace - https://wiki.gtnewhorizons.com/wiki/Electric_Blast_Furnace" {
-		t.Fatalf("unexpected formatted output: %q", got)
-	}
-}
-
 func TestInventoryCommandScopeChoicesIncludeMEAndAll(t *testing.T) {
 	cmd := inventoryCommand()
 	var findItemScopes []string
@@ -125,6 +114,17 @@ func TestInventoryCommandScopeChoicesIncludeMEAndAll(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing inventory scope choices: %#v (got %#v)", want, findItemScopes)
+	}
+}
+
+func TestQueryCommandOnlyExposesWikiPage(t *testing.T) {
+	cmd := queryCommand()
+	var names []string
+	for _, opt := range cmd.Options {
+		names = append(names, opt.Name)
+	}
+	if len(names) != 1 || names[0] != "wiki_page" {
+		t.Fatalf("query command options = %#v, want only wiki_page", names)
 	}
 }
 

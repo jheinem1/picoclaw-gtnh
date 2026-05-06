@@ -91,9 +91,9 @@ Last updated: 2026-04-29
 - Runtime recipe API: GregGPT `recipe_sql` tool only
 
 ### Query commands
-- `sh workspace/gtnh_find_item "copper nugget"`
-- `sh workspace/gtnh_item "<slug>"`
-- Recipe queries use `recipe_sql`; old recipe wrapper commands are intentionally absent.
+- Recipe and recipe-index item metadata queries use `recipe_sql`.
+- Inventory/storage item lookup uses `sh workspace/gtnh_inventory find-item --query "<name>" --scope all`.
+- Old recipe and standalone item wrapper commands are intentionally absent.
 
 ## Storage layout
 - SD root free space check command: `df -h /`

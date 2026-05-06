@@ -436,7 +436,7 @@ cmd_find() {
 
     # Strict mode: prevent incorrect numeric-only calls like --id 11305.
     [ -n "$damage" ] || {
-      echo "error: --id requires --damage; use --item modname:name[:damage] (use sh gtnh_find_item '<query>' to pick one) for GregGPT requests" >&2
+      echo "error: --id requires --damage; use --item modname:name[:damage] or sh gtnh_inventory find-item --query '<query>' for GregGPT requests" >&2
       print_inventory_process_hint
       exit 2
     }
@@ -652,52 +652,8 @@ cmd_find_item() {
   esac
   limit="$(cap_limit "$limit")"
 
-  if [ "$use_oredict" = "1" ]; then
-    resolved_json="$(sh "$WORKSPACE_DIR/gtnh_find_item" --oredict "$query")"
-  else
-    resolved_json="$(sh "$WORKSPACE_DIR/gtnh_find_item" "$query")"
-  fi
-
-  candidate_count="$(printf '%s' "$resolved_json" | jq -r '
-    if (.ok != true) then 0 else ((.items // []) | length) end
-  ')"
-
-  if [ "$candidate_count" -gt 1 ]; then
-    echo "error: ambiguous item query '$query' matched $candidate_count items; use --item modname:name[:damage]" >&2
-    printf '%s' "$resolved_json" | jq -r '
-      (.items // [])
-      | .[:8]
-      | .[]
-      | "- " + (.reg_name // "?") + " (slug=" + (.slug // "?") + ")"
-    ' >&2
-    print_inventory_process_hint
-    exit 2
-  fi
-
-  slug="$(printf '%s' "$resolved_json" | jq -r '
-    if (.ok != true) then empty
-    else ((.items // [])[0].slug // empty)
-    end
-  ')"
-
-  [ -n "$slug" ] || { echo "item resolve failed for query: $query" >&2; exit 1; }
-
-  id="${slug%%d*}"
-  damage=""
-  if [ "${slug#*d}" != "$slug" ]; then
-    damage="${slug#*d}"
-  fi
-
-  is_int "$id" || { echo "resolved item id is not numeric for slug: $slug" >&2; exit 1; }
-  if [ -n "$damage" ]; then
-    is_int "$damage" || { echo "resolved item damage is not numeric for slug: $slug" >&2; exit 1; }
-  fi
-
-  echo "Resolved item query '$query' -> slug=$slug id=$id${damage:+ damage=$damage}"
-  if [ -z "$damage" ]; then
-    damage="0"
-  fi
-  cmd_find --id "$id" --damage "$damage" --player "$player_filter" --scope "$scope" --limit "$limit"
+  echo "error: natural-language find-item requires gtnh_inventory_query; install the compiled query binary or unset GTNH_INVENTORY_FORCE_LEGACY" >&2
+  exit 2
 }
 
 cmd_player() {

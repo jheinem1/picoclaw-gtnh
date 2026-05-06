@@ -8,7 +8,7 @@ import (
 type Group string
 
 const (
-	GroupGTNHQuery Group = "gtnh_query"
+	GroupGTNHData  Group = "gtnh_data"
 	GroupInventory Group = "inventory"
 	GroupQuest     Group = "quest"
 	GroupNext      Group = "next_action"

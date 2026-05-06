@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,8 @@ import (
 
 	agentcore "greggpt-gtnh/internal/agent"
 	"greggpt-gtnh/internal/agent/history"
+
+	_ "modernc.org/sqlite"
 )
 
 type Config struct {
@@ -376,13 +380,14 @@ func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, m
 		prompt += "\nMinecraft coordinate format: use JourneyMap-style tags like [x:<num>, y:<num>, z:<num>, dim:<num>] and include count=<num> outside the brackets when relevant."
 	}
 	if mustVerify {
-		prompt += "\nVerification is required for this question. Prefer hosted web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use recipe_sql for local recipe data and gtnh_find_item for item identity."
+		prompt += "\nVerification is required for this question. Prefer hosted web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use recipe_sql for recipe and item metadata, or inventory tools for storage/location questions."
 		prompt += "\nBefore answering, you must use either hosted web search, recipe_sql, or one concrete local lookup command and base the reply on that output."
 		prompt += "\nUse the command that matches user intent:"
 		prompt += "\n- specific wiki page summary: sh gtnh_wiki_page \"<title>\""
-		prompt += "\n- fuzzy item lookup: sh gtnh_find_item \"<query>\""
+		prompt += "\n- inventory item storage lookup: sh gtnh_inventory find-item --query \"<query>\" --scope all"
 		prompt += "\n- recipe lookup: use recipe_sql to query greggpt_recipes.sqlite"
 		prompt += "\nFor recipe or missing-material questions with multiple recipe rows, list concise choices and ask which recipe path to use unless the user named a machine/path."
+		prompt += "\nFor recipe ingredients, identify the exact recipe row first, then query inputs for that recipe_id. Preserve SQL quantities exactly: use recipe_input_options.amount when present, otherwise recipe_inputs.amount. Do not infer or rewrite counts from memory."
 		prompt += "\nIf lookup is ambiguous or missing, ask one concise clarifying question and do not present failure as final."
 		prompt += "\nDo not claim you need the user to provide a page before searching. Try one lookup first, then clarify only if results are ambiguous."
 	}
@@ -486,24 +491,46 @@ func findItemMatches(cfg Config, query string, limit int) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	cmd := workspaceCommand(ctx, cfg, "sh", "gtnh_query", "find-item", query)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("find-item failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
+	dbPath := filepath.Join(cfg.Workspace, "gtnh-data", "index", "greggpt_recipes.sqlite")
+	u := url.URL{Scheme: "file", Path: dbPath}
+	q := u.Query()
+	q.Set("mode", "ro")
+	u.RawQuery = q.Encode()
 
-	var payload struct {
-		Items []struct {
-			DisplayName string `json:"display_name"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
 		return nil, err
 	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	like := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
+	rows, err := db.QueryContext(ctx, `
+		SELECT display_name
+		FROM items
+		WHERE lower(COALESCE(display_name, '')) LIKE ?
+		   OR lower(registry_name) LIKE ?
+		   OR lower(COALESCE(unlocalized_name, '')) LIKE ?
+		ORDER BY
+			CASE
+				WHEN lower(COALESCE(display_name, '')) = lower(?) THEN 0
+				WHEN lower(COALESCE(display_name, '')) LIKE lower(?) THEN 1
+				ELSE 2
+			END,
+			display_name
+		LIMIT ?`, like, like, like, query, query+"%", limit*3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
 	results := make([]string, 0, limit)
-	for _, it := range payload.Items {
-		name := strings.TrimSpace(it.DisplayName)
+	for rows.Next() {
+		var raw sql.NullString
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		name := strings.TrimSpace(raw.String)
 		if name == "" {
 			continue
 		}
@@ -521,6 +548,9 @@ func findItemMatches(cfg Config, query string, limit int) ([]string, error) {
 		if len(results) >= limit {
 			break
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }

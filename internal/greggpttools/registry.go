@@ -95,23 +95,8 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 	network := minDuration(defaultTimeout, 30*time.Second)
 
 	tools := []Tool{
-		tool("gtnh_find_item", GroupGTNHQuery, "Find GTNH items by text query.", medium, object(
-			required("query", stringSpec("Item name or search text.")),
-			optional("oredict", boolSpec("Search the ore dictionary cache.", false)),
-		), func(a Arguments) ([]string, error) {
-			argv := []string{"sh", "gtnh_find_item", stringArg(a, "query")}
-			if boolArg(a, "oredict") {
-				argv = append(argv, "--oredict")
-			}
-			return argv, nil
-		}),
-		tool("gtnh_item", GroupGTNHQuery, "Look up an exact GTNH item slug.", medium, object(
-			required("slug", stringSpec("Exact item slug, for example 7437d11305.")),
-		), func(a Arguments) ([]string, error) {
-			return []string{"sh", "gtnh_item", stringArg(a, "slug")}, nil
-		}),
 		recipeSQLTool(cfg, medium),
-		tool("gtnh_wiki_page", GroupGTNHQuery, "Fetch a GTNH wiki page summary.", network, object(
+		tool("gtnh_wiki_page", GroupGTNHData, "Fetch a GTNH wiki page summary.", network, object(
 			required("title", stringSpec("Wiki page title.")),
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_wiki_page", stringArg(a, "title")}, nil
@@ -221,10 +206,22 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			}
 			return argv, nil
 		}),
+		tool("quest_completed_json", GroupQuest, "Show completed BetterQuesting quests for the selected party as JSON.", medium, object(
+			optional("limit", intSpec("Maximum completed quests to return.", 1, 200, 50)),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_quests", "completed-json"}
+			if limit := intArg(a, "limit", 0); limit > 0 {
+				argv = append(argv, "--limit", strconv.Itoa(limit))
+			}
+			return argv, nil
+		}),
 		tool("quest_show", GroupQuest, "Show one BetterQuesting quest by id.", short, object(
 			required("id", stringSpec("Quest ID.")),
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_quests", "show", stringArg(a, "id")}, nil
+		}),
+		tool("quest_refresh", GroupQuest, "Request a BetterQuesting quest index refresh.", short, object(), func(Arguments) ([]string, error) {
+			return []string{"sh", "gtnh_quests", "refresh"}, nil
 		}),
 
 		tool("next_action_recommendation", GroupNext, "Use the gtnh-next-action skill-backed analyzer for requests like 'greg what do I need to do' or 'what should I do next'. Returns exactly one quest/task recommendation using questbook, task log, GTNH lookup, and all indexed inventory materials.", nextActionTimeout, object(

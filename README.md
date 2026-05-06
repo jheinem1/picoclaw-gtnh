@@ -14,12 +14,11 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `inventory-sync/`: deterministic DatHost file indexer for player inventories and chest coordinates
 - `workspace/AGENTS.md`: GTNH-specific behavior constraints
 - `workspace/tools/build_item_index.py`: builds the item search index when a stack dump is available
-- `workspace/gtnh_find_item`, `workspace/gtnh_item`, `workspace/gtnh_wiki_page`: focused wrappers for tool selection
+- `workspace/gtnh_wiki_page`: focused GTNH wiki page lookup wrapper
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
 - `workspace/gtnh_inventory`: inventory/chest lookup API for GregGPT prompts
 - `workspace/gtnh_quests`: BetterQuesting questbook progress lookup API
 - `workspace/gtnh_next_action`: skill-backed next-action analyzer for “what should I do next?”
-- `workspace/tools/search_gtnh.sh`: convenience wrapper for indexed item search
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
 - `scripts/build_recipe_dump_mod.sh`: build a GTNH Forge mod that dumps recipes directly to SQLite
 - `scripts/install_recipe_dump_mod.sh`: install the recipe dump mod into a local PrismLauncher GTNH instance
@@ -31,7 +30,7 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
 - `scripts/deploy_to_pi.sh`: rsync project to Pi
-- `scripts/deploy_prebuilt_to_pi.sh`: cross-compile Pi Go binaries locally, deploy them, and rebuild the affected Pi images from prebuilt binaries
+- `scripts/deploy_prebuilt_to_pi.sh`: cross-compile Pi Go binaries locally, deploy them, and recreate the affected Pi images from prebuilt binaries
 - `scripts/build_pi_images.sh`: cross-compile Go binaries and build/export ARM64 Podman images locally for Pi deployment
 - `scripts/install_user_service.sh`: install `systemd --user` service on Pi
 - `scripts/login_greggpt_oauth_on_pi.sh`: run OpenAI device-code OAuth login in container
@@ -50,6 +49,7 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 6. Edit Pi-side `/home/jhein/greggpt-gtnh/deploy/env/greggpt.env`:
    - `GREGGPT_DISCORD_ALLOW_FROM` to your Discord user ID
    - `GREGGPT_AGENT_TIMEOUT_SECONDS=300` to give mentions up to 5 minutes before a timeout fallback response
+   - `GREGGPT_TIMEOUT_SUMMARY_SECONDS=25` to let timeout replies run a short no-tools summary pass
 7. `scripts/login_greggpt_oauth_on_pi.sh`
 8. `ssh jhein@100.84.87.81 'systemctl --user start greggpt-gtnh.service'`
 
@@ -106,12 +106,10 @@ Use indexed queries:
 - Import generated recipe DB: `scripts/import_recipe_db.sh "/path/to/instance/minecraft/dumps/greggpt_recipes.sqlite"`
 - Build ore-dict index after importing a real dump: `workspace/tools/build_oredict_index.py`
 - Prepare runtime dataset: `scripts/prepare_runtime_data.sh`
-- Find item: `sh workspace/gtnh_find_item "copper nugget"`
 - Recipe data for GregGPT: use the single `recipe_sql` tool against `gtnh-data/index/greggpt_recipes.sqlite`
 - Wiki topic verification uses the hosted OpenAI web search tool restricted to `wiki.gtnewhorizons.com`.
+- Inventory/storage lookup uses `sh gtnh_inventory find-item --query "<name>" --scope all`.
 - Focused commands:
-  - `sh gtnh_find_item "copper nugget"`
-  - `sh gtnh_item "<slug>"`
   - `sh gtnh_wiki_page "Steam Machines"`
 
 ## GTNH task board workflow
@@ -199,6 +197,10 @@ BetterQuesting progress is indexed from DatHost files by `inventory-sync`:
 - `world/betterquesting/NameCache.json`
 - `world/betterquesting/QuestProgress/*.json`
 
+The selected main party defaults to `Noob Squad` and can be changed with `INVENTORY_QUEST_PARTY_NAME`.
+Party completion is indexed as the union of completed quest IDs from selected-party member progress files.
+Quest records include BetterQuesting page metadata such as `quest_line`, `quest_line_order`, and `tier_quest_line`; the next-action analyzer prioritizes open main tier quests.
+
 Quest index outputs:
 - `state/quest_index.json`
 - `state/quest_status.json`
@@ -206,7 +208,9 @@ Quest index outputs:
 Commands from workspace root:
 - `sh gtnh_quests status`
 - `sh gtnh_quests open-json [--limit <n>]`
+- `sh gtnh_quests completed-json [--limit <n>]`
 - `sh gtnh_quests show <quest_id>`
+- `sh gtnh_quests refresh`
 - `sh gtnh_next_action recommend`
 
 The next-action analyzer follows `workspace/skills/gtnh-next-action/SKILL.md`. It combines open questbook data, freeform task-log entries, GTNH lookups, and all indexed inventory scopes to return one recommendation with evidence. Freeform task requirements are treated as inferred unless explicitly listed in the task description.
