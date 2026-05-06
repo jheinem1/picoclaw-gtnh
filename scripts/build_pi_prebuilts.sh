@@ -8,7 +8,7 @@ CGO_ENABLED="${CGO_ENABLED:-0}"
 GOFLAGS="${GOFLAGS:--trimpath}"
 LDFLAGS="${LDFLAGS:--s -w}"
 
-mkdir -p "$ROOT/relay/prebuilt" "$ROOT/discord-commands/prebuilt"
+mkdir -p "$ROOT/relay/prebuilt" "$ROOT/discord-commands/prebuilt" "$ROOT/inventory-sync/prebuilt"
 
 build_go() {
   local pkg="$1"
@@ -22,11 +22,13 @@ build_go ./relay "$ROOT/relay/prebuilt/mc-relay"
 build_go ./inventory-query "$ROOT/relay/prebuilt/gtnh_inventory_query"
 build_go ./discord-commands "$ROOT/discord-commands/prebuilt/discord-commands"
 build_go ./inventory-query "$ROOT/discord-commands/prebuilt/gtnh_inventory_query"
+build_go ./inventory-sync "$ROOT/inventory-sync/prebuilt/inventory-sync"
 
 chmod 0755 \
   "$ROOT/relay/prebuilt/mc-relay" \
   "$ROOT/relay/prebuilt/gtnh_inventory_query" \
   "$ROOT/discord-commands/prebuilt/discord-commands" \
-  "$ROOT/discord-commands/prebuilt/gtnh_inventory_query"
+  "$ROOT/discord-commands/prebuilt/gtnh_inventory_query" \
+  "$ROOT/inventory-sync/prebuilt/inventory-sync"
 
 echo "wrote prebuilt linux/arm64 service binaries"

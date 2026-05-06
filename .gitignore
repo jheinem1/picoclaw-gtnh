@@ -16,6 +16,7 @@ dist/
 relay/greggpt-gtnh-mc-relay
 relay/prebuilt/
 discord-commands/prebuilt/
+inventory-sync/prebuilt/
 workspace/tools/__pycache__/
 .gradle-bin/
 

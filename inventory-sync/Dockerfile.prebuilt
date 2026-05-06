@@ -1,0 +1,6 @@
+FROM docker.io/alpine:3.20
+RUN apk add --no-cache ca-certificates
+WORKDIR /app
+COPY inventory-sync/prebuilt/inventory-sync /usr/local/bin/inventory-sync
+RUN mkdir -p /var/lib/inventory-sync
+ENTRYPOINT ["/usr/local/bin/inventory-sync"]
