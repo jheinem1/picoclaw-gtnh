@@ -27,3 +27,6 @@ This file is for coding agents working on the `picoclaw-gtnh` repository. Runtim
 - Prefer repo-level validation after cross-service changes: `go test ./...`.
 - For compose sanity, use `podman compose -f deploy/compose.yaml config` and `podman compose -f deploy/compose.yaml build --dry-run` when available.
 - For deployment, use the repo scripts rather than hand-written rsync/systemd command sequences unless debugging a script failure.
+
+## Commit Attribution
+- When Codex contributes to a change, include this commit trailer: Co-Authored-By: Codex <codex@openai.com>.
