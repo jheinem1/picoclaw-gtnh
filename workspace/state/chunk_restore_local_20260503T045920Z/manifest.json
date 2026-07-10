@@ -1,0 +1,58 @@
+{
+  "created_at_utc": "2026-05-03T05:00:28Z",
+  "source_backup": {
+    "archive_path": "/var/home/jhein/Downloads/6906d33e814fc87f28c63798-bb13a422.tar.zst",
+    "id_suffix": "bb13a422",
+    "timestamp_utc": "2026-05-02T11:04:36Z",
+    "region_path": "workspace/state/chunk_restore_local_20260503T045920Z/source_backup/world/region/r.0.-2.mca",
+    "sha256": "05a91edd54a2bf1a58c2230aadb6c4a85bea8844bc265e0e7a576b99e6a30d01"
+  },
+  "safety_current": {
+    "manual_backup_id": "restic_afcc7d3fba6ff271011949638258485ee7dee133e396aaa39141467f0426ec90",
+    "manual_backup_timestamp_utc": "2026-05-03T04:54:25Z",
+    "region_path": "workspace/state/chunk_restore_local_20260503T045920Z/current/world/region/r.0.-2.mca",
+    "sha256": "f5ba5ca060523b91395362076c14ccb402a6a4eb302bafbdf7e5cb8791dd28fd"
+  },
+  "modified": {
+    "region_path": "workspace/state/chunk_restore_local_20260503T045920Z/modified/world/region/r.0.-2.mca",
+    "sha256": "85fb7fef66d88dd930abe7ab880843a9e72a5627ef53c60f4bd418bf8675ce3b",
+    "size": 9510912
+  },
+  "restore": {
+    "dat_host_path": "world/region/r.0.-2.mca",
+    "chunks": [
+      [
+        25,
+        -46
+      ],
+      [
+        25,
+        -45
+      ]
+    ],
+    "y_min": 77,
+    "blocks_written": 91648
+  },
+  "grave_move": {
+    "from": {
+      "x": 402,
+      "y": 78,
+      "z": -718
+    },
+    "to": {
+      "x": 399,
+      "y": 85,
+      "z": -721
+    },
+    "block_id": 3306,
+    "block_meta": 0
+  },
+  "tile_entity_counts": {
+    "removed": 53,
+    "added": 69
+  },
+  "entities": {
+    "removed_count": 0,
+    "added_count": 0
+  }
+}

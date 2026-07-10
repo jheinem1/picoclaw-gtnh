@@ -96,6 +96,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 
 	tools := []Tool{
 		recipeSQLTool(cfg, medium),
+		interactionFailureLogTool(cfg, short),
 		tool("gtnh_wiki_page", GroupGTNHData, "Fetch a GTNH wiki page summary.", network, object(
 			required("title", stringSpec("Wiki page title.")),
 		), func(a Arguments) ([]string, error) {

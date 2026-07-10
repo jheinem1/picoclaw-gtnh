@@ -52,6 +52,7 @@ public final class GregGPTMEExportMod {
   private static long nextMETick = 0L;
   private static long nextBlockInventoryTick = 0L;
   private static long tickCounter = 0L;
+  private static MEExportJob meExportJob = null;
   private static BlockInventoryJob blockInventoryJob = null;
 
   public GregGPTMEExportMod() {
@@ -66,12 +67,21 @@ public final class GregGPTMEExportMod {
     tickCounter++;
     Object server = null;
 
-    if (boolProperty("greggpt.me_export_enabled", true) && tickCounter >= nextMETick) {
-      nextMETick = tickCounter + intervalTicks("greggpt.me_export_interval_seconds", DEFAULT_INTERVAL_SECONDS);
+    if (!boolProperty("greggpt.me_export_enabled", true)) {
+      meExportJob = null;
+    } else {
       try {
-        server = serverInstance();
-        writeMEDump(server);
+        if (meExportJob == null && tickCounter >= nextMETick) {
+          nextMETick = tickCounter + intervalTicks("greggpt.me_export_interval_seconds", DEFAULT_INTERVAL_SECONDS);
+          server = serverInstance();
+          meExportJob = startMEExportJob(server);
+        }
+        if (meExportJob != null && meExportJob.processTick()) {
+          meExportJob.finish();
+          meExportJob = null;
+        }
       } catch (Throwable t) {
+        meExportJob = null;
         System.out.println("[GREGGPT-ME] export failed: " + t);
         t.printStackTrace(System.out);
       }
@@ -148,6 +158,214 @@ public final class GregGPTMEExportMod {
     File out = outputFile(server);
     String json = buildMEJson(server);
     submitWrite(out, json, "[GREGGPT-ME]", "wrote " + out.getAbsolutePath());
+  }
+
+  private static MEExportJob startMEExportJob(Object server) throws Exception {
+    if (server == null) {
+      return null;
+    }
+    File out = outputFile(server);
+    List<Object> tiles = new ArrayList<Object>();
+    Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
+    for (Object world : worlds) {
+      if (world == null) {
+        continue;
+      }
+      Object loaded = getField(world, "loadedTileEntityList", "field_147482_g");
+      if (!(loaded instanceof Iterable)) {
+        continue;
+      }
+      for (Object te : (Iterable<?>) loaded) {
+        tiles.add(te);
+      }
+    }
+    MEExportJob job = new MEExportJob(out, tiles, nowUTC());
+    System.out.println("[GREGGPT-ME] started async snapshot tiles=" + tiles.size());
+    return job;
+  }
+
+  private static final class MEExportJob {
+    private final File out;
+    private final List<Object> tiles;
+    private final String generatedAt;
+    private final int tilesPerTick;
+    private final int itemsPerTick;
+    private final long budgetNanos;
+    private final IdentityHashMap<Object, Boolean> seenGrids = new IdentityHashMap<Object, Boolean>();
+    private final List<String> networks = new ArrayList<String>();
+    private int tileIndex = 0;
+    private int totalEntries = 0;
+    private int totalPositive = 0;
+    private long startedNanos = System.nanoTime();
+    private MENetworkSnapshot current = null;
+
+    MEExportJob(File out, List<Object> tiles, String generatedAt) {
+      this.out = out;
+      this.tiles = tiles;
+      this.generatedAt = generatedAt;
+      this.tilesPerTick = intProperty("greggpt.me_export_tiles_per_tick", 64, 1);
+      this.itemsPerTick = intProperty("greggpt.me_export_items_per_tick", 128, 1);
+      this.budgetNanos = (long) intProperty("greggpt.me_export_budget_ms", 2, 1) * 1000000L;
+    }
+
+    boolean processTick() {
+      long started = System.nanoTime();
+      int tilesProcessed = 0;
+      int itemsProcessed = 0;
+      while (true) {
+        if (current != null) {
+          int before = current.entryCount;
+          boolean done = current.process(itemsPerTick - itemsProcessed);
+          itemsProcessed += current.entryCount - before;
+          if (done) {
+            networks.add(current.finish());
+            totalEntries += current.entryCount;
+            totalPositive += current.positiveCount;
+            current = null;
+          }
+        }
+
+        if (current != null) {
+          return false;
+        }
+        if (tileIndex >= tiles.size()) {
+          return true;
+        }
+        if (tilesProcessed >= tilesPerTick || itemsProcessed >= itemsPerTick) {
+          return false;
+        }
+        if ((tilesProcessed > 0 || itemsProcessed > 0) && System.nanoTime() - started >= budgetNanos) {
+          return false;
+        }
+
+        Object te = tiles.get(tileIndex++);
+        tilesProcessed++;
+        Object grid = findGrid(te);
+        if (grid == null || seenGrids.containsKey(grid)) {
+          continue;
+        }
+        seenGrids.put(grid, Boolean.TRUE);
+        Iterable<?> items = storageList(grid);
+        if (items == null) {
+          continue;
+        }
+        current = new MENetworkSnapshot(grid, te, items);
+      }
+    }
+
+    void finish() {
+      StringBuilder json = new StringBuilder(networks.size() * 512 + 64);
+      json.append("{\"generated_at\":\"");
+      json.append(escape(generatedAt));
+      json.append("\",\"networks\":[");
+      for (int i = 0; i < networks.size(); i++) {
+        if (i > 0) {
+          json.append(',');
+        }
+        json.append(networks.get(i));
+      }
+      json.append("]}");
+      long elapsedMs = (System.nanoTime() - startedNanos) / 1000000L;
+      submitWrite(
+          out,
+          json.toString(),
+          "[GREGGPT-ME]",
+          "wrote " + out.getAbsolutePath() + " networks=" + networks.size() + " entries=" + totalEntries
+              + " positive=" + totalPositive + " elapsed_ms=" + elapsedMs);
+    }
+  }
+
+  private static final class MENetworkSnapshot {
+    private final Object grid;
+    private final Iterator<?> items;
+    private final String networkID;
+    private final String label;
+    private final int dim;
+    private final int x;
+    private final int y;
+    private final int z;
+    private final StringBuilder itemJson = new StringBuilder();
+    private int entryCount = 0;
+    private int convertedCount = 0;
+    private int positiveCount = 0;
+    private String firstEntryClass = "";
+    private String firstStackClass = "";
+    private boolean first = true;
+
+    MENetworkSnapshot(Object grid, Object te, Iterable<?> items) {
+      this.grid = grid;
+      this.items = items.iterator();
+      this.x = intField(te, "xCoord", "field_145851_c");
+      this.y = intField(te, "yCoord", "field_145848_d");
+      this.z = intField(te, "zCoord", "field_145849_e");
+      this.dim = dimensionID(te);
+      this.networkID = Integer.toHexString(System.identityHashCode(grid));
+      this.label = "ME network " + x + "," + y + "," + z;
+    }
+
+    boolean process(int maxItems) {
+      if (maxItems < 1) {
+        maxItems = 1;
+      }
+      int processed = 0;
+      while (items.hasNext() && processed < maxItems) {
+        Object entry = items.next();
+        processed++;
+        entryCount++;
+        if (firstEntryClass.length() == 0 && entry != null) {
+          firstEntryClass = entry.getClass().getName();
+        }
+        Object stack = toItemStack(entry);
+        if (stack != null) {
+          convertedCount++;
+          if (firstStackClass.length() == 0) {
+            firstStackClass = stack.getClass().getName();
+          }
+        }
+        Object item = stack != null ? invokeQuiet(stack, new String[] {"getItem", "func_77973_b"}, new Class[0], new Object[0]) : null;
+        int count = stack != null ? intField(stack, "stackSize", "field_77994_a") : 0;
+        if (stack == null || item == null || count <= 0) {
+          continue;
+        }
+        positiveCount++;
+        if (!first) {
+          itemJson.append(',');
+        }
+        first = false;
+        itemJson.append(itemJson(stack));
+      }
+      return !items.hasNext();
+    }
+
+    String finish() {
+      StringBuilder out = new StringBuilder(itemJson.length() + 256);
+      out.append("{\"network_id\":\"");
+      out.append(escape(networkID));
+      out.append("\",\"label\":\"");
+      out.append(escape(label));
+      out.append("\",\"dim\":");
+      out.append(dim);
+      out.append(",\"x\":");
+      out.append(x);
+      out.append(",\"y\":");
+      out.append(y);
+      out.append(",\"z\":");
+      out.append(z);
+      out.append(",\"entry_count\":");
+      out.append(entryCount);
+      out.append(",\"converted_count\":");
+      out.append(convertedCount);
+      out.append(",\"positive_count\":");
+      out.append(positiveCount);
+      out.append(",\"first_entry_class\":\"");
+      out.append(escape(firstEntryClass));
+      out.append("\",\"first_stack_class\":\"");
+      out.append(escape(firstStackClass));
+      out.append("\",\"items\":[");
+      out.append(itemJson.toString());
+      out.append("]}");
+      return out.toString();
+    }
   }
 
   private static String buildMEJson(Object server) throws Exception {

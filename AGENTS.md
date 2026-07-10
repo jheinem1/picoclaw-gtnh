@@ -8,7 +8,7 @@ This file is for coding agents working on the `picoclaw-gtnh` repository. Runtim
 - Do not add project deployment or host-access instructions to `workspace/AGENTS.md`.
 
 ## Commit Attribution
-- When Codex contributes to a change, include `Co-authored-by: Codex <noreply@openai.com>` in the commit message.
+- When Codex contributes to a change, include `Co-Authored-By: Codex <codex@openai.com>` in the commit message.
 
 ## Pi Access
 - Connect to the Raspberry Pi over Tailscale for deploy, restart, log, and smoke-test operations.

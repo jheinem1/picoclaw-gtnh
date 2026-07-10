@@ -9,40 +9,44 @@ import (
 )
 
 const (
-	DefaultWorkspace       = "/root/.greggpt/workspace"
-	DefaultToolTimeout     = 20 * time.Second
-	DefaultMaxOutputLength = 12000
-	DefaultMemoryPath      = "state/greggpt_memory.json"
-	DefaultRecipeSQLPath   = "gtnh-data/index/greggpt_recipes.sqlite"
+	DefaultWorkspace              = "/root/.greggpt/workspace"
+	DefaultToolTimeout            = 20 * time.Second
+	DefaultMaxOutputLength        = 12000
+	DefaultMemoryPath             = "state/greggpt_memory.json"
+	DefaultFailedInteractionsPath = "state/failed_interactions.jsonl"
+	DefaultRecipeSQLPath          = "gtnh-data/index/greggpt_recipes.sqlite"
 )
 
 const (
-	EnvWorkspace        = "GREGGPT_WORKSPACE"
-	EnvToolTimeout      = "GREGGPT_TOOL_TIMEOUT_SECONDS"
-	EnvMaxOutputBytes   = "GREGGPT_TOOL_MAX_OUTPUT_BYTES"
-	EnvRecipeSQLPath    = "GREGGPT_RECIPE_SQLITE_PATH"
-	EnvMemoryEnabled    = "GREGGPT_MEMORY_ENABLED"
-	EnvMemoryPath       = "GREGGPT_MEMORY_PATH"
-	EnvMemoryDefaultTTL = "GREGGPT_MEMORY_DEFAULT_TTL_SECONDS"
+	EnvWorkspace              = "GREGGPT_WORKSPACE"
+	EnvToolTimeout            = "GREGGPT_TOOL_TIMEOUT_SECONDS"
+	EnvMaxOutputBytes         = "GREGGPT_TOOL_MAX_OUTPUT_BYTES"
+	EnvRecipeSQLPath          = "GREGGPT_RECIPE_SQLITE_PATH"
+	EnvMemoryEnabled          = "GREGGPT_MEMORY_ENABLED"
+	EnvMemoryPath             = "GREGGPT_MEMORY_PATH"
+	EnvMemoryDefaultTTL       = "GREGGPT_MEMORY_DEFAULT_TTL_SECONDS"
+	EnvFailedInteractionsPath = "GREGGPT_FAILED_INTERACTIONS_PATH"
 )
 
 type Config struct {
-	Workspace        string
-	ToolTimeout      time.Duration
-	MaxOutputBytes   int
-	RecipeSQLPath    string
-	MemoryEnabled    bool
-	MemoryPath       string
-	MemoryDefaultTTL time.Duration
+	Workspace              string
+	ToolTimeout            time.Duration
+	MaxOutputBytes         int
+	RecipeSQLPath          string
+	MemoryEnabled          bool
+	MemoryPath             string
+	MemoryDefaultTTL       time.Duration
+	FailedInteractionsPath string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Workspace:      DefaultWorkspace,
-		ToolTimeout:    DefaultToolTimeout,
-		MaxOutputBytes: DefaultMaxOutputLength,
-		RecipeSQLPath:  DefaultRecipeSQLPath,
-		MemoryPath:     DefaultMemoryPath,
+		Workspace:              DefaultWorkspace,
+		ToolTimeout:            DefaultToolTimeout,
+		MaxOutputBytes:         DefaultMaxOutputLength,
+		RecipeSQLPath:          DefaultRecipeSQLPath,
+		MemoryPath:             DefaultMemoryPath,
+		FailedInteractionsPath: DefaultFailedInteractionsPath,
 	}
 }
 
@@ -67,6 +71,9 @@ func ConfigFromEnv() Config {
 	if ttl := positiveIntEnv(EnvMemoryDefaultTTL); ttl > 0 {
 		cfg.MemoryDefaultTTL = time.Duration(ttl) * time.Second
 	}
+	if path := strings.TrimSpace(os.Getenv(EnvFailedInteractionsPath)); path != "" {
+		cfg.FailedInteractionsPath = path
+	}
 	return cfg
 }
 
@@ -89,6 +96,21 @@ func (c Config) resolvedMemoryPath() string {
 	path := strings.TrimSpace(c.MemoryPath)
 	if path == "" {
 		path = DefaultMemoryPath
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	workspace := c.Workspace
+	if workspace == "" {
+		workspace = DefaultWorkspace
+	}
+	return filepath.Join(workspace, path)
+}
+
+func (c Config) resolvedFailedInteractionsPath() string {
+	path := strings.TrimSpace(c.FailedInteractionsPath)
+	if path == "" {
+		path = DefaultFailedInteractionsPath
 	}
 	if filepath.IsAbs(path) {
 		return path

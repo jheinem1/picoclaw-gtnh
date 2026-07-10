@@ -8,13 +8,14 @@ import (
 type Group string
 
 const (
-	GroupGTNHData  Group = "gtnh_data"
-	GroupInventory Group = "inventory"
-	GroupQuest     Group = "quest"
-	GroupNext      Group = "next_action"
-	GroupTask      Group = "task"
-	GroupMinecraft Group = "minecraft"
-	GroupMemory    Group = "memory"
+	GroupGTNHData    Group = "gtnh_data"
+	GroupInventory   Group = "inventory"
+	GroupQuest       Group = "quest"
+	GroupNext        Group = "next_action"
+	GroupTask        Group = "task"
+	GroupMinecraft   Group = "minecraft"
+	GroupMemory      Group = "memory"
+	GroupDiagnostics Group = "diagnostics"
 )
 
 type ToolDefinition struct {
