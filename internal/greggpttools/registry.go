@@ -199,7 +199,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			return []string{"sh", "gtnh_quests", "status"}, nil
 		}),
 		tool("quest_open_json", GroupQuest, "Show open BetterQuesting quests as JSON.", medium, object(
-			optional("limit", intSpec("Maximum open quests to return.", 1, 200, 50)),
+			optional("limit", cappedIntSpec("Maximum open quests to return; values above 500 are capped at 500.", 1, 500, 50)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_quests", "open-json"}
 			if limit := intArg(a, "limit", 0); limit > 0 {
@@ -208,7 +208,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			return argv, nil
 		}),
 		tool("quest_completed_json", GroupQuest, "Show completed BetterQuesting quests for the selected party as JSON.", medium, object(
-			optional("limit", intSpec("Maximum completed quests to return.", 1, 200, 50)),
+			optional("limit", cappedIntSpec("Maximum completed quests to return; values above 500 are capped at 500.", 1, 500, 50)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_quests", "completed-json"}
 			if limit := intArg(a, "limit", 0); limit > 0 {
@@ -415,6 +415,12 @@ func boolSpec(description string, defaultValue bool) ParamSpec {
 
 func intSpec(description string, min int, max int, defaultValue any) ParamSpec {
 	return ParamSpec{Type: "integer", Description: description, Minimum: intPtr(min), Maximum: intPtr(max), Default: defaultValue}
+}
+
+func cappedIntSpec(description string, min int, max int, defaultValue any) ParamSpec {
+	spec := intSpec(description, min, max, defaultValue)
+	spec.ClampMaximum = true
+	return spec
 }
 
 func enumStringSpec(description string, values []any, defaultValue any) ParamSpec {

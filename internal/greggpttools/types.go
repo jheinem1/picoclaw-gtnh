@@ -34,15 +34,16 @@ type JSONSchema struct {
 }
 
 type ParamSpec struct {
-	Type        string      `json:"type"`
-	Description string      `json:"description,omitempty"`
-	Enum        []any       `json:"enum,omitempty"`
-	Items       *ParamSpec  `json:"items,omitempty"`
-	Minimum     *int        `json:"minimum,omitempty"`
-	Maximum     *int        `json:"maximum,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	MinLength   int         `json:"minLength,omitempty"`
-	MinItems    int         `json:"minItems,omitempty"`
+	Type         string      `json:"type"`
+	Description  string      `json:"description,omitempty"`
+	Enum         []any       `json:"enum,omitempty"`
+	Items        *ParamSpec  `json:"items,omitempty"`
+	Minimum      *int        `json:"minimum,omitempty"`
+	Maximum      *int        `json:"maximum,omitempty"`
+	Default      interface{} `json:"default,omitempty"`
+	MinLength    int         `json:"minLength,omitempty"`
+	MinItems     int         `json:"minItems,omitempty"`
+	ClampMaximum bool        `json:"-"`
 }
 
 type Result struct {

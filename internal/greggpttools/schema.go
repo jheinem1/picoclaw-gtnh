@@ -20,10 +20,27 @@ func parseArguments(schema JSONSchema, raw json.RawMessage) (Arguments, error) {
 	if args == nil {
 		args = Arguments{}
 	}
+	clampArguments(schema, args)
 	if err := validateArguments(schema, args); err != nil {
 		return nil, err
 	}
 	return args, nil
+}
+
+func clampArguments(schema JSONSchema, args Arguments) {
+	for name, spec := range schema.Properties {
+		if spec.Type != "integer" || !spec.ClampMaximum || spec.Maximum == nil {
+			continue
+		}
+		value, ok := args[name]
+		if !ok || value == nil {
+			continue
+		}
+		n, ok := intValue(value)
+		if ok && n > *spec.Maximum {
+			args[name] = *spec.Maximum
+		}
+	}
 }
 
 func validateArguments(schema JSONSchema, args Arguments) error {

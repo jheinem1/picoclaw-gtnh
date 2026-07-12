@@ -119,6 +119,42 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 	}
 }
 
+func TestQuestListLimitIsRaisedAndClamped(t *testing.T) {
+	registry := testRegistry(t, DefaultConfig())
+	for _, toolName := range []string{"quest_open_json", "quest_completed_json"} {
+		t.Run(toolName, func(t *testing.T) {
+			def, ok := registry.Definition(toolName)
+			if !ok {
+				t.Fatalf("definition %q not found", toolName)
+			}
+			limit := def.Parameters.Properties["limit"]
+			if limit.Maximum == nil || *limit.Maximum != 500 {
+				t.Fatalf("limit maximum = %v, want 500", limit.Maximum)
+			}
+			got, err := registry.argvForTest(toolName, json.RawMessage(`{"limit":300}`))
+			if err != nil {
+				t.Fatalf("argvForTest with raised limit returned error: %v", err)
+			}
+			if got[len(got)-1] != "300" {
+				t.Fatalf("raised-limit argv = %#v, want final limit 300", got)
+			}
+			if err := registry.Validate(toolName, json.RawMessage(`{"limit":501}`)); err != nil {
+				t.Fatalf("oversized limit should be clamped, got validation error: %v", err)
+			}
+			got, err = registry.argvForTest(toolName, json.RawMessage(`{"limit":501}`))
+			if err != nil {
+				t.Fatalf("argvForTest returned error: %v", err)
+			}
+			if got[len(got)-1] != "500" {
+				t.Fatalf("clamped argv = %#v, want final limit 500", got)
+			}
+			if err := registry.Validate(toolName, json.RawMessage(`{"limit":0}`)); err == nil || !strings.Contains(err.Error(), "must be >= 1") {
+				t.Fatalf("lower-bound validation error = %v, want >= 1 guard", err)
+			}
+		})
+	}
+}
+
 func TestRecipeToolRegistrySurface(t *testing.T) {
 	registry := testRegistry(t, DefaultConfig())
 	var recipeTools []string

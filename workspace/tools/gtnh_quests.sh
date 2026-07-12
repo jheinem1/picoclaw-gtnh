@@ -5,6 +5,7 @@ WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INDEX_FILE="${GTNH_QUEST_INDEX_FILE:-$WORKSPACE_DIR/state/quest_index.json}"
 STATUS_FILE="${GTNH_QUEST_STATUS_FILE:-$WORKSPACE_DIR/state/quest_status.json}"
 REFRESH_FILE="${GTNH_INVENTORY_REFRESH_FILE:-$WORKSPACE_DIR/state/inventory_refresh.json}"
+MAX_LIST_LIMIT=500
 
 usage() {
   cat <<'USAGE'
@@ -23,6 +24,24 @@ require_index() {
     echo "quest index not built yet: $INDEX_FILE"
     exit 1
   }
+}
+
+normalize_list_limit() {
+  value="$1"
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "limit must be a positive integer" >&2
+      exit 2
+      ;;
+  esac
+  if [ "$value" -lt 1 ]; then
+    echo "limit must be >= 1" >&2
+    exit 2
+  fi
+  if [ "$value" -gt "$MAX_LIST_LIMIT" ]; then
+    value="$MAX_LIST_LIMIT"
+  fi
+  printf '%s\n' "$value"
 }
 
 case "${1:-}" in
@@ -73,6 +92,7 @@ case "${1:-}" in
         *) usage ;;
       esac
     done
+    limit="$(normalize_list_limit "$limit")"
     require_index
     jq --argjson limit "$limit" '
       {
@@ -98,6 +118,7 @@ case "${1:-}" in
         *) usage ;;
       esac
     done
+    limit="$(normalize_list_limit "$limit")"
     require_index
     jq --argjson limit "$limit" '
       {
