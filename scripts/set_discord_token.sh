@@ -10,6 +10,7 @@ TOKEN="$1"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/deploy/env/greggpt.env"
 PI_HOST="${PI_HOST:-jhein@100.84.87.81}"
+PI_DIR="${PI_DIR:-/home/jhein/greggpt-gtnh}"
 PI_PUBKEY="${PI_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH}"
 SSH_KEY_FILE="$(mktemp)"
 trap 'rm -f "$SSH_KEY_FILE"' EXIT
@@ -20,8 +21,15 @@ cp -n "$ROOT/deploy/env/greggpt.env.template" "$ENV_FILE" || true
 perl -0pi -e 's#DISCORD_BOT_TOKEN=.*#DISCORD_BOT_TOKEN='"$TOKEN"'#' "$ENV_FILE"
 perl -0pi -e 's#KANBAN_DISCORD_TOKEN=.*#KANBAN_DISCORD_TOKEN='"$TOKEN"'#' "$ENV_FILE"
 
-$SSH_CMD "$PI_HOST" 'mkdir -p /home/jhein/greggpt-gtnh/deploy/env'
-rsync -av -e "$SSH_CMD" "$ENV_FILE" "$PI_HOST:/home/jhein/greggpt-gtnh/deploy/env/greggpt.env"
-$SSH_CMD "$PI_HOST" 'systemctl --user restart greggpt-gtnh.service && systemctl --user --no-pager --full status greggpt-gtnh.service | sed -n "1,80p"'
+$SSH_CMD "$PI_HOST" "mkdir -p '$PI_DIR/deploy/env'"
+rsync -av -e "$SSH_CMD" "$ENV_FILE" "$PI_HOST:$PI_DIR/deploy/env/greggpt.env"
+$SSH_CMD "$PI_HOST" '
+if systemctl --user cat greggpt-gtnh.service >/dev/null 2>&1; then
+  systemctl --user restart greggpt-gtnh.service
+  systemctl --user --no-pager --full status greggpt-gtnh.service | sed -n "1,80p"
+else
+  echo "Discord token installed; service is not installed yet"
+fi
+'
 
 echo "discord token applied locally and on pi"

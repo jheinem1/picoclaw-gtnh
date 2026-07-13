@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"greggpt-gtnh/internal/filelock"
 )
 
 const (
@@ -100,6 +102,15 @@ func (s Store) Load() (*Credentials, error) {
 }
 
 func (s Store) Save(creds *Credentials) error {
+	lock, err := filelock.Acquire(context.Background(), s.lockPath())
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	return s.saveUnlocked(creds)
+}
+
+func (s Store) saveUnlocked(creds *Credentials) error {
 	if creds == nil {
 		return ErrMissingCredentials
 	}
@@ -135,6 +146,10 @@ func (s Store) Save(creds *Credentials) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -145,6 +160,12 @@ func (s Store) Save(creds *Credentials) error {
 }
 
 func (s Store) EnsureFresh(ctx context.Context, opts RefreshOptions) (*Credentials, error) {
+	lock, err := filelock.Acquire(ctx, s.lockPath())
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
+
 	creds, err := s.Load()
 	if err != nil {
 		return nil, err
@@ -157,10 +178,14 @@ func (s Store) EnsureFresh(ctx context.Context, opts RefreshOptions) (*Credentia
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Save(refreshed); err != nil {
+	if err := s.saveUnlocked(refreshed); err != nil {
 		return nil, err
 	}
 	return refreshed, nil
+}
+
+func (s Store) lockPath() string {
+	return s.path + ".lock"
 }
 
 func (c *Credentials) Validate() error {

@@ -2,7 +2,9 @@ package history
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -28,6 +30,69 @@ func TestOpenInitializesSchema(t *testing.T) {
 	}
 	if len(recall) != 1 {
 		t.Fatalf("len(Recall()) = %d, want 1", len(recall))
+	}
+}
+
+func TestOpenConfiguresWALAndBusyTimeout(t *testing.T) {
+	store := openTestStore(t)
+	defer closeStore(t, store)
+
+	var journalMode string
+	if err := store.db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("journal_mode query error = %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal_mode = %q, want wal", journalMode)
+	}
+	var busyTimeout int
+	if err := store.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("busy_timeout query error = %v", err)
+	}
+	if busyTimeout != sqliteBusyTimeoutMillis {
+		t.Fatalf("busy_timeout = %d, want %d", busyTimeout, sqliteBusyTimeoutMillis)
+	}
+}
+
+func TestMultipleStoresWriteConcurrently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	defer closeStore(t, first)
+	second, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(second) error = %v", err)
+	}
+	defer closeStore(t, second)
+
+	stores := []*Store{first, second}
+	const writes = 40
+	errs := make(chan error, writes)
+	var wg sync.WaitGroup
+	for i := 0; i < writes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			msg := testMessage("discord", "general", "u1", fmt.Sprintf("message %d", i), i)
+			msg.ExternalMessageID = fmt.Sprintf("message-%d", i)
+			errs <- stores[i%len(stores)].AppendMessage(context.Background(), msg)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AppendMessage() error = %v", err)
+		}
+	}
+
+	got, err := first.Recent(context.Background(), Query{IncludeBots: true, Limit: writes})
+	if err != nil {
+		t.Fatalf("Recent() error = %v", err)
+	}
+	if len(got) != writes {
+		t.Fatalf("message count = %d, want %d", len(got), writes)
 	}
 }
 

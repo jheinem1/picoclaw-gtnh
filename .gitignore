@@ -17,6 +17,8 @@ relay/greggpt-gtnh-mc-relay
 relay/prebuilt/
 discord-commands/prebuilt/
 inventory-sync/prebuilt/
+bridge/prebuilt/
+kanban-sync/prebuilt/
 workspace/tools/__pycache__/
 .gradle-bin/
 

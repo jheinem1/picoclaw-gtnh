@@ -30,10 +30,10 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `scripts/prepare_runtime_data.sh`: produce runtime-safe dataset (`data/gtnh_runtime`)
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
 - `scripts/deploy_to_pi.sh`: rsync project to Pi
-- `scripts/deploy_prebuilt_to_pi.sh`: cross-compile Pi Go binaries locally, deploy them, and recreate the affected Pi images from prebuilt binaries
-- `scripts/build_pi_images.sh`: cross-compile Go binaries and build/export ARM64 Podman images locally for Pi deployment
+- `scripts/deploy_prebuilt_to_pi.sh`: cross-compile every Go service locally, deploy the ARM64 images, and recreate the full Pi stack without Pi-side compilation
+- `scripts/build_pi_images.sh`: cross-compile all Go binaries and build/export ARM64 Podman images locally for Pi deployment
 - `scripts/install_user_service.sh`: install `systemd --user` service on Pi
-- `scripts/login_greggpt_oauth_on_pi.sh`: run OpenAI device-code OAuth login in container
+- `scripts/login_greggpt_oauth_on_pi.sh`: run an isolated Codex device-code login on the workstation and atomically install the resulting credentials on the Pi
 - `scripts/set_discord_token_from_op.sh`: read Discord token from 1Password and apply
 - `scripts/set_discord_token.sh`: apply Discord token manually and restart service
 - `scripts/test_dathost_bridge.sh`: HTTP smoke checks for DatHost bridge
@@ -41,19 +41,20 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 ## Initial setup
 1. `scripts/setup_pi_runtime.sh`
 2. `scripts/deploy_to_pi.sh`
-3. `scripts/install_user_service.sh`
-4. `scripts/sync_gtnh_data.sh DEPLOY_TO_PI=1`
-5. Set Discord token:
+3. `scripts/sync_gtnh_data.sh DEPLOY_TO_PI=1`
+4. Set Discord token:
    - 1Password: `scripts/set_discord_token_from_op.sh`
    - Manual: `scripts/set_discord_token.sh "<discord-bot-token>"`
-6. Edit Pi-side `/home/jhein/greggpt-gtnh/deploy/env/greggpt.env`:
+5. Edit Pi-side `/home/jhein/greggpt-gtnh/deploy/env/greggpt.env`:
    - `GREGGPT_DISCORD_ALLOW_FROM` to your Discord user ID
    - `GREGGPT_AGENT_TIMEOUT_SECONDS=300` to give mentions up to 5 minutes before a timeout fallback response
    - `GREGGPT_TIMEOUT_SUMMARY_SECONDS=25` to let timeout replies run a short no-tools summary pass
-7. `scripts/login_greggpt_oauth_on_pi.sh`
-8. `ssh jhein@100.84.87.81 'systemctl --user start greggpt-gtnh.service'`
+6. `scripts/login_greggpt_oauth_on_pi.sh`
+7. `scripts/deploy_prebuilt_to_pi.sh` (installs/enables the user service, loads all prebuilt images, and starts the stack)
 
 Discord slash commands are provided by the separate `discord-commands` service in the compose stack. Global command registration can take a while to propagate; if you want fast iteration, set `DISCORD_GUILD_ID` in `deploy/env/greggpt.env` to the target guild and redeploy.
+
+The OAuth helper requires a current `codex` CLI on the workstation. It does not expect an authentication binary inside the Pi images. The login runs with an isolated temporary `CODEX_HOME`, validates the generated ChatGPT OAuth credentials, transfers them over the same narrowed SSH path, and replaces `runtime/greggpt/auth.json` while holding the same lock used by the running services.
 
 ## Pi access
 Deployment and operations target the Raspberry Pi over Tailscale at `jhein@100.84.87.81`.
@@ -96,6 +97,18 @@ Scripts that use this exact access pattern:
 - `scripts/login_greggpt_oauth_on_pi.sh`
 - `scripts/set_discord_token.sh`
 - `scripts/sync_gtnh_data.sh`
+
+## Pi storage and deployment
+
+`scripts/setup_pi_runtime.sh` requires `/home/jhein/greggpt-data` to be a mounted filesystem distinct from `/`, then configures rootless Podman with:
+
+- graphroot: `/home/jhein/greggpt-data/containers/storage`
+- image-transfer staging: `/home/jhein/greggpt-data/prebuilt-images`
+- workspace: `/home/jhein/greggpt-data/workspace`, exposed as `/home/jhein/greggpt-gtnh/workspace`
+
+The setup script refuses to switch graphroots when the old rootless Podman store still contains images or containers; migrate or clear that old store deliberately first. The deployment script also verifies the graphroot before loading images.
+
+`scripts/deploy_to_pi.sh` creates or validates the flash-backed workspace symlink before syncing and uses `rsync --keep-dirlinks`, so a deploy cannot silently replace the symlink with a boot-drive directory. `scripts/deploy_prebuilt_to_pi.sh` locally builds and deploys `dathost-bridge`, `mc-relay`, `discord-commands`, `kanban-sync`, `inventory-sync`, and the shared inventory-query helpers.
 
 ## GTNH query workflow
 Runtime mount is index-only (`data/gtnh_runtime`), intentionally excluding full raw dumps.
@@ -149,6 +162,8 @@ GregGPT can use a local JSON memory store when enabled:
 
 Memory is selected by scope at request time: `global`, matching `channel`, and matching `user`. Writes are explicit through `memory_remember`; reads use `memory_search` or `memory_list`; deletes use `memory_forget` with a reason. The OpenAI response request still uses `Store=false`.
 
+The JSON memory store and OAuth credential store use advisory file locks so both bot services can safely share their mounted state. The task TSV/status stores are likewise serialized with `flock`; the relay, Discord, and Kanban images include Alpine's dedicated `flock` package for that command.
+
 ## GregGPT conversation history
 GregGPT uses one local SQLite history database for Discord and Minecraft chat context when enabled:
 - Default path: `workspace/state/greggpt_history.sqlite` (`GREGGPT_HISTORY_PATH=state/greggpt_history.sqlite` inside the container workspace)
@@ -157,6 +172,8 @@ GregGPT uses one local SQLite history database for Discord and Minecraft chat co
 - Recalled context limits: `GREGGPT_RECALLED_CONTEXT_MAX_ITEMS` and `GREGGPT_RECALLED_CONTEXT_MAX_BYTES`
 
 Recall in v1 is SQLite-backed full-text search (FTS) over the unified message history. True vector embeddings and an external vector database are deferred non-goals for v1.
+
+The history database runs in WAL mode with a bounded SQLite busy timeout so Discord and Minecraft writers can use the same database without immediate `SQLITE_BUSY` failures.
 
 ## Discord Kanban sync service
 `kanban-sync` supports two Discord outputs:

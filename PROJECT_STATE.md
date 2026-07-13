@@ -1,6 +1,6 @@
 # GregGPT GTNH Project State
 
-Last updated: 2026-04-29
+Last updated: 2026-07-11
 
 ## Deployment target
 - Host: `jhein@100.84.87.81` over Tailscale (Raspberry Pi 3, Debian 13, aarch64)
@@ -16,6 +16,7 @@ Last updated: 2026-04-29
 - Minecraft relay service: `mc-relay` (Go worker in `relay/`, uses GregGPT agent runtime)
 - Kanban sync service: `kanban-sync` (Go worker in `kanban-sync/`, renders persistent Discord board embed)
 - Inventory sync service: `inventory-sync` (Go worker in `inventory-sync/`, indexes player inventories and chest coordinates)
+- All five Go services are cross-compiled and image-built on the workstation for normal Pi deployment.
 
 ## Discord
 - Bot account: `GregGPT` (`1477150836227444862`)
@@ -30,8 +31,9 @@ Last updated: 2026-04-29
 
 ## Model/Auth
 - Provider: `openai` via OAuth
-- Model: `gpt-5.4`
+- Repository/runtime-template model default: `gpt-5.5` (the deployed value remains controlled by the Pi env file)
 - Auth file: `/home/jhein/greggpt-gtnh/runtime/greggpt/auth.json`
+- OAuth refresh and credential replacement use `/home/jhein/greggpt-gtnh/runtime/greggpt/auth.json.lock` across both agent services.
 
 ## DatHost bridge (v1)
 - Scope: chat-only (`/healthz`, `/mc/console`, `/mc/say`)
@@ -100,6 +102,9 @@ Last updated: 2026-04-29
 - USB data partition mounted at: `/home/jhein/greggpt-data`
 - Workspace moved to USB via symlink:
   - `/home/jhein/greggpt-gtnh/workspace -> /home/jhein/greggpt-data/workspace`
+- Required rootless Podman graphroot: `/home/jhein/greggpt-data/containers/storage`
+- Required prebuilt image archive staging: `/home/jhein/greggpt-data/prebuilt-images`
+- Deploy scripts validate the graphroot and preserve the workspace symlink.
 
 ## Boot behavior
 - `greggpt-gtnh.service` is enabled and active under user systemd.
@@ -112,10 +117,14 @@ Last updated: 2026-04-29
 - `scripts/sync_gtnh_data.sh`
 - `scripts/login_greggpt_oauth_on_pi.sh`
 
+The OAuth script now performs official Codex CLI device authentication in an isolated workstation directory and atomically transfers the compatible `auth.json`; Pi images no longer need a separate `greggpt-auth` binary.
+
 ## Known caveats
 - Exec safety guard can block commands that include `/` even when otherwise safe.
   - Prefer slashless command invocations from workspace root.
 - For best stability, keep raw GTNH dumps out of runtime mount and regenerate/sync `data/gtnh_runtime` after data refresh.
+- Empty Discord allowlists are rejected at startup unless `GREGGPT_DISCORD_ALLOW_ALL=true` is explicitly configured.
+- OAuth, memory, task, and history state are coordinated across the Discord and Minecraft services; history uses SQLite WAL plus a five-second busy timeout.
 - Heartbeat behavior is controlled by the GregGPT runtime configuration and service env.
   - `workspace/HEARTBEAT.md` exists on Pi and heartbeat runs against the last recorded external channel (`workspace/state/state.json`), currently Discord channel `1302382948338634894`.
   - Result: the bot can run without a fresh Discord mention and may emit retry/internal status text in that channel (for example context-compression notices) if a heartbeat run hits provider/context limits.

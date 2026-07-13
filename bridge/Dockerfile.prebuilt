@@ -1,0 +1,9 @@
+FROM docker.io/alpine:3.24
+
+RUN apk add --no-cache ca-certificates
+WORKDIR /app
+COPY bridge/prebuilt/dathost-bridge /usr/local/bin/dathost-bridge
+RUN mkdir -p /var/lib/dathost-bridge
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/dathost-bridge"]

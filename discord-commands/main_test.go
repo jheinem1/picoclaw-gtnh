@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,10 +155,44 @@ func TestGregGPTMentionUnauthorizedUser(t *testing.T) {
 	}
 }
 
+func TestEmptyAllowlistFailsClosed(t *testing.T) {
+	svc := &Service{cfg: Config{}}
+	if svc.allowedDiscordUser("any-user") {
+		t.Fatal("empty allowlist authorized a Discord user")
+	}
+	if svc.allowedUser(&discordgo.InteractionCreate{}) {
+		t.Fatal("empty allowlist authorized an interaction")
+	}
+
+	svc.cfg.AllowAllUsers = true
+	if !svc.allowedDiscordUser("any-user") {
+		t.Fatal("explicit allow-all did not authorize a Discord user")
+	}
+}
+
+func TestLoadConfigRequiresAllowlistUnlessExplicitlyAllowed(t *testing.T) {
+	t.Setenv("DISCORD_BOT_TOKEN", "test-token")
+	t.Setenv("GREGGPT_DISCORD_ALLOW_FROM", "")
+	t.Setenv("GREGGPT_CONFIG_PATH", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("GREGGPT_DISCORD_ALLOW_ALL", "false")
+	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "allowlist is empty") {
+		t.Fatalf("loadConfig() error = %v, want empty allowlist error", err)
+	}
+
+	t.Setenv("GREGGPT_DISCORD_ALLOW_ALL", "true")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig() with explicit allow-all error = %v", err)
+	}
+	if !cfg.AllowAllUsers {
+		t.Fatal("loadConfig() did not preserve explicit allow-all")
+	}
+}
+
 func TestGregGPTMentionNonMentionIgnored(t *testing.T) {
 	runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "should not run"}}
 	svc := &Service{
-		cfg:    Config{MentionAgent: true},
+		cfg:    Config{MentionAgent: true, AllowAllUsers: true},
 		runner: runner,
 	}
 
@@ -180,7 +215,7 @@ func TestGregGPTMentionNonMentionIgnored(t *testing.T) {
 func TestGregGPTMentionInventoryRoutesToAgent(t *testing.T) {
 	runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "circuits: 42"}}
 	svc := &Service{
-		cfg:    Config{MentionAgent: true},
+		cfg:    Config{MentionAgent: true, AllowAllUsers: true},
 		runner: runner,
 	}
 
@@ -229,7 +264,7 @@ func TestGregGPTMentionPassesStructuredHistoryAndRecall(t *testing.T) {
 		Score:  0.9,
 	}}
 	svc := &Service{
-		cfg:    Config{MentionAgent: true},
+		cfg:    Config{MentionAgent: true, AllowAllUsers: true},
 		runner: runner,
 	}
 
@@ -314,7 +349,7 @@ func TestGregGPTMentionRecipeWikiAndTaskMutationsRouteToAgent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &fakeAgentRunner{resp: DiscordAgentResponse{Reply: "ok"}}
 			svc := &Service{
-				cfg:    Config{MentionAgent: true},
+				cfg:    Config{MentionAgent: true, AllowAllUsers: true},
 				runner: runner,
 			}
 
@@ -509,6 +544,7 @@ func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 	svc := &Service{
 		cfg: Config{
 			MentionAgent:             true,
+			AllowAllUsers:            true,
 			DiscordHistoryMaxChars:   4000,
 			DiscordHistoryIncludeBot: false,
 		},
@@ -546,7 +582,7 @@ func TestGregGPTMentionInventoryRetryUsesHistory(t *testing.T) {
 func TestGregGPTMentionAgentErrorReply(t *testing.T) {
 	runner := &fakeAgentRunner{err: errors.New("agent unavailable")}
 	svc := &Service{
-		cfg:    Config{MentionAgent: true},
+		cfg:    Config{MentionAgent: true, AllowAllUsers: true},
 		runner: runner,
 	}
 
@@ -572,7 +608,7 @@ func TestGregGPTMentionTimeoutSummaryReply(t *testing.T) {
 		err:  errors.New("context deadline exceeded"),
 	}
 	svc := &Service{
-		cfg:    Config{MentionAgent: true},
+		cfg:    Config{MentionAgent: true, AllowAllUsers: true},
 		runner: runner,
 	}
 

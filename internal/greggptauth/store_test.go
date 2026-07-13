@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -180,6 +182,52 @@ func TestEnsureFreshRefreshFailure(t *testing.T) {
 	}
 	if loaded.Tokens.AccessToken != "old_access" {
 		t.Fatalf("AccessToken after failed refresh = %q, want old_access", loaded.Tokens.AccessToken)
+	}
+}
+
+func TestEnsureFreshSerializesRotatingRefreshTokens(t *testing.T) {
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	lastRefresh := now.Add(-DefaultRefreshInterval)
+	path := filepath.Join(t.TempDir(), "auth.json")
+	store := NewStore(path)
+	if err := store.Save(&Credentials{
+		Tokens:      &TokenData{AccessToken: "old_access", RefreshToken: "old_refresh"},
+		LastRefresh: &lastRefresh,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"access_token":"new_access","refresh_token":"new_refresh"}`))
+	}))
+	defer server.Close()
+
+	opts := RefreshOptions{TokenURL: server.URL, Now: func() time.Time { return now }}
+	results := make([]*Credentials, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = NewStore(path).EnsureFresh(context.Background(), opts)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("EnsureFresh(%d) error = %v", i, err)
+		}
+		if results[i].Tokens.RefreshToken != "new_refresh" {
+			t.Fatalf("EnsureFresh(%d) refresh token = %q", i, results[i].Tokens.RefreshToken)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
 	}
 }
 

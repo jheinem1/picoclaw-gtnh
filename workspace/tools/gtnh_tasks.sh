@@ -5,6 +5,22 @@ TASKS_FILE="${GTNH_TASKS_FILE:-state/gtnh_tasks.tsv}"
 TASKS_DIR="$(dirname "$TASKS_FILE")"
 UPDATED_FILE="${GTNH_TASKS_UPDATED_FILE:-state/gtnh_tasks.updated}"
 STATUS_FILE="${GTNH_TASKS_STATUS_FILE:-state/gtnh_task_status_updates.json}"
+LOCK_FILE="${GTNH_TASKS_LOCK_FILE:-${TASKS_FILE}.lock}"
+LOCK_TIMEOUT_SECONDS="${GTNH_TASKS_LOCK_TIMEOUT_SECONDS:-30}"
+
+acquire_store_lock() {
+  command -v flock >/dev/null 2>&1 || {
+    echo "error: flock is required for task-store concurrency safety" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  exec 9>"$LOCK_FILE"
+  chmod 0600 "$LOCK_FILE"
+  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 9; then
+    echo "error: timed out waiting for task-store lock: $LOCK_FILE" >&2
+    exit 1
+  fi
+}
 
 usage() {
   cat <<'USAGE'
@@ -997,6 +1013,7 @@ print(json.dumps({"tasks": tasks, "count": len(tasks)}, separators=(",", ":")))
 PY
 }
 
+acquire_store_lock
 ensure_store
 migrate_store
 ensure_status_store

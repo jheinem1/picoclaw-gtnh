@@ -1,6 +1,7 @@
 package greggpttools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"greggpt-gtnh/internal/filelock"
 )
 
 const memoryVersion = 1
@@ -68,6 +71,11 @@ func NewMemoryStore(path string, defaultTTL time.Duration) *MemoryStore {
 func (s *MemoryStore) Remember(entry MemoryEntry, ttlSeconds *int) (MemoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(context.Background(), s.lockPath())
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	defer lock.Release()
 
 	doc, err := s.loadLocked()
 	if err != nil {
@@ -135,6 +143,11 @@ func (s *MemoryStore) Remember(entry MemoryEntry, ttlSeconds *int) (MemoryEntry,
 func (s *MemoryStore) List(selector MemorySelector) ([]MemoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(context.Background(), s.lockPath())
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
 
 	doc, err := s.loadLocked()
 	if err != nil {
@@ -171,6 +184,11 @@ func (s *MemoryStore) List(selector MemorySelector) ([]MemoryEntry, error) {
 func (s *MemoryStore) Forget(id, reason string) (MemoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(context.Background(), s.lockPath())
+	if err != nil {
+		return MemoryEntry{}, err
+	}
+	defer lock.Release()
 
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -194,6 +212,10 @@ func (s *MemoryStore) Forget(id, reason string) (MemoryEntry, error) {
 		return item, nil
 	}
 	return MemoryEntry{}, fmt.Errorf("memory id %q not found", id)
+}
+
+func (s *MemoryStore) lockPath() string {
+	return s.path + ".lock"
 }
 
 func (s *MemoryStore) loadLocked() (MemoryDocument, error) {

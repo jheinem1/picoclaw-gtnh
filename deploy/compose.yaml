@@ -1,5 +1,6 @@
 services:
   dathost-bridge:
+    image: localhost/deploy_dathost-bridge:latest
     build:
       context: ..
       dockerfile: bridge/Dockerfile
@@ -13,6 +14,7 @@ services:
       - "127.0.0.1:18080:8080"
 
   mc-relay:
+    image: localhost/deploy_mc-relay:latest
     build:
       context: ..
       dockerfile: relay/Dockerfile
@@ -34,6 +36,7 @@ services:
       - dathost-bridge
 
   discord-commands:
+    image: localhost/deploy_discord-commands:latest
     build:
       context: ..
       dockerfile: discord-commands/Dockerfile
@@ -50,6 +53,7 @@ services:
       - ../workspace:/root/.greggpt/workspace
 
   kanban-sync:
+    image: localhost/deploy_kanban-sync:latest
     build:
       context: ..
       dockerfile: kanban-sync/Dockerfile
@@ -66,6 +70,7 @@ services:
       - ../workspace:/root/.greggpt/workspace
 
   inventory-sync:
+    image: localhost/deploy_inventory-sync:latest
     build:
       context: ..
       dockerfile: inventory-sync/Dockerfile

@@ -7,6 +7,29 @@ PENDING_FILE="${GTNH_TASK_CHECKIN_PENDING_FILE:-state/gtnh_task_checkin_pending_
 INTERVAL_SECONDS="${GTNH_TASK_CHECKIN_INTERVAL_SECONDS:-21600}"
 MENTION_ID="${GTNH_TASK_CHECKIN_MENTION_ID:-862546744453103636}"
 MAX_ITEMS="${GTNH_TASK_CHECKIN_MAX_ITEMS:-3}"
+TASKS_LOCK_FILE="${GTNH_TASKS_LOCK_FILE:-${TASKS_FILE}.lock}"
+STATE_LOCK_FILE="${GTNH_TASK_CHECKIN_LOCK_FILE:-${STATE_FILE}.lock}"
+LOCK_TIMEOUT_SECONDS="${GTNH_TASKS_LOCK_TIMEOUT_SECONDS:-30}"
+
+acquire_store_locks() {
+  command -v flock >/dev/null 2>&1 || {
+    echo "error: flock is required for task check-in concurrency safety" >&2
+    exit 1
+  }
+  mkdir -p "$(dirname "$TASKS_LOCK_FILE")" "$(dirname "$STATE_LOCK_FILE")"
+  exec 9>"$TASKS_LOCK_FILE"
+  chmod 0600 "$TASKS_LOCK_FILE"
+  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 9; then
+    echo "error: timed out waiting for task-store lock: $TASKS_LOCK_FILE" >&2
+    exit 1
+  fi
+  exec 8>"$STATE_LOCK_FILE"
+  chmod 0600 "$STATE_LOCK_FILE"
+  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 8; then
+    echo "error: timed out waiting for task-checkin lock: $STATE_LOCK_FILE" >&2
+    exit 1
+  fi
+}
 
 now_epoch() {
   date +%s
@@ -117,6 +140,7 @@ mark_sent_ids() {
   mv "$tmp" "$STATE_FILE"
 }
 
+acquire_store_locks
 cmd="${1:-check}"
 case "$cmd" in
   check)

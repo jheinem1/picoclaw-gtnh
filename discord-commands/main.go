@@ -30,6 +30,7 @@ type Config struct {
 	CommandTimeout           time.Duration
 	ReplyLimit               int
 	AllowedUsers             map[string]struct{}
+	AllowAllUsers            bool
 	MentionAgent             bool
 	DiscordHistoryEnabled    bool
 	DiscordHistoryLimit      int
@@ -223,6 +224,7 @@ func loadConfig() (Config, error) {
 		CommandTimeout:           time.Duration(getenvInt("DISCORD_COMMAND_TIMEOUT_SECONDS", 45)) * time.Second,
 		ReplyLimit:               getenvInt("DISCORD_REPLY_LIMIT", 1900),
 		AllowedUsers:             map[string]struct{}{},
+		AllowAllUsers:            getenvBool("GREGGPT_DISCORD_ALLOW_ALL", false),
 		MentionAgent:             getenvBool("GREGGPT_DISCORD_MENTIONS_ENABLED", true),
 		DiscordHistoryEnabled:    getenvBool("GREGGPT_DISCORD_HISTORY_ENABLED", true),
 		DiscordHistoryLimit:      getenvInt("GREGGPT_DISCORD_HISTORY_LIMIT", 10),
@@ -240,6 +242,9 @@ func loadConfig() (Config, error) {
 		return Config{}, err
 	}
 	cfg.AllowedUsers = allowed
+	if len(cfg.AllowedUsers) == 0 && !cfg.AllowAllUsers {
+		return Config{}, errors.New("Discord allowlist is empty; set GREGGPT_DISCORD_ALLOW_FROM or explicitly set GREGGPT_DISCORD_ALLOW_ALL=true")
+	}
 	return cfg, nil
 }
 
@@ -896,7 +901,7 @@ func inventoryQueryFromText(text string) (string, string) {
 
 func (s *Service) allowedDiscordUser(userID string) bool {
 	if len(s.cfg.AllowedUsers) == 0 {
-		return true
+		return s.cfg.AllowAllUsers
 	}
 	_, ok := s.cfg.AllowedUsers[userID]
 	return ok
@@ -1228,7 +1233,7 @@ func formatInventoryMentionReply(query, scope, out string, err error) string {
 
 func (s *Service) allowedUser(i *discordgo.InteractionCreate) bool {
 	if len(s.cfg.AllowedUsers) == 0 {
-		return true
+		return s.cfg.AllowAllUsers
 	}
 	userID := ""
 	if i.Member != nil && i.Member.User != nil {

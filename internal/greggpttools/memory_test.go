@@ -3,8 +3,10 @@ package greggpttools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -130,5 +132,52 @@ func TestMemoryToolsRememberSearchListForget(t *testing.T) {
 	}
 	if !strings.Contains(result.Stdout, `"reason":"unit test"`) {
 		t.Fatalf("unexpected forget result: %s", result.Stdout)
+	}
+}
+
+func TestMemoryStoreSerializesMultipleInstances(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "greggpt_memory.json")
+	stores := []*MemoryStore{NewMemoryStore(path, 0), NewMemoryStore(path, 0)}
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	for _, store := range stores {
+		store.now = func() time.Time { return now }
+	}
+
+	const writes = 20
+	errs := make(chan error, writes)
+	var wg sync.WaitGroup
+	for i := 0; i < writes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := stores[i%len(stores)].Remember(MemoryEntry{
+				Scope: MemoryScopeGlobal,
+				Key:   fmt.Sprintf("key-%02d", i),
+				Value: fmt.Sprintf("value-%02d", i),
+			}, nil)
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Remember() error = %v", err)
+		}
+	}
+
+	items, err := NewMemoryStore(path, 0).List(MemorySelector{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(items) != writes {
+		t.Fatalf("memory item count = %d, want %d", len(items), writes)
+	}
+	ids := map[string]struct{}{}
+	for _, item := range items {
+		if _, exists := ids[item.ID]; exists {
+			t.Fatalf("duplicate memory id %q", item.ID)
+		}
+		ids[item.ID] = struct{}{}
 	}
 }

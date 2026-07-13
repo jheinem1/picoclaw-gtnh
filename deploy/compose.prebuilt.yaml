@@ -1,4 +1,9 @@
 services:
+  dathost-bridge:
+    build:
+      context: ..
+      dockerfile: bridge/Dockerfile.prebuilt
+
   mc-relay:
     build:
       context: ..
@@ -8,6 +13,11 @@ services:
     build:
       context: ..
       dockerfile: discord-commands/Dockerfile.prebuilt
+
+  kanban-sync:
+    build:
+      context: ..
+      dockerfile: kanban-sync/Dockerfile.prebuilt
 
   inventory-sync:
     build:

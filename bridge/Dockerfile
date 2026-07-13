@@ -1,11 +1,11 @@
-FROM docker.io/golang:1.22-alpine AS builder
+FROM docker.io/golang:1.26-alpine3.24 AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY bridge ./bridge
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/dathost-bridge ./bridge
 
-FROM docker.io/alpine:3.20
+FROM docker.io/alpine:3.24
 
 RUN apk add --no-cache ca-certificates
 WORKDIR /app

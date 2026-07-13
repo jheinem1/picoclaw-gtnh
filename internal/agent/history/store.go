@@ -15,6 +15,8 @@ import (
 
 const defaultLimit = 50
 
+const sqliteBusyTimeoutMillis = 5000
+
 type Store struct {
 	db *sql.DB
 }
@@ -68,11 +70,39 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	store := &Store{db: db}
+	if err := store.configure(context.Background(), path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := store.init(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) configure(ctx context.Context, path string) error {
+	for _, stmt := range []string{
+		fmt.Sprintf("PRAGMA busy_timeout = %d", sqliteBusyTimeoutMillis),
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("configure history database: %w", err)
+		}
+	}
+	if path != ":memory:" {
+		var mode string
+		if err := s.db.QueryRowContext(ctx, "PRAGMA journal_mode = WAL").Scan(&mode); err != nil {
+			return fmt.Errorf("enable history WAL mode: %w", err)
+		}
+		if !strings.EqualFold(mode, "wal") {
+			return fmt.Errorf("enable history WAL mode: database returned %q", mode)
+		}
+		if _, err := s.db.ExecContext(ctx, "PRAGMA synchronous = NORMAL"); err != nil {
+			return fmt.Errorf("configure history synchronous mode: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -210,9 +240,6 @@ func (s *Store) Recall(ctx context.Context, q Query) ([]RecallItem, error) {
 }
 
 func (s *Store) init(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("enable foreign keys: %w", err)
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin history migration: %w", err)

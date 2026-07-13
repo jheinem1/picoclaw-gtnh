@@ -1,0 +1,6 @@
+FROM docker.io/alpine:3.24
+RUN apk add --no-cache ca-certificates python3 flock
+WORKDIR /app
+COPY kanban-sync/prebuilt/kanban-sync /usr/local/bin/kanban-sync
+RUN mkdir -p /var/lib/kanban-sync
+ENTRYPOINT ["/usr/local/bin/kanban-sync"]
