@@ -1,6 +1,6 @@
 ---
 name: gtnh-next-action
-description: Analyze GTNH questbook, freeform task log, recipes, and inventory to recommend one easy next action.
+description: Present deterministic GTNH quest-plan results for next-action and to-do requests.
 ---
 
 # GTNH Next Action
@@ -9,7 +9,7 @@ Use this skill only for requests like "greg what do I need to do" or "what shoul
 
 ## Goal
 
-Return exactly one actionable GTNH recommendation. Prefer evidence-backed work that can be completed or advanced with currently indexed materials.
+Use the deterministic planner as the source of truth. Return one actionable recommendation for singular requests, or the requested number of entries for explicit plan/list requests.
 
 ## Sources Of Truth
 
@@ -21,14 +21,12 @@ Return exactly one actionable GTNH recommendation. Prefer evidence-backed work t
 
 ## Workflow
 
-1. Inspect open quests and open tasks.
-2. Prioritize open quests from main tier questlines (`tier_quest_line=true`, such as `Tier 4 - EV`) over side questlines and freeform task-log items unless the user explicitly asks for a non-tier area.
-3. If the user names a tier or voltage, filter to that tier questline when indexed.
-4. Treat task-log requirements as inferred unless the task text explicitly lists requirements.
-5. For freeform player tasks, infer concrete deliverables and likely material requirements from the task title/description, then verify with GTNH lookup tools.
-6. Check all indexed inventory scopes: players, containers, and ME.
-7. Choose one best candidate, not a ranked shortlist.
-8. If task text is too vague, prefer a concrete open main tier quest with item requirements or return a low-confidence recommendation with the smallest useful next clarification.
+1. Call `next_action_recommendation` for a singular request or `next_action_plan` for an explicit plan/list.
+2. Pass the player name when known so task completion, ownership, and reward claims can be personalized.
+3. Pass the original message so tier constraints are applied deterministically.
+4. Present the returned `next_step`, material delta, reason, confidence, and freshness concisely.
+5. Do not recommend candidates marked `eligible=false`, recalculate scores, or claim unresolved materials are available.
+6. If the planner returns no candidate, report its smallest next step instead of guessing from raw open quests.
 
 ## Required Output Shape
 
@@ -45,4 +43,4 @@ Return JSON with:
 - `evidence`: array of source/tool facts.
 - `freshness`: concise inventory and quest freshness summary.
 
-Never return multiple recommendations.
+For singular requests, return only the highest-ranked recommendation. For explicit plan/list requests, preserve planner order and the requested limit.

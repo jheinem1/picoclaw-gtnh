@@ -66,6 +66,10 @@ case "${1:-}" in
         " | Open: " + ((.stats.open_count // 0)|tostring) +
         " | Completed: " + ((.stats.completed_count // 0)|tostring) +
         " | Required items: " + ((.stats.required_item_count // 0)|tostring),
+      "Planning states: Ready: " + ((.stats.ready_count // 0)|tostring) +
+        " | In progress: " + ((.stats.in_progress_count // 0)|tostring) +
+        " | Locked: " + ((.stats.locked_count // 0)|tostring) +
+        " | Claimable: " + ((.stats.claimable_count // 0)|tostring),
       (if (.stale.quests // false) then "WARNING: quest data is stale" else empty end),
       (if ((.warnings // []) | length) > 0 then
         "Warnings:\n" + ((.warnings // []) | map("- " + (. | tostring)) | join("\n"))

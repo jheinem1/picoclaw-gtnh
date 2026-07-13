@@ -27,6 +27,10 @@ type QuestStats struct {
 	OpenCount       int `json:"open_count"`
 	CompletedCount  int `json:"completed_count"`
 	RequiredItemCnt int `json:"required_item_count"`
+	ReadyCount      int `json:"ready_count"`
+	LockedCount     int `json:"locked_count"`
+	InProgressCount int `json:"in_progress_count"`
+	ClaimableCount  int `json:"claimable_count"`
 }
 
 type QuestIndex struct {
@@ -75,23 +79,33 @@ type QuestLine struct {
 }
 
 type QuestRecord struct {
-	ID             string      `json:"id"`
-	Title          string      `json:"title"`
-	Description    string      `json:"description,omitempty"`
-	QuestLineID    string      `json:"quest_line_id,omitempty"`
-	QuestLine      string      `json:"quest_line,omitempty"`
-	QuestLineOrder int         `json:"quest_line_order,omitempty"`
-	TierQuestLine  bool        `json:"tier_quest_line,omitempty"`
-	Completed      bool        `json:"completed"`
-	CompletedBy    []string    `json:"completed_by,omitempty"`
-	Prerequisites  []string    `json:"prerequisites,omitempty"`
-	Tasks          []QuestTask `json:"tasks,omitempty"`
+	ID              string                `json:"id"`
+	Title           string                `json:"title"`
+	Description     string                `json:"description,omitempty"`
+	QuestLineID     string                `json:"quest_line_id,omitempty"`
+	QuestLine       string                `json:"quest_line,omitempty"`
+	QuestLineOrder  int                   `json:"quest_line_order,omitempty"`
+	TierQuestLine   bool                  `json:"tier_quest_line,omitempty"`
+	Completed       bool                  `json:"completed"`
+	CompletedBy     []string              `json:"completed_by,omitempty"`
+	ClaimedBy       []string              `json:"claimed_by,omitempty"`
+	ClaimableBy     []string              `json:"claimable_by,omitempty"`
+	Prerequisites   []string              `json:"prerequisites,omitempty"`
+	Unlocks         []string              `json:"unlocks,omitempty"`
+	BlockedBy       []string              `json:"blocked_by,omitempty"`
+	State           string                `json:"state"`
+	Ready           bool                  `json:"ready"`
+	CompletionRatio float64               `json:"completion_ratio,omitempty"`
+	PlayerProgress  []QuestPlayerProgress `json:"player_progress,omitempty"`
+	Tasks           []QuestTask           `json:"tasks,omitempty"`
 }
 
 type QuestTask struct {
+	ID            string      `json:"id,omitempty"`
 	Type          string      `json:"type,omitempty"`
 	Description   string      `json:"description,omitempty"`
 	RequiredItems []QuestItem `json:"required_items,omitempty"`
+	CompletedBy   []string    `json:"completed_by,omitempty"`
 }
 
 type QuestItem struct {
@@ -103,7 +117,17 @@ type QuestItem struct {
 }
 
 type QuestProgress struct {
-	Completed map[string]bool `json:"completed,omitempty"`
+	Completed map[string]bool                `json:"completed,omitempty"`
+	Quests    map[string]QuestPlayerProgress `json:"quests,omitempty"`
+}
+
+type QuestPlayerProgress struct {
+	UUID             string   `json:"uuid,omitempty"`
+	Name             string   `json:"name,omitempty"`
+	Completed        bool     `json:"completed"`
+	Claimed          bool     `json:"claimed"`
+	ClaimStatusKnown bool     `json:"claim_status_known"`
+	CompletedTasks   []string `json:"completed_tasks,omitempty"`
 }
 
 func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, error) {
@@ -156,6 +180,7 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 	}
 
 	completedBy := map[string]map[string]bool{}
+	playerProgressByQuest := map[string][]QuestPlayerProgress{}
 	progressFiles := 0
 	matchedProgressFiles := 0
 	progressByUUID := map[string]QuestProgress{}
@@ -170,7 +195,7 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 			}
 			progressFiles++
 			uuid := normalizeUUID(strings.TrimSuffix(filepath.Base(e.Path), ".json"))
-			progressByUUID[uuid] = parseQuestProgressRecord(raw)
+			progressByUUID[uuid] = parseQuestProgressRecordForUser(raw, uuid)
 		}
 	} else {
 		warnings = append(warnings, "QuestProgress directory not found; selected party progress cannot be resolved")
@@ -187,7 +212,29 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 		if memberName == "" {
 			memberName = party.Members[i].UUID
 		}
+		progressRows := progress.Quests
+		if progressRows == nil {
+			progressRows = map[string]QuestPlayerProgress{}
+		}
 		for id := range progress.Completed {
+			row := progressRows[id]
+			row.Completed = true
+			progressRows[id] = row
+		}
+		progressIDs := make([]string, 0, len(progressRows))
+		for id := range progressRows {
+			progressIDs = append(progressIDs, id)
+		}
+		sort.Strings(progressIDs)
+		for _, id := range progressIDs {
+			row := progressRows[id]
+			row.UUID = party.Members[i].UUID
+			row.Name = memberName
+			row.CompletedTasks = sortedUniqueStrings(row.CompletedTasks)
+			playerProgressByQuest[id] = append(playerProgressByQuest[id], row)
+			if !row.Completed {
+				continue
+			}
 			if completedBy[id] == nil {
 				completedBy[id] = map[string]bool{}
 			}
@@ -199,18 +246,112 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 	}
 	party.MemberCount = len(party.Members)
 
-	completedCount := 0
 	requiredItems := 0
 	lineStats := map[string]*QuestLine{}
 	for _, line := range questLines {
 		lineCopy := line
 		lineStats[line.ID] = &lineCopy
 	}
+	questByID := make(map[string]*QuestRecord, len(quests))
 	for i := range quests {
+		questByID[quests[i].ID] = &quests[i]
+		quests[i].PlayerProgress = playerProgressByQuest[quests[i].ID]
 		if by := sortedKeys(completedBy[quests[i].ID]); len(by) > 0 {
 			quests[i].Completed = true
 			quests[i].CompletedBy = by
+		}
+		completedTaskNames := map[string]map[string]bool{}
+		for _, progress := range quests[i].PlayerProgress {
+			if progress.Completed && progress.ClaimStatusKnown {
+				if progress.Claimed {
+					quests[i].ClaimedBy = append(quests[i].ClaimedBy, progress.Name)
+				} else {
+					quests[i].ClaimableBy = append(quests[i].ClaimableBy, progress.Name)
+				}
+			}
+			for _, taskID := range progress.CompletedTasks {
+				if completedTaskNames[taskID] == nil {
+					completedTaskNames[taskID] = map[string]bool{}
+				}
+				completedTaskNames[taskID][progress.Name] = true
+			}
+		}
+		quests[i].ClaimedBy = sortedUniqueStrings(quests[i].ClaimedBy)
+		quests[i].ClaimableBy = sortedUniqueStrings(quests[i].ClaimableBy)
+		completedTasks := 0
+		for taskIndex := range quests[i].Tasks {
+			by := completedTaskNames[quests[i].Tasks[taskIndex].ID]
+			quests[i].Tasks[taskIndex].CompletedBy = sortedKeys(by)
+			if len(by) > 0 {
+				completedTasks++
+			}
+		}
+		if quests[i].Completed {
+			quests[i].CompletionRatio = 1
+		} else if len(quests[i].Tasks) > 0 {
+			quests[i].CompletionRatio = float64(completedTasks) / float64(len(quests[i].Tasks))
+		}
+		for _, task := range quests[i].Tasks {
+			requiredItems += len(task.RequiredItems)
+		}
+	}
+
+	for i := range quests {
+		for _, prerequisiteID := range quests[i].Prerequisites {
+			if prerequisite := questByID[prerequisiteID]; prerequisite != nil {
+				prerequisite.Unlocks = append(prerequisite.Unlocks, quests[i].ID)
+				if !prerequisite.Completed {
+					quests[i].BlockedBy = append(quests[i].BlockedBy, prerequisiteID)
+				}
+			} else {
+				quests[i].BlockedBy = append(quests[i].BlockedBy, prerequisiteID)
+				warnings = append(warnings, fmt.Sprintf("quest %s references missing prerequisite %s", quests[i].ID, prerequisiteID))
+			}
+		}
+		quests[i].Unlocks = sortedUniqueStrings(quests[i].Unlocks)
+		quests[i].BlockedBy = sortedUniqueStrings(quests[i].BlockedBy)
+	}
+
+	completedCount := 0
+	readyCount := 0
+	lockedCount := 0
+	inProgressCount := 0
+	claimableCount := 0
+	for i := range quests {
+		completedClaimStateKnown := false
+		completedClaimStateUnknown := false
+		for _, progress := range quests[i].PlayerProgress {
+			if !progress.Completed {
+				continue
+			}
+			if progress.ClaimStatusKnown {
+				completedClaimStateKnown = true
+			} else {
+				completedClaimStateUnknown = true
+			}
+		}
+		switch {
+		case quests[i].Completed && len(quests[i].ClaimableBy) > 0:
+			quests[i].State = "completed_unclaimed"
 			completedCount++
+			claimableCount++
+		case quests[i].Completed && completedClaimStateKnown && !completedClaimStateUnknown:
+			quests[i].State = "completed_claimed"
+			completedCount++
+		case quests[i].Completed:
+			quests[i].State = "completed_claim_unknown"
+			completedCount++
+		case len(quests[i].BlockedBy) > 0:
+			quests[i].State = "locked"
+			lockedCount++
+		case quests[i].CompletionRatio > 0:
+			quests[i].State = "in_progress"
+			quests[i].Ready = true
+			inProgressCount++
+		default:
+			quests[i].State = "ready"
+			quests[i].Ready = true
+			readyCount++
 		}
 		if line := lineStats[quests[i].QuestLineID]; line != nil {
 			line.QuestCount++
@@ -219,9 +360,6 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 			} else {
 				line.OpenCount++
 			}
-		}
-		for _, task := range quests[i].Tasks {
-			requiredItems += len(task.RequiredItems)
 		}
 	}
 	questLines = make([]QuestLine, 0, len(lineStats))
@@ -246,7 +384,7 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 
 	now := nowUTC()
 	return QuestIndex{
-		Version:     1,
+		Version:     2,
 		GeneratedAt: now,
 		Source: QuestSourceMeta{
 			ServerID:             cfg.DatHostServer,
@@ -264,9 +402,13 @@ func scanQuests(client *http.Client, cfg Config, syncAt string) (QuestIndex, err
 			OpenCount:       len(quests) - completedCount,
 			CompletedCount:  completedCount,
 			RequiredItemCnt: requiredItems,
+			ReadyCount:      readyCount,
+			LockedCount:     lockedCount,
+			InProgressCount: inProgressCount,
+			ClaimableCount:  claimableCount,
 		},
 		QuestLines: questLines,
-		Warnings:   warnings,
+		Warnings:   sortedUniqueStrings(warnings),
 		Quests:     quests,
 	}, nil
 }
@@ -304,7 +446,7 @@ func parseQuestDatabase(raw []byte) ([]QuestRecord, error) {
 			ID:            id,
 			Title:         firstString(node, "name", "name:8", "Name", "title", "title:8", "Title", "questName", "questName:8"),
 			Description:   firstString(node, "desc", "desc:8", "Desc", "description", "description:8", "Description", "subtitle", "text", "body"),
-			Prerequisites: collectStringIDsFromKeys(node, "preRequisites", "prerequisites", "preReqs", "requiredQuests"),
+			Prerequisites: collectStringIDsFromKeys(node, "preRequisites", "preRequisites:9", "preRequisites:11", "prerequisites", "prerequisites:9", "preReqs", "requiredQuests"),
 			Tasks:         collectQuestTasks(node),
 		}
 		if q.Title == "" {
@@ -509,40 +651,56 @@ func stringFromQuestAny(v any) (string, bool) {
 func collectQuestTasks(node map[string]any) []QuestTask {
 	var tasks []QuestTask
 	for _, key := range []string{"tasks", "tasks:9", "tasks:10"} {
-		collectTasksFromAny(node[key], &tasks)
+		collectTasksFromAny(node[key], "", &tasks)
 	}
 	if len(tasks) == 0 {
 		items := collectQuestItems(node)
 		if len(items) > 0 {
-			tasks = append(tasks, QuestTask{Type: "item", RequiredItems: items})
+			tasks = append(tasks, QuestTask{ID: "0", Type: "item", RequiredItems: items})
 		}
 	}
 	return tasks
 }
 
-func collectTasksFromAny(v any, out *[]QuestTask) {
+func collectTasksFromAny(v any, keyHint string, out *[]QuestTask) {
 	switch x := v.(type) {
 	case []any:
-		for _, item := range x {
-			collectTasksFromAny(item, out)
+		for i, item := range x {
+			collectTasksFromAny(item, strconv.Itoa(i), out)
 		}
 	case map[string]any:
-		items := collectQuestItems(x)
-		desc := firstString(x, "name", "name:8", "title", "title:8", "desc", "desc:8", "description", "description:8")
-		taskType := firstString(x, "taskID", "type", "taskType")
-		if len(items) > 0 || desc != "" || taskType != "" {
-			*out = append(*out, QuestTask{Type: taskType, Description: desc, RequiredItems: items})
+		isTask := firstAny(x, "taskID", "taskID:8", "type", "taskType", "requiredItems", "requiredItems:9", "requiredItems:10") != nil
+		if isTask {
+			items := collectQuestItems(x)
+			desc := firstStringScoped(x, "name", "name:8", "title", "title:8", "desc", "desc:8", "description", "description:8")
+			taskType, _ := stringFromQuestAny(firstAny(x, "taskID", "taskID:8", "type", "taskType"))
+			*out = append(*out, QuestTask{
+				ID:            taskEntryID(keyHint, len(*out)),
+				Type:          strings.TrimSpace(taskType),
+				Description:   desc,
+				RequiredItems: items,
+			})
 			return
 		}
-		for _, child := range x {
-			if childMap, ok := child.(map[string]any); ok {
-				if _, hasID := childMap["id"]; hasID {
-					continue
-				}
-			}
-			collectTasksFromAny(child, out)
+		keys := make([]string, 0, len(x))
+		for key := range x {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			collectTasksFromAny(x[key], key, out)
 		}
 	}
+}
+
+func taskEntryID(keyHint string, fallback int) string {
+	if n, ok := numericKeyHint(keyHint); ok {
+		return strconv.Itoa(n)
+	}
+	if keyHint = strings.TrimSpace(keyHint); keyHint != "" {
+		return keyHint
+	}
+	return strconv.Itoa(fallback)
 }
 
 func collectQuestItems(v any) []QuestItem {
@@ -570,18 +728,18 @@ func collectQuestItemsInto(v any, out *[]QuestItem) {
 
 func questItemFromMap(m map[string]any) (QuestItem, bool) {
 	id, hasID := firstIntAny(m, "id", "id:3", "itemID", "itemID:3")
-	reg, _ := stringFromQuestAny(firstAny(m, "registryName", "registry_name", "regName", "itemName", "id:8", "name"))
+	reg, _ := stringFromQuestAny(firstAny(m, "registryName", "registryName:8", "registry_name", "regName", "regName:8", "itemName", "itemName:8", "id:8"))
 	if !hasID {
 		if s, ok := stringFromQuestAny(firstAny(m, "id")); ok && strings.Contains(s, ":") {
 			reg = s
 		}
 	}
-	display, _ := stringFromQuestAny(firstAny(m, "displayName", "display_name", "display"))
+	display, _ := stringFromQuestAny(firstAny(m, "displayName", "displayName:8", "display_name", "display"))
 	if !hasID && strings.TrimSpace(reg) == "" && strings.TrimSpace(display) == "" {
 		return QuestItem{}, false
 	}
 	damage, _ := firstIntAny(m, "damage", "damage:3", "Damage", "Damage:2", "meta", "meta:3", "Meta")
-	count, ok := firstIntAny(m, "required", "required:3", "count", "Count", "amount", "amount:3", "requiredCount")
+	count, ok := firstIntAny(m, "required", "required:3", "count", "count:3", "Count", "Count:3", "amount", "amount:3", "requiredCount", "requiredCount:3")
 	if !ok || count <= 0 {
 		count = 1
 	}
@@ -827,13 +985,153 @@ func parseQuestProgress(raw []byte) map[string]bool {
 }
 
 func parseQuestProgressRecord(raw []byte) QuestProgress {
+	return parseQuestProgressRecordForUser(raw, "")
+}
+
+func parseQuestProgressRecordForUser(raw []byte, targetUUID string) QuestProgress {
 	var root any
 	if err := decodeQuestJSON(raw, &root); err != nil {
-		return QuestProgress{Completed: map[string]bool{}}
+		return QuestProgress{Completed: map[string]bool{}, Quests: map[string]QuestPlayerProgress{}}
 	}
 	out := map[string]bool{}
 	collectCompletedQuestIDs(root, "", out)
-	return QuestProgress{Completed: out}
+	quests := map[string]QuestPlayerProgress{}
+	collectQuestProgressRows(root, "", normalizeUUID(targetUUID), quests)
+	for id := range out {
+		row := quests[id]
+		row.Completed = true
+		quests[id] = row
+	}
+	return QuestProgress{Completed: out, Quests: quests}
+}
+
+func collectQuestProgressRows(v any, keyHint, targetUUID string, out map[string]QuestPlayerProgress) {
+	switch x := v.(type) {
+	case map[string]any:
+		id := firstID(x, keyHint)
+		isTask := firstAny(x, "taskID", "taskID:8", "taskType") != nil
+		isQuestProgress := firstAny(x, "tasks", "tasks:9", "tasks:10", "completed", "completed:1", "completed:9", "complete", "complete:1", "done", "done:1", "state", "state:3", "status", "status:3") != nil
+		if id != "" && !isTask && isQuestProgress {
+			row := out[id]
+			if boolFromAny(firstAny(x, "complete", "complete:1", "completed", "completed:1", "done", "done:1")) || nonEmptyCollection(firstAny(x, "completed:9")) {
+				row.Completed = true
+			}
+			if n, ok := firstIntAny(x, "state", "state:3", "status", "status:3"); ok && n > 0 {
+				row.Completed = true
+			}
+			if known, claimed := questClaimStatus(x, targetUUID); known {
+				row.ClaimStatusKnown = true
+				row.Claimed = claimed
+			}
+			completedTasks := map[string]bool{}
+			collectCompletedTaskIDs(firstAny(x, "tasks", "tasks:9", "tasks:10"), "", completedTasks)
+			for taskID := range completedTasks {
+				row.CompletedTasks = append(row.CompletedTasks, taskID)
+			}
+			row.CompletedTasks = sortedUniqueStrings(row.CompletedTasks)
+			out[id] = row
+			return
+		}
+		keys := make([]string, 0, len(x))
+		for key := range x {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			collectQuestProgressRows(x[key], key, targetUUID, out)
+		}
+	case []any:
+		for i, child := range x {
+			collectQuestProgressRows(child, strconv.Itoa(i), targetUUID, out)
+		}
+	}
+}
+
+func collectCompletedTaskIDs(v any, keyHint string, out map[string]bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		isTask := firstAny(x, "taskID", "taskID:8", "taskType", "completeUsers", "completeUsers:9") != nil
+		if isTask {
+			complete := boolFromAny(firstAny(x, "complete", "complete:1", "completed", "completed:1", "done", "done:1")) || nonEmptyCollection(firstAny(x, "completeUsers", "completeUsers:9"))
+			if n, ok := firstIntAny(x, "state", "state:3", "status", "status:3"); ok && n > 0 {
+				complete = true
+			}
+			if complete {
+				out[taskEntryID(keyHint, len(out))] = true
+			}
+			return
+		}
+		keys := make([]string, 0, len(x))
+		for key := range x {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			collectCompletedTaskIDs(x[key], key, out)
+		}
+	case []any:
+		for i, child := range x {
+			collectCompletedTaskIDs(child, strconv.Itoa(i), out)
+		}
+	}
+}
+
+func questClaimStatus(m map[string]any, targetUUID string) (bool, bool) {
+	if value, ok := questFirstPresent(m, "claimed", "claimed:1"); ok {
+		return true, boolFromAny(value)
+	}
+	for _, key := range []string{"completed", "completed:9"} {
+		if known, claimed := claimStatusFromAny(m[key], targetUUID); known {
+			return true, claimed
+		}
+	}
+	return false, false
+}
+
+func claimStatusFromAny(v any, targetUUID string) (bool, bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		rowUUID := normalizeUUID(firstStringRaw(x, "uuid", "uuid:8", "UUID"))
+		if value, ok := questFirstPresent(x, "claimed", "claimed:1"); ok && (targetUUID == "" || rowUUID == "" || rowUUID == targetUUID) {
+			return true, boolFromAny(value)
+		}
+		keys := make([]string, 0, len(x))
+		for key := range x {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if known, claimed := claimStatusFromAny(x[key], targetUUID); known {
+				return true, claimed
+			}
+		}
+	case []any:
+		for _, child := range x {
+			if known, claimed := claimStatusFromAny(child, targetUUID); known {
+				return true, claimed
+			}
+		}
+	}
+	return false, false
+}
+
+func questFirstPresent(m map[string]any, keys ...string) (any, bool) {
+	for _, key := range keys {
+		if value, ok := m[key]; ok {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func nonEmptyCollection(v any) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		return len(x) > 0
+	case []any:
+		return len(x) > 0
+	}
+	return false
 }
 
 func decodeQuestJSON(raw []byte, out any) error {
@@ -849,7 +1147,7 @@ func collectCompletedQuestIDs(v any, keyHint string, out map[string]bool) {
 		if firstAny(x, "taskID", "taskID:8", "taskType") != nil {
 			id = ""
 		}
-		if id != "" && boolFromAny(firstAny(x, "complete", "completed", "done", "claimed")) {
+		if id != "" && boolFromAny(firstAny(x, "complete", "complete:1", "completed", "completed:1", "done", "done:1", "claimed", "claimed:1")) {
 			out[id] = true
 		}
 		if id != "" {
@@ -860,7 +1158,7 @@ func collectCompletedQuestIDs(v any, keyHint string, out map[string]bool) {
 			}
 		}
 		if id != "" {
-			if n, ok := firstIntAny(x, "state", "status"); ok && n > 0 {
+			if n, ok := firstIntAny(x, "state", "state:3", "status", "status:3"); ok && n > 0 {
 				out[id] = true
 			}
 		}
@@ -886,6 +1184,9 @@ func boolFromAny(v any) bool {
 		return x
 	case float64:
 		return x > 0
+	case json.Number:
+		n, err := x.Int64()
+		return err == nil && n > 0
 	case string:
 		switch strings.ToLower(strings.TrimSpace(x)) {
 		case "true", "complete", "completed", "done", "claimed", "1":
@@ -1025,6 +1326,21 @@ func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for key := range m {
 		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedUniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
 	}
 	sort.Strings(out)
 	return out

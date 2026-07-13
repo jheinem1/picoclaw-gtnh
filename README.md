@@ -18,7 +18,7 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `workspace/gtnh_tasks`: GTNH progress task tracker + board view (Discord-friendly text output)
 - `workspace/gtnh_inventory`: inventory/chest lookup API for GregGPT prompts
 - `workspace/gtnh_quests`: BetterQuesting questbook progress lookup API
-- `workspace/gtnh_next_action`: skill-backed next-action analyzer for “what should I do next?”
+- `workspace/gtnh_next_action`: deterministic prerequisite/progress/inventory-aware quest planner
 - `workspace/tools/gtnh_tasks.sh`: task tracker backend (TSV store in `workspace/state/gtnh_tasks.tsv`)
 - `scripts/build_recipe_dump_mod.sh`: build a GTNH Forge mod that dumps recipes directly to SQLite
 - `scripts/install_recipe_dump_mod.sh`: install the recipe dump mod into a local PrismLauncher GTNH instance
@@ -215,8 +215,8 @@ BetterQuesting progress is indexed from DatHost files by `inventory-sync`:
 - `world/betterquesting/QuestProgress/*.json`
 
 The selected main party defaults to `Noob Squad` and can be changed with `INVENTORY_QUEST_PARTY_NAME`.
-Party completion is indexed as the union of completed quest IDs from selected-party member progress files.
-Quest records include BetterQuesting page metadata such as `quest_line`, `quest_line_order`, and `tier_quest_line`; the next-action analyzer prioritizes open main tier quests.
+Party completion remains the union of completed quest IDs from selected-party member progress files for compatibility. Quest index v2 also preserves each member's completed tasks and reward-claim state, computes prerequisite and unlock edges, and assigns `locked`, `ready`, `in_progress`, `completed_unclaimed`, `completed_claimed`, or `completed_claim_unknown` state.
+Quest records include BetterQuesting page metadata such as `quest_line`, `quest_line_order`, and `tier_quest_line`. The deterministic planner filters ineligible candidates before scoring progress, exact inventory coverage, current tier, ownership, priority, and unlock impact.
 
 Quest index outputs:
 - `state/quest_index.json`
@@ -229,8 +229,10 @@ Commands from workspace root:
 - `sh gtnh_quests show <quest_id>`
 - `sh gtnh_quests refresh`
 - `sh gtnh_next_action recommend`
+- `sh gtnh_next_action plan --limit 5`
+- `sh gtnh_next_action explain --id <quest_id>`
 
-The next-action analyzer follows `workspace/skills/gtnh-next-action/SKILL.md`. It combines open questbook data, freeform task-log entries, GTNH lookups, and all indexed inventory scopes to return one recommendation with evidence. Freeform task requirements are treated as inferred unless explicitly listed in the task description.
+`gtnh_quest_query` is a locally prebuilt Go helper installed in the Discord and Minecraft agent images. It returns deterministic score breakdowns, exact material shortages, exclusion reasons, confidence, and freshness evidence. Freeform task requirements remain unknown unless explicitly modeled; they are never reported as inventory-backed merely because a text lookup ran.
 
 ## Inventory lookup sync service
 `inventory-sync` builds a deterministic inventory index from DatHost server files:

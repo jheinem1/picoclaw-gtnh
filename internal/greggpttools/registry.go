@@ -19,8 +19,6 @@ var (
 	memoryScopeEnum  = []any{"global", "channel", "user"}
 )
 
-const nextActionTimeout = 3 * time.Minute
-
 type Registry struct {
 	cfg    Config
 	memory *MemoryStore
@@ -224,8 +222,22 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		tool("quest_refresh", GroupQuest, "Request a BetterQuesting quest index refresh.", short, object(), func(Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_quests", "refresh"}, nil
 		}),
+		tool("quest_explain", GroupQuest, "Explain why one quest is eligible, blocked, completed, or ranked at its current score using deterministic quest and inventory evidence.", medium, object(
+			required("id", stringSpec("Quest ID.")),
+			optional("user", stringSpec("Requesting player name or UUID for personalized task and reward state.")),
+			optional("message", stringSpec("Optional original request containing a tier constraint.")),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_next_action", "explain", "--id", stringArg(a, "id")}
+			if user := stringArg(a, "user"); user != "" {
+				argv = append(argv, "--user", user)
+			}
+			if message := stringArg(a, "message"); message != "" {
+				argv = append(argv, "--message", message)
+			}
+			return argv, nil
+		}),
 
-		tool("next_action_recommendation", GroupNext, "Use the gtnh-next-action skill-backed analyzer for requests like 'greg what do I need to do' or 'what should I do next'. Returns exactly one quest/task recommendation using questbook, task log, GTNH lookup, and all indexed inventory materials.", nextActionTimeout, object(
+		tool("next_action_recommendation", GroupNext, "Return exactly one deterministic quest or task recommendation after prerequisite, player progress, ownership, freshness, and exact indexed inventory checks.", medium, object(
 			optional("user", stringSpec("Requesting user or player name.")),
 			optional("channel", enumStringSpec("Request channel.", []any{"minecraft", "discord"}, nil)),
 			optional("message", stringSpec("Original user request.")),
@@ -239,6 +251,27 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			}
 			if message := stringArg(a, "message"); message != "" {
 				argv = append(argv, "--message", message)
+			}
+			return argv, nil
+		}),
+		tool("next_action_plan", GroupNext, "Return a deterministic prioritized GTNH to-do plan with score explanations, exact material shortages, and freshness evidence.", medium, object(
+			optional("user", stringSpec("Requesting user or player name.")),
+			optional("channel", enumStringSpec("Request channel.", []any{"minecraft", "discord"}, nil)),
+			optional("message", stringSpec("Original user request, including any tier constraint.")),
+			optional("limit", intSpec("Maximum recommendations to return.", 1, 10, 5)),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_next_action", "plan"}
+			if user := stringArg(a, "user"); user != "" {
+				argv = append(argv, "--user", user)
+			}
+			if channel := stringArg(a, "channel"); channel != "" {
+				argv = append(argv, "--channel", channel)
+			}
+			if message := stringArg(a, "message"); message != "" {
+				argv = append(argv, "--message", message)
+			}
+			if limit := intArg(a, "limit", 0); limit > 0 {
+				argv = append(argv, "--limit", strconv.Itoa(limit))
 			}
 			return argv, nil
 		}),

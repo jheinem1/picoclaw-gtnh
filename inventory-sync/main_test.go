@@ -546,7 +546,7 @@ func TestParseQuestDatabaseExtractsNBTStyleBetterQuestingIDs(t *testing.T) {
 	            "0:10": {
 	              "Damage:2": 148,
 	              "id:8": "gregtech:gt.blockmachines",
-	              "Count:3": 1
+		            "Count:3": 4
 	            }
 	          }
 	        }
@@ -575,8 +575,11 @@ func TestParseQuestDatabaseExtractsNBTStyleBetterQuestingIDs(t *testing.T) {
 	if len(q.Tasks) != 1 || len(q.Tasks[0].RequiredItems) != 1 {
 		t.Fatalf("expected one task item, got %#v", q.Tasks)
 	}
+	if q.Tasks[0].ID != "0" {
+		t.Fatalf("expected stable task id 0, got %#v", q.Tasks[0])
+	}
 	item := q.Tasks[0].RequiredItems[0]
-	if item.RegName != "gregtech:gt.blockmachines" || item.Damage != 148 || item.Count != 1 {
+	if item.RegName != "gregtech:gt.blockmachines" || item.Damage != 148 || item.Count != 4 {
 		t.Fatalf("unexpected required item: %#v", item)
 	}
 }
@@ -673,6 +676,99 @@ func TestParseQuestProgressMarksNBTStyleCompletedIDs(t *testing.T) {
 	}
 	if got["0"] {
 		t.Fatalf("task completion should not be treated as quest id 0: %#v", got)
+	}
+	details := parseQuestProgressRecord(raw).Quests["3813996469394622463:-5367828810714122460"]
+	if !details.Completed || details.Claimed || !details.ClaimStatusKnown {
+		t.Fatalf("unexpected quest completion details: %#v", details)
+	}
+	if strings.Join(details.CompletedTasks, ",") != "0" {
+		t.Fatalf("expected task 0 completion, got %#v", details.CompletedTasks)
+	}
+}
+
+func TestParseQuestProgressSelectsClaimForProgressFileOwner(t *testing.T) {
+	raw := []byte(`{
+	  "questProgress:9": {
+	    "0:10": {
+	      "questIDLow:4": 42,
+	      "questIDHigh:4": 0,
+	      "completed:9": {
+	        "0:10": {"uuid:8": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "claimed:1": 1},
+	        "1:10": {"uuid:8": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "claimed:1": 0}
+	      }
+	    }
+	  }
+	}`)
+
+	a := parseQuestProgressRecordForUser(raw, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").Quests["42"]
+	b := parseQuestProgressRecordForUser(raw, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb").Quests["42"]
+	if !a.ClaimStatusKnown || !a.Claimed {
+		t.Fatalf("unexpected claimed state for a: %#v", a)
+	}
+	if !b.ClaimStatusKnown || b.Claimed {
+		t.Fatalf("unexpected claimed state for b: %#v", b)
+	}
+}
+
+func TestScanQuestsBuildsDeterministicReadinessAndProgress(t *testing.T) {
+	files := map[string]string{
+		"world/betterquesting/QuestDatabase.json": `{
+		  "questDatabase:9": {
+		    "42": {"questID:3": 42, "properties:10": {"name:8": "Make Steel"}},
+		    "43": {
+		      "questID:3": 43,
+		      "preRequisites:11": [42],
+		      "properties:10": {"name:8": "Build the EBF"},
+		      "tasks:9": {
+		        "0:10": {"taskID:8": "bq_standard:retrieval", "requiredItems:9": [{"id:3": 7437, "damage:3": 11305, "Count": 16, "displayName": "Steel Ingot"}]},
+		        "1:10": {"taskID:8": "bq_standard:checkbox", "description:8": "Assemble the structure"}
+		      }
+		    },
+		    "44": {"questID:3": 44, "preRequisites:11": [999], "properties:10": {"name:8": "Future Work"}}
+		  }
+		}`,
+		"world/betterquesting/NameCache.json":       `{"nameCache:9":{"a":{"uuid:8":"11111111-1111-1111-1111-111111111111","name:8":"Snow"}}}`,
+		"world/betterquesting/QuestingParties.json": `{"questingParties:9":{"7":{"partyID:3":7,"name:8":"Noob Squad","members:9":[{"uuid:8":"11111111-1111-1111-1111-111111111111"}]}}}`,
+		"world/betterquesting/QuestProgress/11111111-1111-1111-1111-111111111111.json": `{
+		  "questProgress:9": {
+		    "0:10": {"questIDLow:4":42,"questIDHigh:4":0,"completed:9":{"0:10":{"uuid:8":"11111111-1111-1111-1111-111111111111","claimed:1":1}}},
+		    "1:10": {"questIDLow:4":43,"questIDHigh:4":0,"tasks:9":{"0:10":{"taskID:8":"bq_standard:retrieval","completeUsers:9":{"0:8":"11111111-1111-1111-1111-111111111111"}}}}
+		  }
+		}`,
+	}
+	server := questFileServer(t, files)
+	defer server.Close()
+
+	index, err := scanQuests(&http.Client{}, Config{
+		DatHostBase:    server.URL,
+		DatHostServer:  "srv",
+		QuestPartyName: "Noob Squad",
+		HTTPTimeout:    time.Second,
+	}, "")
+	if err != nil {
+		t.Fatalf("scanQuests failed: %v", err)
+	}
+	if index.Version != 2 {
+		t.Fatalf("index version = %d, want 2", index.Version)
+	}
+	byID := map[string]QuestRecord{}
+	for _, quest := range index.Quests {
+		byID[quest.ID] = quest
+	}
+	if byID["42"].State != "completed_claimed" || strings.Join(byID["42"].Unlocks, ",") != "43" {
+		t.Fatalf("unexpected completed quest: %#v", byID["42"])
+	}
+	if byID["43"].State != "in_progress" || !byID["43"].Ready || byID["43"].CompletionRatio != 0.5 {
+		t.Fatalf("unexpected in-progress quest: %#v", byID["43"])
+	}
+	if strings.Join(byID["43"].Tasks[0].CompletedBy, ",") != "Snow" {
+		t.Fatalf("expected Snow task progress, got %#v", byID["43"].Tasks)
+	}
+	if byID["44"].State != "locked" || strings.Join(byID["44"].BlockedBy, ",") != "999" {
+		t.Fatalf("unexpected locked quest: %#v", byID["44"])
+	}
+	if index.Stats.CompletedCount != 1 || index.Stats.InProgressCount != 1 || index.Stats.LockedCount != 1 {
+		t.Fatalf("unexpected quest stats: %#v", index.Stats)
 	}
 }
 

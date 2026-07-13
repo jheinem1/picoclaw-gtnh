@@ -3,4 +3,5 @@ RUN apk add --no-cache ca-certificates jq curl python3 flock
 WORKDIR /app
 COPY discord-commands/prebuilt/discord-commands /usr/local/bin/discord-commands
 COPY discord-commands/prebuilt/gtnh_inventory_query /usr/local/bin/gtnh_inventory_query
+COPY discord-commands/prebuilt/gtnh_quest_query /usr/local/bin/gtnh_quest_query
 ENTRYPOINT ["/usr/local/bin/discord-commands"]

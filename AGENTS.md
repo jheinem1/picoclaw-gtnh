@@ -22,7 +22,7 @@ This file is for coding agents working on the `picoclaw-gtnh` repository. Runtim
 ## Deployment Build Flow
 - Do not compile Go services on the Raspberry Pi during normal deploys; it is slow and can stall on the Pi's limited memory/CPU.
 - Build Linux ARM64 Go binaries on the workstation first, then build the Podman images locally before deploying those image artifacts to the Pi.
-- Keep every Go service (`dathost-bridge`, `mc-relay`, `discord-commands`, `kanban-sync`, and `inventory-sync`) plus shared helper binaries such as `gtnh_inventory_query` on the local-prebuilt path. Use `scripts/build_pi_images.sh` before any Pi image deploy.
+- Keep every Go service (`dathost-bridge`, `mc-relay`, `discord-commands`, `kanban-sync`, and `inventory-sync`) plus shared helper binaries such as `gtnh_inventory_query` and `gtnh_quest_query` on the local-prebuilt path. Use `scripts/build_pi_images.sh` before any Pi image deploy.
 - Prefer `scripts/deploy_prebuilt_to_pi.sh` for Go-service deploys; it builds ARM64 images locally, transfers the image archive, loads it on the Pi, and recreates the services with `--no-build`.
 - Only fall back to Pi-side image builds for debugging, and use the prebuilt Dockerfiles so the Pi never runs `go build`.
 

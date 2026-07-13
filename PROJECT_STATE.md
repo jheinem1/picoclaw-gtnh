@@ -1,6 +1,6 @@
 # GregGPT GTNH Project State
 
-Last updated: 2026-07-11
+Last updated: 2026-07-13
 
 ## Deployment target
 - Host: `jhein@100.84.87.81` over Tailscale (Raspberry Pi 3, Debian 13, aarch64)
@@ -17,6 +17,7 @@ Last updated: 2026-07-11
 - Kanban sync service: `kanban-sync` (Go worker in `kanban-sync/`, renders persistent Discord board embed)
 - Inventory sync service: `inventory-sync` (Go worker in `inventory-sync/`, indexes player inventories and chest coordinates)
 - All five Go services are cross-compiled and image-built on the workstation for normal Pi deployment.
+- `gtnh_quest_query` is cross-compiled into both agent images and provides deterministic quest readiness, progress, material-shortage, and planning results from quest index v2.
 
 ## Discord
 - Bot account: `GregGPT` (`1477150836227444862`)

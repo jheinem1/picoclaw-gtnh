@@ -75,7 +75,9 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"quest_completed_json", `{"limit":10}`, []string{"sh", "gtnh_quests", "completed-json", "--limit", "10"}},
 		{"quest_show", `{"id":"42"}`, []string{"sh", "gtnh_quests", "show", "42"}},
 		{"quest_refresh", `{}`, []string{"sh", "gtnh_quests", "refresh"}},
+		{"quest_explain", `{"id":"42","user":"Snow","message":"EV only"}`, []string{"sh", "gtnh_next_action", "explain", "--id", "42", "--user", "Snow", "--message", "EV only"}},
 		{"next_action_recommendation", `{"user":"Snow","channel":"discord","message":"what do I need to do"}`, []string{"sh", "gtnh_next_action", "recommend", "--user", "Snow", "--channel", "discord", "--message", "what do I need to do"}},
+		{"next_action_plan", `{"user":"Snow","channel":"discord","message":"EV plan","limit":4}`, []string{"sh", "gtnh_next_action", "plan", "--user", "Snow", "--channel", "discord", "--message", "EV plan", "--limit", "4"}},
 		{"task_board", `{}`, []string{"sh", "gtnh_tasks", "board"}},
 		{"task_board_json", `{}`, []string{"sh", "gtnh_tasks", "board-json"}},
 		{"task_in_progress_json", `{}`, []string{"sh", "gtnh_tasks", "in-progress-json"}},
@@ -176,14 +178,16 @@ func TestRecipeToolRegistrySurface(t *testing.T) {
 	}
 }
 
-func TestNextActionRecommendationUsesAnalyzerTimeout(t *testing.T) {
+func TestNextActionToolsUseBoundedDeterministicTimeout(t *testing.T) {
 	registry := testRegistry(t, DefaultConfig())
-	def, ok := registry.Definition("next_action_recommendation")
-	if !ok {
-		t.Fatal("next_action_recommendation definition not found")
-	}
-	if def.Timeout != "3m0s" {
-		t.Fatalf("next_action_recommendation timeout = %q, want 3m0s", def.Timeout)
+	for _, name := range []string{"next_action_recommendation", "next_action_plan", "quest_explain"} {
+		def, ok := registry.Definition(name)
+		if !ok {
+			t.Fatalf("%s definition not found", name)
+		}
+		if def.Timeout != "20s" {
+			t.Fatalf("%s timeout = %q, want 20s", name, def.Timeout)
+		}
 	}
 }
 

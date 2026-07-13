@@ -21,8 +21,10 @@ build_go() {
 build_go ./bridge "$ROOT/bridge/prebuilt/dathost-bridge"
 build_go ./relay "$ROOT/relay/prebuilt/mc-relay"
 build_go ./inventory-query "$ROOT/relay/prebuilt/gtnh_inventory_query"
+build_go ./quest-query "$ROOT/relay/prebuilt/gtnh_quest_query"
 build_go ./discord-commands "$ROOT/discord-commands/prebuilt/discord-commands"
 build_go ./inventory-query "$ROOT/discord-commands/prebuilt/gtnh_inventory_query"
+build_go ./quest-query "$ROOT/discord-commands/prebuilt/gtnh_quest_query"
 build_go ./kanban-sync "$ROOT/kanban-sync/prebuilt/kanban-sync"
 build_go ./inventory-sync "$ROOT/inventory-sync/prebuilt/inventory-sync"
 
@@ -30,8 +32,10 @@ chmod 0755 \
   "$ROOT/bridge/prebuilt/dathost-bridge" \
   "$ROOT/relay/prebuilt/mc-relay" \
   "$ROOT/relay/prebuilt/gtnh_inventory_query" \
+  "$ROOT/relay/prebuilt/gtnh_quest_query" \
   "$ROOT/discord-commands/prebuilt/discord-commands" \
   "$ROOT/discord-commands/prebuilt/gtnh_inventory_query" \
+  "$ROOT/discord-commands/prebuilt/gtnh_quest_query" \
   "$ROOT/kanban-sync/prebuilt/kanban-sync" \
   "$ROOT/inventory-sync/prebuilt/inventory-sync"
 
