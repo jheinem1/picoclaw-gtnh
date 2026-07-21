@@ -253,7 +253,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			return argv, nil
 		}),
 
-		tool("next_action_recommendation", GroupNext, "Answer singular or open-ended next-work questions with exactly one deterministic questbook-aligned recommendation after prerequisite, ownership, freshness, and exact indexed inventory checks. Call this even when Minecraft identity is unknown; omit user for a party-level answer instead of asking for identity.", medium, object(
+		tool("next_action_recommendation", GroupNext, "Answer singular or open-ended next-work questions with exactly one deterministic questbook-aligned work recommendation after prerequisite, ownership, freshness, and exact indexed inventory checks. Routine unclaimed rewards are skipped unless the request explicitly asks about claims or rewards. Call this even when Minecraft identity is unknown; omit user for a party-level answer instead of asking for identity.", medium, object(
 			optional("user", stringSpec("Known Minecraft player name or UUID for personalized progress, claims, inventory, and task ownership. Omit when identity is unknown.")),
 			optional("message", stringSpec("Original user request.")),
 		), func(a Arguments) ([]string, error) {

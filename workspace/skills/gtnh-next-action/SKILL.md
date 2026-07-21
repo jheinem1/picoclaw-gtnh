@@ -27,6 +27,7 @@ Use the deterministic planner as the source of truth. Return one actionable reco
 4. Present the returned `next_step`, material delta, reason, confidence, and freshness concisely.
 5. Do not recommend candidates marked `eligible=false`, recalculate scores, or claim unresolved materials are available.
 6. If the planner returns no candidate, report its smallest next step instead of guessing from raw open quests.
+7. Do not substitute routine reward collection for actual next work. Only discuss unclaimed rewards when explicitly asked or when indexed evidence proves a reward item is required for the next quest task.
 
 ## Required Output Shape
 

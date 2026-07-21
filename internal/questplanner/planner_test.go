@@ -165,13 +165,48 @@ func TestClaimRecommendationIsPersonalized(t *testing.T) {
 		ClaimableBy: []string{"Snow"},
 	}}
 
-	forSnow := p.Recommend("Snow", "")
+	forSnow := p.Recommend("Snow", "show me an unclaimed reward")
 	if forSnow.QuestID != "20" || forSnow.State != "completed_unclaimed" || !strings.Contains(forSnow.NextStep, "as Snow") {
 		t.Fatalf("unexpected Snow recommendation: %#v", forSnow)
+	}
+	if len(forSnow.ImmediateUnlocks) != 0 || forSnow.DownstreamUnlocks != 0 || !containsString(forSnow.Evidence, "reward_claim_unlocks_quests=false") {
+		t.Fatalf("reward claim incorrectly presented as unlocking progression: %#v", forSnow)
 	}
 	forAlex := p.Recommend("Alex", "")
 	if forAlex.Source != "none" {
 		t.Fatalf("completed quest should not be recommended to Alex: %#v", forAlex)
+	}
+}
+
+func TestOpenEndedRecommendationSkipsUnclaimedRewards(t *testing.T) {
+	p := testPlanner()
+	p.quests.Quests = []Quest{
+		{
+			ID:          "20",
+			Title:       "A Finished Quest",
+			Completed:   true,
+			State:       "completed_unclaimed",
+			ClaimableBy: []string{"Snow"},
+			Unlocks:     []string{"21"},
+		},
+		{ID: "21", Title: "Actual Work", State: "ready", Prerequisites: []string{"20"}},
+	}
+
+	got := p.Recommend("Snow", "what do we need to work on next?")
+	if got.QuestID != "21" || got.State != "ready" {
+		t.Fatalf("open-ended recommendation got stuck on a reward claim: %#v", got)
+	}
+}
+
+func TestOpenEndedRecommendationReturnsNoWorkForOnlyUnclaimedReward(t *testing.T) {
+	p := testPlanner()
+	p.quests.Quests = []Quest{{
+		ID: "20", Title: "A Finished Quest", Completed: true, State: "completed_unclaimed", ClaimableBy: []string{"Snow"},
+	}}
+
+	got := p.Recommend("Snow", "what should I work on next?")
+	if got.Source != "none" {
+		t.Fatalf("routine reward claim should not be treated as project work: %#v", got)
 	}
 }
 

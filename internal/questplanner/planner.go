@@ -48,6 +48,10 @@ func (p *Planner) Plan(user, message string, limit int) PlanResult {
 	excluded := 0
 	for _, quest := range p.quests.Quests {
 		candidate := p.evaluateQuest(quest, questByID, activeTier, tierHint, user)
+		if candidate.State == "completed_unclaimed" && !requestsRewardClaim(message) {
+			excluded++
+			continue
+		}
 		if candidate.Eligible {
 			candidates = append(candidates, candidate)
 		} else {
@@ -130,6 +134,14 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 
 	materials := p.assessMaterials(quest, user)
 	downstream := downstreamCount(quest.ID, questByID)
+	actionUnlocks := append([]string(nil), quest.Unlocks...)
+	actionDownstream := downstream
+	if quest.Completed {
+		// BetterQuesting prerequisite edges are satisfied by quest completion,
+		// not by collecting the per-player reward afterward.
+		actionUnlocks = nil
+		actionDownstream = 0
+	}
 	factors := []ScoreFactor{}
 	score := 0
 	add := func(factor string, points int, detail string) {
@@ -175,11 +187,11 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 			add("material_shortages", -minInt(60, missingKinds*12), fmt.Sprintf("%d unresolved or short item requirements", missingKinds))
 		}
 	}
-	if len(quest.Unlocks) > 0 {
-		add("immediate_unlocks", minInt(90, len(quest.Unlocks)*15), fmt.Sprintf("unlocks %d immediate quests", len(quest.Unlocks)))
+	if len(actionUnlocks) > 0 {
+		add("immediate_unlocks", minInt(90, len(actionUnlocks)*15), fmt.Sprintf("unlocks %d immediate quests", len(actionUnlocks)))
 	}
-	if downstream > len(quest.Unlocks) {
-		add("downstream_unlocks", minInt(60, (downstream-len(quest.Unlocks))*4), fmt.Sprintf("opens a path to %d downstream quests", downstream))
+	if actionDownstream > len(actionUnlocks) {
+		add("downstream_unlocks", minInt(60, (actionDownstream-len(actionUnlocks))*4), fmt.Sprintf("opens a path to %d downstream quests", actionDownstream))
 	}
 	if questDataStale(p) {
 		add("stale_quest_data", -100, "quest index is stale or has unknown freshness")
@@ -207,9 +219,12 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 		"quest_id=" + quest.ID,
 		"quest_state=" + state,
 		fmt.Sprintf("prerequisites_complete=%t", len(blockedBy) == 0),
-		fmt.Sprintf("immediate_unlocks=%d", len(quest.Unlocks)),
-		fmt.Sprintf("downstream_unlocks=%d", downstream),
+		fmt.Sprintf("immediate_unlocks=%d", len(actionUnlocks)),
+		fmt.Sprintf("downstream_unlocks=%d", actionDownstream),
 		fmt.Sprintf("inventory_fresh=%t", !inventoryEvidenceStale),
+	}
+	if quest.Completed {
+		evidence = append(evidence, "reward_claim_unlocks_quests=false")
 	}
 	for _, material := range materials {
 		evidence = append(evidence, fmt.Sprintf("inventory[%s]=%d/%d resolved=%t", material.Identity, material.Available, material.Required, material.Resolved))
@@ -228,8 +243,8 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 		Score:                score,
 		ScoreBreakdown:       factors,
 		Progress:             quest.CompletionRatio,
-		ImmediateUnlocks:     append([]string(nil), quest.Unlocks...),
-		DownstreamUnlocks:    downstream,
+		ImmediateUnlocks:     actionUnlocks,
+		DownstreamUnlocks:    actionDownstream,
 		BlockedBy:            blockedBy,
 		Materials:            materials,
 		InferredRequirements: inferred,
@@ -238,6 +253,11 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 		Evidence:             evidence,
 		Freshness:            p.freshness(),
 	}
+}
+
+func requestsRewardClaim(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "claim") || strings.Contains(message, "reward")
 }
 
 func (p *Planner) evaluateTask(task TaskRow, user string) Recommendation {
