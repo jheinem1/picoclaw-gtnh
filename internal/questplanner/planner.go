@@ -184,7 +184,8 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 	if questDataStale(p) {
 		add("stale_quest_data", -100, "quest index is stale or has unknown freshness")
 	}
-	if len(materials) > 0 && inventoryDataStale(p) {
+	inventoryEvidenceStale := len(materials) > 0 && inventoryDataStale(p)
+	if inventoryEvidenceStale {
 		add("stale_inventory", -80, "inventory evidence is stale or incomplete")
 	}
 	if !eligible {
@@ -198,12 +199,17 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 	}
 	why := questWhy(state, quest, materials, downstream)
 	next := questNextStep(state, quest, materials, user)
+	if inventoryEvidenceStale {
+		why = "The questbook path is eligible, but material feasibility is based on stale or incomplete inventory evidence. " + why
+		next = "Refresh inventory data first; if the indexed counts remain valid, " + lowerFirst(next)
+	}
 	evidence := []string{
 		"quest_id=" + quest.ID,
 		"quest_state=" + state,
 		fmt.Sprintf("prerequisites_complete=%t", len(blockedBy) == 0),
 		fmt.Sprintf("immediate_unlocks=%d", len(quest.Unlocks)),
 		fmt.Sprintf("downstream_unlocks=%d", downstream),
+		fmt.Sprintf("inventory_fresh=%t", !inventoryEvidenceStale),
 	}
 	for _, material := range materials {
 		evidence = append(evidence, fmt.Sprintf("inventory[%s]=%d/%d resolved=%t", material.Identity, material.Available, material.Required, material.Resolved))
@@ -422,7 +428,10 @@ func questClaimableFor(quest Quest, user string) bool {
 }
 
 func taskCompletedFor(task QuestTask, user string) bool {
-	return len(task.CompletedBy) > 0
+	if strings.TrimSpace(user) == "" {
+		return len(task.CompletedBy) > 0
+	}
+	return nameInList(user, task.CompletedBy)
 }
 
 func materialCoverage(materials []MaterialAssessment) (float64, bool, int) {
@@ -454,11 +463,12 @@ func summarizeMaterials(materials []MaterialAssessment) ([]string, []string, []s
 	missing := []string{}
 	for _, material := range materials {
 		inferred = append(inferred, fmt.Sprintf("%s x%d", material.Name, material.Required))
-		if material.Resolved {
-			available = append(available, fmt.Sprintf("%s: %d/%d indexed", material.Name, material.Available, material.Required))
-		} else {
+		if !material.Resolved {
 			missing = append(missing, fmt.Sprintf("%s: identity unresolved (%s)", material.Name, material.Resolution))
 			continue
+		}
+		if material.Available > 0 {
+			available = append(available, fmt.Sprintf("%s x%d indexed", material.Name, material.Available))
 		}
 		if material.Missing > 0 {
 			missing = append(missing, fmt.Sprintf("%s x%d", material.Name, material.Missing))
@@ -543,7 +553,7 @@ func questDataStale(p *Planner) bool {
 }
 
 func inventoryDataStale(p *Planner) bool {
-	for _, key := range []string{"players", "chests", "containers", "me"} {
+	for _, key := range []string{"players", "chests", "containers", "block_inventories", "me"} {
 		if p.inventoryStatus.Stale[key] {
 			return true
 		}
@@ -551,6 +561,15 @@ func inventoryDataStale(p *Planner) bool {
 	return timestampStale(p.now(), p.inventory.Source.PlayersScanAt, 2*time.Hour) ||
 		timestampStale(p.now(), p.inventory.Source.ChestsScanAt, 2*time.Hour) ||
 		timestampStale(p.now(), p.inventory.Source.MEScanAt, 2*time.Hour)
+}
+
+func lowerFirst(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+	runes := []rune(value)
+	return strings.ToLower(string(runes[0])) + string(runes[1:])
 }
 
 func timestampStale(now time.Time, value string, maxAge time.Duration) bool {

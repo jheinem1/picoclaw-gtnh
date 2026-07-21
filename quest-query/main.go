@@ -31,7 +31,6 @@ func run(args []string) error {
 	case "recommend":
 		fs := flag.NewFlagSet("recommend", flag.ContinueOnError)
 		user := fs.String("user", "", "requesting player")
-		fs.String("channel", "", "request channel")
 		message := fs.String("message", "", "original request")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -40,7 +39,6 @@ func run(args []string) error {
 	case "plan":
 		fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 		user := fs.String("user", "", "requesting player")
-		fs.String("channel", "", "request channel")
 		message := fs.String("message", "", "original request")
 		limit := fs.Int("limit", 5, "maximum recommendations")
 		if err := fs.Parse(args[1:]); err != nil {

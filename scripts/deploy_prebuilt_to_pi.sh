@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PI_HOST="${PI_HOST:-jhein@100.84.87.81}"
 PI_DIR="${PI_DIR:-/home/jhein/greggpt-gtnh}"
-PI_DATA_DIR="${PI_DATA_DIR:-/home/jhein/greggpt-data}"
+PI_DATA_DIR="${PI_DATA_DIR:-/home/jhein/picoclaw-data}"
 PI_PUBKEY="${PI_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH}"
 SSH_KEY_FILE="$(mktemp)"
 trap 'rm -f "$SSH_KEY_FILE"' EXIT
@@ -28,7 +28,7 @@ PI_HOST="$PI_HOST" PI_DIR="$PI_DIR" PI_PUBKEY="$PI_PUBKEY" \
   "$ROOT/scripts/install_user_service.sh"
 REMOTE_IMAGE_DIR="$PI_DATA_DIR/prebuilt-images"
 $SSH_CMD "$PI_HOST" "mkdir -p '$REMOTE_IMAGE_DIR'"
-rsync -av -e "$SSH_CMD" \
+rsync -av --checksum-choice=sha1 -e "$SSH_CMD" \
   "$DATHOST_BRIDGE_IMAGE_TAR" \
   "$MC_RELAY_IMAGE_TAR" \
   "$DISCORD_COMMANDS_IMAGE_TAR" \

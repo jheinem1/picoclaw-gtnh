@@ -339,7 +339,7 @@ func loadConfig() (Config, error) {
 		BlocksInterval:     time.Duration(max(300, getenvInt("INVENTORY_BLOCKS_INTERVAL_SECONDS", 86400))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
-		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1")),
+		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1,183")),
 		ChestBounds:        parseChestBounds(strings.TrimSpace(os.Getenv("INVENTORY_CHEST_BOUNDS"))),
 		BlockBounds:        parseBlockBounds(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_BOUNDS"))),
 		BlockAllowlist:     parseBlockAllowlist(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_ALLOWLIST"))),
@@ -1993,12 +1993,8 @@ func dimPath(dim int) (string, bool) {
 	switch dim {
 	case 0:
 		return "world/region/", true
-	case -1:
-		return "world/DIM-1/region/", true
-	case 1:
-		return "world/DIM1/region/", true
 	default:
-		return "", false
+		return fmt.Sprintf("world/DIM%d/region/", dim), true
 	}
 }
 
@@ -2218,19 +2214,22 @@ func scanBlockInventories(client *http.Client, cfg Config) ([]ChestRecord, []Blo
 		if path == "" {
 			continue
 		}
-		raw, err := getFile(client, cfg, path)
-		if err != nil {
-			lastErr = err
-			continue
+		for attempt := 1; attempt <= 3; attempt++ {
+			raw, err := getFile(client, cfg, path)
+			if err != nil {
+				lastErr = err
+				break
+			}
+			chests, blocks, generatedAt, stackCount, err := parseBlockInventoryExport(raw)
+			if err != nil {
+				lastErr = fmt.Errorf("parse %s after %d attempts: %w", path, attempt, err)
+				continue
+			}
+			if generatedAt == "" {
+				generatedAt = nowUTC()
+			}
+			return chests, blocks, generatedAt, stackCount, nil
 		}
-		chests, blocks, generatedAt, stackCount, err := parseBlockInventoryExport(raw)
-		if err != nil {
-			return nil, nil, "", 0, fmt.Errorf("parse %s: %w", path, err)
-		}
-		if generatedAt == "" {
-			generatedAt = nowUTC()
-		}
-		return chests, blocks, generatedAt, stackCount, nil
 	}
 	if lastErr != nil {
 		return nil, nil, "", 0, lastErr

@@ -14,9 +14,9 @@ esac
 
 payload="$(curl -fsS "${BRIDGE_URL}/mc/online?lines=${LINES}")"
 
-printf '%s\n' "$payload" | jq -r --arg lines "$LINES" '
+printf '%s\n' "$payload" | jq -er --arg lines "$LINES" '
   if .ok != true then
-    "error: online lookup failed"
+    error(.error // "online lookup failed")
   else
     "Online players (source: " + (.source // "unknown") + "):",
     (if (.players | length) == 0 then

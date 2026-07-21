@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PI_HOST="${PI_HOST:-jhein@100.84.87.81}"
 PI_DIR="${PI_DIR:-/home/jhein/greggpt-gtnh}"
-PI_DATA_DIR="${PI_DATA_DIR:-/home/jhein/greggpt-data}"
+PI_DATA_DIR="${PI_DATA_DIR:-/home/jhein/picoclaw-data}"
 PI_PUBKEY="${PI_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBf9E3x7MjYqGSPDjT/38IS2CmEnSRAvQf9hrq2kCkH}"
 SSH_KEY_FILE="$(mktemp)"
 trap 'rm -f "$SSH_KEY_FILE"' EXIT
@@ -37,7 +37,7 @@ else
 fi
 "
 
-rsync -av --delete --keep-dirlinks \
+rsync -av --delete --keep-dirlinks --whole-file --checksum-choice=sha1 \
   -e "$SSH_CMD" \
   --exclude '.git/' \
   --exclude 'build/' \

@@ -235,6 +235,42 @@ func TestParseBlockInventoryExport_SuperChest(t *testing.T) {
 	}
 }
 
+func TestDimPathSupportsPocketDimension(t *testing.T) {
+	path, ok := dimPath(183)
+	if !ok || path != "world/DIM183/region/" {
+		t.Fatalf("dimPath(183) = %q, %t", path, ok)
+	}
+}
+
+func TestScanBlockInventoriesRetriesTruncatedExport(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusOK)
+		if attempts < 3 {
+			_, _ = w.Write([]byte(`{"generated_at":"2026-07-21T01:00:00Z","inventories":[`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"generated_at":"2026-07-21T01:00:00Z","inventories":[{"dim":183,"x":1,"y":64,"z":2,"block_id":54,"block_meta":0,"block_display_name":"Chest","items":[]}]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		DatHostBase:   server.URL,
+		DatHostServer: "server-1",
+		DatHostToken:  "token",
+		HTTPTimeout:   time.Second,
+		BlockInvPaths: []string{"world/picoclaw/block_inventories.json"},
+	}
+	chests, blocks, generatedAt, _, err := scanBlockInventories(server.Client(), cfg)
+	if err != nil {
+		t.Fatalf("scanBlockInventories failed after retry: %v", err)
+	}
+	if attempts != 3 || generatedAt != "2026-07-21T01:00:00Z" || len(chests) != 1 || len(blocks) != 1 || chests[0].Dimension != 183 {
+		t.Fatalf("unexpected retry result: attempts=%d generatedAt=%q chests=%#v blocks=%#v", attempts, generatedAt, chests, blocks)
+	}
+}
+
 func TestScanMEFetchesConfiguredPath(t *testing.T) {
 	var requested []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

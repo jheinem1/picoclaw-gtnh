@@ -64,6 +64,46 @@ func TestRecipeSQLRejectsUnsafeSQL(t *testing.T) {
 	}
 }
 
+func TestRecipeSQLPreservesDuplicateColumnNames(t *testing.T) {
+	dbPath := createRecipeSQLTestDB(t)
+	cfg := DefaultConfig()
+	cfg.Workspace = t.TempDir()
+	cfg.RecipeSQLPath = dbPath
+	registry := testRegistry(t, cfg)
+
+	result, err := registry.Execute(context.Background(), "recipe_sql", json.RawMessage(`{"sql":"SELECT id AS value, handler_name AS value FROM recipes WHERE id = 1"}`))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(result.Stdout, `"columns":["value","value_2"]`) ||
+		!strings.Contains(result.Stdout, `"value":1`) ||
+		!strings.Contains(result.Stdout, `"value_2":"Assembler"`) {
+		t.Fatalf("duplicate columns were not preserved: %s", result.Stdout)
+	}
+}
+
+func TestLimitedJSONAlwaysReturnsValidJSON(t *testing.T) {
+	payload := map[string]any{
+		"columns": []string{"value"},
+		"rows": []map[string]any{
+			{"value": strings.Repeat("a", 200)},
+			{"value": "small"},
+		},
+		"count":     2,
+		"truncated": map[string]bool{"rows": false, "output": false},
+	}
+	out, truncated, err := limitedJSON(payload, 160)
+	if err != nil {
+		t.Fatalf("limitedJSON returned error: %v", err)
+	}
+	if !truncated || !json.Valid([]byte(out)) {
+		t.Fatalf("limited output was not valid truncated JSON: %q", out)
+	}
+	if !strings.Contains(out, `"output":true`) || !strings.Contains(out, `"omitted_rows"`) {
+		t.Fatalf("limited output omitted truncation metadata: %s", out)
+	}
+}
+
 func createRecipeSQLTestDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "greggpt_recipes.sqlite")

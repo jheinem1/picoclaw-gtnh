@@ -63,22 +63,22 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 	}{
 		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
-		{"inventory_find", `{"item":"gregtech:gt.metaitem.01:11305","any_damage":true,"player":"Snow","scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01:11305", "--any-damage", "--player", "Snow", "--scope", "players", "--limit", "5"}},
-		{"inventory_find_item", `{"query":"steel ingot","oredict":true,"scope":"me","limit":7}`, []string{"sh", "gtnh_inventory", "find-item", "--query", "steel ingot", "--oredict", "--scope", "me", "--limit", "7"}},
+		{"inventory_find", `{"item":"gregtech:gt.metaitem.01","any_damage":true,"player":"Snow","dim":183,"scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01", "--any-damage", "--player", "Snow", "--dim", "183", "--scope", "players", "--limit", "5"}},
+		{"inventory_find_item", `{"query":"steel ingot","player":"Snow","dim":183,"scope":"me","limit":7}`, []string{"sh", "gtnh_inventory", "find-item", "--query", "steel ingot", "--player", "Snow", "--dim", "183", "--scope", "me", "--limit", "7"}},
 		{"inventory_player", `{"name":"Snow","all":true}`, []string{"sh", "gtnh_inventory", "player", "--name", "Snow", "--all"}},
 		{"inventory_chest", `{"x":1,"y":64,"z":-2,"dim":-1}`, []string{"sh", "gtnh_inventory", "chest", "--x", "1", "--y", "64", "--z", "-2", "--dim", "-1"}},
-		{"inventory_find_block_name", `{"block":"Super Chest I","limit":5}`, []string{"sh", "gtnh_inventory", "find-block", "--block", "Super Chest I", "--limit", "5"}},
-		{"inventory_find_block", `{"id":300,"meta":5,"limit":9}`, []string{"sh", "gtnh_inventory", "find-block", "--id", "300", "--meta", "5", "--limit", "9"}},
-		{"inventory_refresh", `{"scope":"containers"}`, []string{"sh", "gtnh_inventory", "refresh", "--containers"}},
+		{"inventory_find_block_name", `{"block":"Super Chest I","dim":183,"limit":5}`, []string{"sh", "gtnh_inventory", "find-block", "--block", "Super Chest I", "--dim", "183", "--limit", "5"}},
+		{"inventory_find_block", `{"id":300,"meta":5,"dim":183,"limit":9}`, []string{"sh", "gtnh_inventory", "find-block", "--id", "300", "--meta", "5", "--dim", "183", "--limit", "9"}},
+		{"inventory_refresh", `{"scope":"chests"}`, []string{"sh", "gtnh_inventory", "refresh", "--chests"}},
 		{"quest_status", `{}`, []string{"sh", "gtnh_quests", "status"}},
 		{"quest_open_json", `{"limit":10}`, []string{"sh", "gtnh_quests", "open-json", "--limit", "10"}},
 		{"quest_completed_json", `{"limit":10}`, []string{"sh", "gtnh_quests", "completed-json", "--limit", "10"}},
 		{"quest_show", `{"id":"42"}`, []string{"sh", "gtnh_quests", "show", "42"}},
 		{"quest_refresh", `{}`, []string{"sh", "gtnh_quests", "refresh"}},
 		{"quest_explain", `{"id":"42","user":"Snow","message":"EV only"}`, []string{"sh", "gtnh_next_action", "explain", "--id", "42", "--user", "Snow", "--message", "EV only"}},
-		{"next_action_recommendation", `{"user":"Snow","channel":"discord","message":"what do I need to do"}`, []string{"sh", "gtnh_next_action", "recommend", "--user", "Snow", "--channel", "discord", "--message", "what do I need to do"}},
-		{"next_action_plan", `{"user":"Snow","channel":"discord","message":"EV plan","limit":4}`, []string{"sh", "gtnh_next_action", "plan", "--user", "Snow", "--channel", "discord", "--message", "EV plan", "--limit", "4"}},
-		{"task_board", `{}`, []string{"sh", "gtnh_tasks", "board"}},
+		{"next_action_recommendation", `{"user":"Snow","message":"what do I need to do"}`, []string{"sh", "gtnh_next_action", "recommend", "--user", "Snow", "--message", "what do I need to do"}},
+		{"next_action_plan", `{"user":"Snow","message":"EV plan","limit":4}`, []string{"sh", "gtnh_next_action", "plan", "--user", "Snow", "--message", "EV plan", "--limit", "4"}},
+		{"task_board", `{}`, []string{"sh", "gtnh_tasks", "board-code"}},
 		{"task_board_json", `{}`, []string{"sh", "gtnh_tasks", "board-json"}},
 		{"task_in_progress_json", `{}`, []string{"sh", "gtnh_tasks", "in-progress-json"}},
 		{"task_list", `{"status":"all","area":"power"}`, []string{"sh", "gtnh_tasks", "list", "--all", "--area", "power"}},
@@ -201,9 +201,10 @@ func TestArgumentValidation(t *testing.T) {
 	}{
 		{"missing required", "inventory_find_item", `{}`, `missing required argument "query"`},
 		{"unknown argument", "inventory_find_item", `{"query":"steel","cmd":"rm -rf /"}`, `unknown argument "cmd"`},
+		{"removed oredict option", "inventory_find_item", `{"query":"steel","oredict":true}`, `unknown argument "oredict"`},
 		{"scope enum", "inventory_find", `{"item":"minecraft:stone","scope":"everywhere"}`, `argument "scope" must be one of`},
 		{"status enum", "task_move", `{"id":1,"status":"blocked"}`, `argument "status" must be one of`},
-		{"dim enum", "inventory_chest", `{"x":0,"y":64,"z":0,"dim":2}`, `argument "dim" must be one of`},
+		{"dimension range", "inventory_chest", `{"x":0,"y":64,"z":0,"dim":2147483648}`, `argument "dim" must be <= 2147483647`},
 		{"integer range", "mc_poll", `{"lines":5001}`, `argument "lines" must be <= 5000`},
 		{"array item", "task_assign", `{"id":1,"owners":["Snow",""]}`, `argument "owners[1]" must not be empty`},
 		{"type mismatch", "task_done", `{"id":"3"}`, `argument "id" must be an integer`},
@@ -219,6 +220,22 @@ func TestArgumentValidation(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+func TestCorrectedToolSchemaRanges(t *testing.T) {
+	registry := testRegistry(t, DefaultConfig())
+	if err := registry.Validate("inventory_chest", json.RawMessage(`{"x":1,"y":64,"z":2,"dim":183}`)); err != nil {
+		t.Fatalf("custom dimension should be accepted: %v", err)
+	}
+	if err := registry.Validate("next_action_plan", json.RawMessage(`{"limit":20}`)); err != nil {
+		t.Fatalf("planner limit 20 should be accepted: %v", err)
+	}
+	if err := registry.Validate("inventory_find", json.RawMessage(`{"item":"minecraft:stone","scope":"both"}`)); err != nil {
+		t.Fatalf("supported legacy scope alias should be accepted: %v", err)
+	}
+	if err := registry.Validate("next_action_plan", json.RawMessage(`{"channel":"discord"}`)); err == nil || !strings.Contains(err.Error(), `unknown argument "channel"`) {
+		t.Fatalf("removed channel argument error = %v", err)
 	}
 }
 

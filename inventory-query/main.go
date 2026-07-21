@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-const unsetDamage = -1 << 31
+const (
+	unsetDamage    = -1 << 31
+	unsetDimension = -1 << 62
+)
 
 type SourceMeta struct {
 	PlayersScanAt  string `json:"players_scan_at"`
@@ -575,8 +578,10 @@ func valueOr(v, fallback string) string {
 
 func scopeSet(scope string) (players, containers, me bool, err error) {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "", "all", "both":
+	case "", "all":
 		return true, true, true, nil
+	case "both":
+		return true, true, false, nil
 	case "players":
 		return true, false, false, nil
 	case "chests", "containers":
@@ -609,6 +614,7 @@ func cmdFind(args []string) error {
 	anyDamage := fs.Bool("any-damage", false, "")
 	scope := fs.String("scope", "all", "")
 	player := fs.String("player", "", "")
+	dim := fs.Int("dim", unsetDimension, "")
 	limit := fs.Int("limit", 20, "")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -621,7 +627,7 @@ func cmdFind(args []string) error {
 	if err != nil {
 		return err
 	}
-	return printFind(idx, keys, label, *scope, *player, *limit, "exact")
+	return printFind(idx, keys, label, *scope, *player, *dim, *limit, "exact")
 }
 
 func resolveFindKeys(item string, id int, damage int, anyDamage bool, idx InventoryIndex) ([]string, string, error) {
@@ -635,6 +641,9 @@ func resolveFindKeys(item string, id int, damage int, anyDamage bool, idx Invent
 			explicitDamage = parts[2]
 		}
 		if explicitDamage != "" {
+			if anyDamage {
+				return nil, "", errors.New("error: --any-damage cannot be combined with an item damage suffix")
+			}
 			damage, _ = strconv.Atoi(explicitDamage)
 		}
 		items, _, err := loadItems()
@@ -680,8 +689,8 @@ func cmdFindItem(args []string) error {
 	query := fs.String("query", "", "")
 	scope := fs.String("scope", "all", "")
 	player := fs.String("player", "", "")
+	dim := fs.Int("dim", unsetDimension, "")
 	limit := fs.Int("limit", 20, "")
-	fs.Bool("oredict", false, "")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -713,7 +722,7 @@ func cmdFindItem(args []string) error {
 	keys := []string{itemKey(bestScoreGroup[0].ID, bestScoreGroup[0].Damage)}
 	label := fmt.Sprintf("%s -> %s", *query, bestScoreGroup[0].DisplayName)
 	fmt.Printf("Resolved item query %q -> slug=%s id=%d damage=%d\n", *query, bestScoreGroup[0].Slug, bestScoreGroup[0].ID, bestScoreGroup[0].Damage)
-	return printFind(idx, keys, label, *scope, *player, *limit, "resolved")
+	return printFind(idx, keys, label, *scope, *player, *dim, *limit, "resolved")
 }
 
 func itemMatchesQuery(item ItemMeta, query string) bool {
@@ -726,7 +735,7 @@ func itemMatchesQuery(item ItemMeta, query string) bool {
 	return false
 }
 
-func printFind(idx InventoryIndex, keys []string, label, scope, playerFilter string, limit int, mode string) error {
+func printFind(idx InventoryIndex, keys []string, label, scope, playerFilter string, dim, limit int, mode string) error {
 	usePlayers, useContainers, useME, err := scopeSet(scope)
 	if err != nil {
 		return err
@@ -741,11 +750,15 @@ func printFind(idx InventoryIndex, keys []string, label, scope, playerFilter str
 	if playerFilter != "" {
 		fmt.Printf(" player=%s", playerFilter)
 	}
+	if dim != unsetDimension {
+		fmt.Printf(" dim=%d", dim)
+	}
 	fmt.Println()
 	if ref != nil {
 		fmt.Printf("Reference player: %s pos=(%.0f,%.0f,%.0f) dim=%d\n", ref.Name, ref.Pos.X, ref.Pos.Y, ref.Pos.Z, ref.Dimension)
 	}
 	hits := mergeHits(idx, keys)
+	hits = filterItemHitsByDimension(hits, dim)
 	if usePlayers {
 		fmt.Println("Players:")
 		printPlayers(hits.Players, playerFilter, limit)
@@ -759,6 +772,29 @@ func printFind(idx InventoryIndex, keys []string, label, scope, playerFilter str
 		printME(hits.ME, limit)
 	}
 	return nil
+}
+
+func filterItemHitsByDimension(hits ItemHits, dim int) ItemHits {
+	if dim == unsetDimension {
+		return hits
+	}
+	out := ItemHits{}
+	for _, hit := range hits.Players {
+		if hit.Dimension == dim {
+			out.Players = append(out.Players, hit)
+		}
+	}
+	for _, hit := range hits.Chests {
+		if hit.Dimension == dim {
+			out.Chests = append(out.Chests, hit)
+		}
+	}
+	for _, hit := range hits.ME {
+		if hit.Dimension == dim {
+			out.ME = append(out.ME, hit)
+		}
+	}
+	return out
 }
 
 func mergeHits(idx InventoryIndex, keys []string) ItemHits {
@@ -936,6 +972,7 @@ func cmdFindBlock(args []string) error {
 	block := fs.String("block", "", "")
 	id := fs.Int("id", 0, "")
 	meta := fs.Int("meta", unsetDamage, "")
+	dim := fs.Int("dim", unsetDimension, "")
 	limit := fs.Int("limit", 20, "")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -959,7 +996,11 @@ func cmdFindBlock(args []string) error {
 	if idx.BlockStatus.Reason != "" {
 		fmt.Println("Block status:", idx.BlockStatus.Reason)
 	}
-	fmt.Printf("Block find keys=%d\n", len(keys))
+	fmt.Printf("Block find keys=%d", len(keys))
+	if *dim != unsetDimension {
+		fmt.Printf(" dim=%d", *dim)
+	}
+	fmt.Println()
 	hits := mergeBlockHits(idx, keys)
 	if strings.TrimSpace(*block) != "" {
 		base := strings.TrimSpace(*block)
@@ -969,6 +1010,7 @@ func cmdFindBlock(args []string) error {
 		}
 		hits = filterBlockHitsByName(hits, base)
 	}
+	hits = filterBlockHitsByDimension(hits, *dim)
 	if len(hits) == 0 {
 		fmt.Println("(none)")
 		return nil
@@ -997,6 +1039,19 @@ func cmdFindBlock(args []string) error {
 		}
 	}
 	return nil
+}
+
+func filterBlockHitsByDimension(hits []BlockHit, dim int) []BlockHit {
+	if dim == unsetDimension {
+		return hits
+	}
+	filtered := make([]BlockHit, 0, len(hits))
+	for _, hit := range hits {
+		if hit.Dimension == dim {
+			filtered = append(filtered, hit)
+		}
+	}
+	return filtered
 }
 
 func resolveBlockKeys(idx InventoryIndex, block string, id, meta int) ([]string, string, error) {

@@ -5,7 +5,7 @@ description: Present deterministic GTNH quest-plan results for next-action and t
 
 # GTNH Next Action
 
-Use this skill only for requests like "greg what do I need to do" or "what should I do next".
+Use this skill for singular open-ended requests such as "greg what do I need to do", "what should I do next", or "Hey Greg, what should I work on next?".
 
 ## Goal
 
@@ -22,7 +22,7 @@ Use the deterministic planner as the source of truth. Return one actionable reco
 ## Workflow
 
 1. Call `next_action_recommendation` for a singular request or `next_action_plan` for an explicit plan/list.
-2. Pass the player name when known so task completion, ownership, and reward claims can be personalized.
+2. Pass the player name when known so task completion, ownership, and reward claims can be personalized. If it is unknown, omit it and return a party-level recommendation; do not ask for identity before answering a general next-work question.
 3. Pass the original message so tier constraints are applied deterministically.
 4. Present the returned `next_step`, material delta, reason, confidence, and freshness concisely.
 5. Do not recommend candidates marked `eligible=false`, recalculate scores, or claim unresolved materials are available.

@@ -20,7 +20,7 @@ var recipeSQLFirstKeyword = regexp.MustCompile(`(?is)^\s*(select|with)\b`)
 var recipeSQLSelectKeyword = regexp.MustCompile(`(?is)\bselect\b`)
 
 func recipeSQLTool(cfg Config, timeout time.Duration) Tool {
-	return nativeTool("recipe_sql", GroupGTNHData, "Run a read-only SELECT or WITH SELECT query against the indexed GTNH recipe SQLite database.", timeout, object(
+	return nativeTool("recipe_sql", GroupGTNHData, "Run one read-only SELECT or WITH SELECT against the indexed GTNH recipe database. Duplicate result column names are preserved with _2, _3, and later suffixes.", timeout, object(
 		required("sql", stringSpec("Read-only SQLite query. Must be a single SELECT or WITH SELECT statement with no semicolon.")),
 		optional("max_rows", intSpec("Maximum rows to return.", 1, 100, defaultRecipeSQLRows)),
 	), func(ctx context.Context, a Arguments) (Result, error) {
@@ -63,6 +63,7 @@ func executeRecipeSQL(ctx context.Context, dbPath string, timeout time.Duration,
 	if err != nil {
 		return Result{}, fmt.Errorf("read recipe sqlite columns: %w", err)
 	}
+	resultColumns := uniqueColumnNames(columns)
 	resultRows := make([]map[string]any, 0, maxRows)
 	values := make([]any, len(columns))
 	scan := make([]any, len(columns))
@@ -79,8 +80,8 @@ func executeRecipeSQL(ctx context.Context, dbPath string, timeout time.Duration,
 		if err := rows.Scan(scan...); err != nil {
 			return Result{}, fmt.Errorf("scan recipe sqlite row: %w", err)
 		}
-		row := make(map[string]any, len(columns))
-		for i, column := range columns {
+		row := make(map[string]any, len(resultColumns))
+		for i, column := range resultColumns {
 			row[column] = sqliteJSONValue(values[i])
 		}
 		resultRows = append(resultRows, row)
@@ -93,7 +94,7 @@ func executeRecipeSQL(ctx context.Context, dbPath string, timeout time.Duration,
 	}
 
 	payload := map[string]any{
-		"columns": columns,
+		"columns": resultColumns,
 		"rows":    resultRows,
 		"count":   len(resultRows),
 		"truncated": map[string]bool{
@@ -189,6 +190,33 @@ func sqliteJSONValue(value any) any {
 	}
 }
 
+func uniqueColumnNames(columns []string) []string {
+	out := make([]string, 0, len(columns))
+	used := map[string]bool{}
+	nextSuffix := map[string]int{}
+	for i, column := range columns {
+		base := strings.TrimSpace(column)
+		if base == "" {
+			base = fmt.Sprintf("column_%d", i+1)
+		}
+		name := base
+		if used[name] {
+			suffix := nextSuffix[base]
+			if suffix < 2 {
+				suffix = 2
+			}
+			for used[fmt.Sprintf("%s_%d", base, suffix)] {
+				suffix++
+			}
+			name = fmt.Sprintf("%s_%d", base, suffix)
+			nextSuffix[base] = suffix + 1
+		}
+		used[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 func limitedJSON(payload map[string]any, maxOutputBytes int) (string, bool, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -203,16 +231,32 @@ func limitedJSON(payload map[string]any, maxOutputBytes int) (string, bool, erro
 	}
 	truncated["output"] = true
 	payload["truncated"] = truncated
+	rows, _ := payload["rows"].([]map[string]any)
+	originalRowCount := len(rows)
+	for len(rows) > 0 {
+		rows = rows[:len(rows)-1]
+		payload["rows"] = rows
+		payload["count"] = len(rows)
+		payload["omitted_rows"] = originalRowCount - len(rows)
+		raw, err = json.Marshal(payload)
+		if err != nil {
+			return "", false, err
+		}
+		if len(raw) <= maxOutputBytes {
+			return string(raw), true, nil
+		}
+	}
 	payload["rows"] = []map[string]any{}
 	payload["count"] = 0
+	payload["omitted_rows"] = originalRowCount
 	raw, err = json.Marshal(payload)
 	if err != nil {
 		return "", false, err
 	}
-	if len(raw) <= maxOutputBytes {
-		return string(raw), true, nil
+	if len(raw) > maxOutputBytes {
+		return "", false, fmt.Errorf("recipe_sql output limit %d is too small for valid JSON metadata", maxOutputBytes)
 	}
-	return string(raw[:maxOutputBytes]), true, nil
+	return string(raw), true, nil
 }
 
 func recipeSQLErrorResult(err error) Result {

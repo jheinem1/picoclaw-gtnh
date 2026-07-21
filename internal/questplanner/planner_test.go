@@ -105,6 +105,54 @@ func TestRecommendPrefersProgressAndReportsShortage(t *testing.T) {
 	if strings.Join(got.MissingMaterials, ",") != "Circuit x4" {
 		t.Fatalf("missing materials = %#v", got.MissingMaterials)
 	}
+	if strings.Join(got.AvailableMaterials, ",") != "Circuit x6 indexed" {
+		t.Fatalf("available materials = %#v", got.AvailableMaterials)
+	}
+}
+
+func TestUnavailableMaterialIsNeverClaimedAsAvailable(t *testing.T) {
+	p := testPlanner()
+	p.quests.Quests = []Quest{{
+		ID: "12", Title: "Missing Materials", State: "ready",
+		Tasks: []QuestTask{{ID: "0", RequiredItems: []QuestItem{{ID: 10, Damage: 0, Count: 4, DisplayName: "Circuit"}}}},
+	}}
+	got := p.Recommend("Snow", "")
+	if len(got.AvailableMaterials) != 0 {
+		t.Fatalf("zero-count material was claimed available: %#v", got.AvailableMaterials)
+	}
+	if strings.Join(got.MissingMaterials, ",") != "Circuit x4" {
+		t.Fatalf("missing materials = %#v", got.MissingMaterials)
+	}
+}
+
+func TestOpenEndedRecommendationRequiresRefreshWhenInventoryIsStale(t *testing.T) {
+	p := testPlanner()
+	p.inventoryStatus.Stale["block_inventories"] = true
+	p.inventory.ItemIndex["10:0"] = ItemHits{Chests: []CountHit{{TotalCount: 4}}}
+	p.quests.Quests = []Quest{{
+		ID: "13", Title: "Pocket Factory", QuestLine: "Tier 4 - EV", TierQuestLine: true, State: "ready",
+		Tasks: []QuestTask{{ID: "0", RequiredItems: []QuestItem{{ID: 10, Damage: 0, Count: 4, DisplayName: "Circuit"}}}},
+	}}
+
+	got := p.Recommend("Snow", "Hey Greg, what should I work on next?")
+	if got.QuestID != "13" || got.Confidence != "low" {
+		t.Fatalf("unexpected recommendation: %#v", got)
+	}
+	if !strings.HasPrefix(got.NextStep, "Refresh inventory data first") || !strings.Contains(got.WhyEasy, "stale or incomplete") {
+		t.Fatalf("stale feasibility was presented as current: %#v", got)
+	}
+	if !containsString(got.Evidence, "inventory_fresh=false") {
+		t.Fatalf("missing stale evidence: %#v", got.Evidence)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestClaimRecommendationIsPersonalized(t *testing.T) {

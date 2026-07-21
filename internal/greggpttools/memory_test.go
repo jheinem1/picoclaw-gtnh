@@ -135,6 +135,39 @@ func TestMemoryToolsRememberSearchListForget(t *testing.T) {
 	}
 }
 
+func TestMemoryToolsAreCollaborativelyReadableAndUserIndexed(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.Workspace = workspace
+	cfg.MemoryEnabled = true
+	registry := testRegistry(t, cfg)
+
+	for _, args := range []string{
+		`{"scope":"user","user":"Snow","key":"favorite task","value":"power infrastructure"}`,
+		`{"scope":"user","user":"exx","key":"favorite task","value":"logistics"}`,
+	} {
+		if _, err := registry.Execute(context.Background(), "memory_remember", json.RawMessage(args)); err != nil {
+			t.Fatalf("memory_remember returned error: %v", err)
+		}
+	}
+
+	result, err := registry.Execute(context.Background(), "memory_list", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("memory_list returned error: %v", err)
+	}
+	if !strings.Contains(result.Stdout, `"user":"Snow"`) || !strings.Contains(result.Stdout, `"user":"exx"`) {
+		t.Fatalf("unfiltered collaborative list omitted user-indexed entries: %s", result.Stdout)
+	}
+
+	result, err = registry.Execute(context.Background(), "memory_search", json.RawMessage(`{"query":"favorite","user":"Snow"}`))
+	if err != nil {
+		t.Fatalf("memory_search returned error: %v", err)
+	}
+	if !strings.Contains(result.Stdout, `"user":"Snow"`) || strings.Contains(result.Stdout, `"user":"exx"`) {
+		t.Fatalf("user index filter returned wrong entries: %s", result.Stdout)
+	}
+}
+
 func TestMemoryStoreSerializesMultipleInstances(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "greggpt_memory.json")
 	stores := []*MemoryStore{NewMemoryStore(path, 0), NewMemoryStore(path, 0)}

@@ -36,7 +36,7 @@ func main() {
 	defer cancel()
 	reply, err := runner.Run(ctx, agent.Request{
 		Channel: channel,
-		User:    "greggpt-smoke",
+		User:    getenv("GREGGPT_SMOKE_USER", "greggpt-smoke"),
 		Message: message,
 		Context: map[string]string{
 			"smoke_test": "true",

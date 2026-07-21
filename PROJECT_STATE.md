@@ -32,7 +32,7 @@ Last updated: 2026-07-13
 
 ## Model/Auth
 - Provider: `openai` via OAuth
-- Repository/runtime-template model default: `gpt-5.5` (the deployed value remains controlled by the Pi env file)
+- Repository/runtime-template model default: `gpt-5.6-terra` with `high` reasoning (the deployed values remain controlled by the Pi env file)
 - Auth file: `/home/jhein/greggpt-gtnh/runtime/greggpt/auth.json`
 - OAuth refresh and credential replacement use `/home/jhein/greggpt-gtnh/runtime/greggpt/auth.json.lock` across both agent services.
 
@@ -100,11 +100,11 @@ Last updated: 2026-07-13
 
 ## Storage layout
 - SD root free space check command: `df -h /`
-- USB data partition mounted at: `/home/jhein/greggpt-data`
+- USB data partition mounted at: `/home/jhein/picoclaw-data`
 - Workspace moved to USB via symlink:
-  - `/home/jhein/greggpt-gtnh/workspace -> /home/jhein/greggpt-data/workspace`
-- Required rootless Podman graphroot: `/home/jhein/greggpt-data/containers/storage`
-- Required prebuilt image archive staging: `/home/jhein/greggpt-data/prebuilt-images`
+  - `/home/jhein/greggpt-gtnh/workspace -> /home/jhein/picoclaw-data/workspace`
+- Required rootless Podman graphroot: `/home/jhein/picoclaw-data/containers/storage`
+- Required prebuilt image archive staging: `/home/jhein/picoclaw-data/prebuilt-images`
 - Deploy scripts validate the graphroot and preserve the workspace symlink.
 
 ## Boot behavior

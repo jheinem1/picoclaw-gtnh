@@ -15,7 +15,6 @@ var (
 	statusEnum       = []any{"todo", "doing", "paused", "done"}
 	priorityEnum     = []any{"low", "med", "high"}
 	listStatusEnum   = []any{"open", "done", "all"}
-	dimEnum          = []any{-1, 0, 1}
 	memoryScopeEnum  = []any{"global", "channel", "user"}
 )
 
@@ -94,6 +93,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 
 	tools := []Tool{
 		recipeSQLTool(cfg, medium),
+		identityMapTool(cfg, short),
 		interactionFailureLogTool(cfg, short),
 		tool("gtnh_wiki_page", GroupGTNHData, "Fetch a GTNH wiki page summary.", network, object(
 			required("title", stringSpec("Wiki page title.")),
@@ -104,11 +104,12 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		tool("inventory_status", GroupInventory, "Show inventory index freshness and stats.", short, object(), func(Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_inventory", "status"}, nil
 		}),
-		tool("inventory_find", GroupInventory, "Find exact item locations in player, container, or ME storage.", medium, object(
-			required("item", stringSpec("Exact item registry name, optionally with damage, for example minecraft:iron_ingot:0.")),
-			optional("any_damage", boolSpec("Aggregate all damage values for this registry name.", false)),
-			optional("player", stringSpec("Restrict player inventory lookup to this player name or UUID.")),
-			optional("scope", enumStringSpec("Lookup scope.", scopeEnum, "all")),
+		tool("inventory_find", GroupInventory, "Find locations and counts for an exact item registry name in player, world-container, or ME storage.", medium, object(
+			required("item", stringSpec("Exact item registry name, optionally with a damage suffix, for example minecraft:iron_ingot:0.")),
+			optional("any_damage", boolSpec("Aggregate every damage value. Use only when item has no damage suffix.", false)),
+			optional("player", stringSpec("Restrict player results to this Minecraft name or UUID and use that player as the distance reference for containers.")),
+			optional("dim", intSpec("Restrict results to this numeric dimension ID, for example 183 for the shared pocket dimension.", -2147483648, 2147483647, nil)),
+			optional("scope", enumStringSpec("Search players, world containers (chests/containers), ME, players plus containers (both), or all three.", scopeEnum, "all")),
 			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_inventory", "find", "--item", stringArg(a, "item")}
@@ -118,25 +119,32 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			if player := stringArg(a, "player"); player != "" {
 				argv = append(argv, "--player", player)
 			}
-			argv = appendScopeAndLimit(argv, a, "all", 20)
-			return argv, nil
-		}),
-		tool("inventory_find_item", GroupInventory, "Resolve a natural-language item query and find item locations in players, containers, or ME. Do not use for placed block coordinates; use inventory_find_block_name for questions like where is Super Chest I.", medium, object(
-			required("query", stringSpec("Natural-language item name.")),
-			optional("oredict", boolSpec("Resolve through the ore dictionary cache.", false)),
-			optional("scope", enumStringSpec("Lookup scope.", scopeEnum, "all")),
-			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
-		), func(a Arguments) ([]string, error) {
-			argv := []string{"sh", "gtnh_inventory", "find-item", "--query", stringArg(a, "query")}
-			if boolArg(a, "oredict") {
-				argv = append(argv, "--oredict")
+			if _, ok := a["dim"]; ok {
+				argv = append(argv, "--dim", strconv.Itoa(intArg(a, "dim", 0)))
 			}
 			argv = appendScopeAndLimit(argv, a, "all", 20)
 			return argv, nil
 		}),
-		tool("inventory_player", GroupInventory, "Show a player's inventory.", medium, object(
+		tool("inventory_find_item", GroupInventory, "Best-effort natural-language item resolver and inventory lookup. Prefer recipe_sql followed by inventory_find when exact identity matters. Do not use for placed blocks.", medium, object(
+			required("query", stringSpec("Natural-language item display name.")),
+			optional("player", stringSpec("Restrict player results to this Minecraft name or UUID and use that player as the distance reference for containers.")),
+			optional("dim", intSpec("Restrict results to this numeric dimension ID, for example 183 for the shared pocket dimension.", -2147483648, 2147483647, nil)),
+			optional("scope", enumStringSpec("Search players, world containers (chests/containers), ME, players plus containers (both), or all three.", scopeEnum, "all")),
+			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_inventory", "find-item", "--query", stringArg(a, "query")}
+			if player := stringArg(a, "player"); player != "" {
+				argv = append(argv, "--player", player)
+			}
+			if _, ok := a["dim"]; ok {
+				argv = append(argv, "--dim", strconv.Itoa(intArg(a, "dim", 0)))
+			}
+			argv = appendScopeAndLimit(argv, a, "all", 20)
+			return argv, nil
+		}),
+		tool("inventory_player", GroupInventory, "Show a player's indexed inventory and ender inventory.", medium, object(
 			required("name", stringSpec("Player name.")),
-			optional("all", boolSpec("Include nested inventory contents.", false)),
+			optional("all", boolSpec("Include every indexed stack instead of the default top entries.", false)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_inventory", "player", "--name", stringArg(a, "name")}
 			if boolArg(a, "all") {
@@ -148,7 +156,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			required("x", intSpec("X coordinate.", -30000000, 30000000, nil)),
 			required("y", intSpec("Y coordinate.", -2048, 4096, nil)),
 			required("z", intSpec("Z coordinate.", -30000000, 30000000, nil)),
-			optional("dim", enumIntSpec("Minecraft dimension.", dimEnum, 0)),
+			optional("dim", intSpec("Numeric Minecraft dimension ID.", -2147483648, 2147483647, 0)),
 		), func(a Arguments) ([]string, error) {
 			return []string{
 				"sh", "gtnh_inventory", "chest",
@@ -160,9 +168,13 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		}),
 		tool("inventory_find_block_name", GroupInventory, "Find indexed placed block locations by block display or registry name. Use this first for placed block coordinates and questions like where is the Super Chest or where is Super Chest I.", medium, object(
 			required("block", stringSpec("Block display or registry name, for example Super Chest I or gregtech:gt.blockmachines.")),
+			optional("dim", intSpec("Restrict results to this numeric dimension ID, for example 183 for the shared pocket dimension.", -2147483648, 2147483647, nil)),
 			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_inventory", "find-block", "--block", stringArg(a, "block")}
+			if _, ok := a["dim"]; ok {
+				argv = append(argv, "--dim", strconv.Itoa(intArg(a, "dim", 0)))
+			}
 			if limit := intArg(a, "limit", 0); limit > 0 {
 				argv = append(argv, "--limit", strconv.Itoa(limit))
 			}
@@ -171,6 +183,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		tool("inventory_find_block", GroupInventory, "Find indexed placed block locations by numeric block id/meta. Prefer inventory_find_block_name when the user names a block such as Super Chest I.", medium, object(
 			required("id", intSpec("Numeric Minecraft block id.", 1, 65535, nil)),
 			required("meta", intSpec("Block metadata value.", 0, 65535, nil)),
+			optional("dim", intSpec("Restrict results to this numeric dimension ID, for example 183 for the shared pocket dimension.", -2147483648, 2147483647, nil)),
 			optional("limit", intSpec("Maximum locations to print.", 1, 100, 20)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{
@@ -178,13 +191,16 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 				"--id", strconv.Itoa(intArg(a, "id", 0)),
 				"--meta", strconv.Itoa(intArg(a, "meta", 0)),
 			}
+			if _, ok := a["dim"]; ok {
+				argv = append(argv, "--dim", strconv.Itoa(intArg(a, "dim", 0)))
+			}
 			if limit := intArg(a, "limit", 0); limit > 0 {
 				argv = append(argv, "--limit", strconv.Itoa(limit))
 			}
 			return argv, nil
 		}),
-		tool("inventory_refresh", GroupInventory, "Request inventory index refresh.", short, object(
-			optional("scope", enumStringSpec("Refresh scope.", refreshScopeEnum, "all")),
+		tool("inventory_refresh", GroupInventory, "Request an asynchronous refresh of one inventory index source or all sources.", short, object(
+			optional("scope", enumStringSpec("Refresh players, world containers (chests/containers), ME, exported block inventories, placed blocks, or all sources.", refreshScopeEnum, "all")),
 		), func(a Arguments) ([]string, error) {
 			scope := stringArg(a, "scope")
 			if scope == "" {
@@ -196,7 +212,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		tool("quest_status", GroupQuest, "Show BetterQuesting quest index freshness and stats.", short, object(), func(Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_quests", "status"}, nil
 		}),
-		tool("quest_open_json", GroupQuest, "Show open BetterQuesting quests as JSON.", medium, object(
+		tool("quest_open_json", GroupQuest, "Show party-incomplete BetterQuesting quests as JSON, including locked, ready, and in-progress states.", medium, object(
 			optional("limit", cappedIntSpec("Maximum open quests to return; values above 500 are capped at 500.", 1, 500, 50)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_quests", "open-json"}
@@ -237,35 +253,27 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			return argv, nil
 		}),
 
-		tool("next_action_recommendation", GroupNext, "Return exactly one deterministic quest or task recommendation after prerequisite, player progress, ownership, freshness, and exact indexed inventory checks.", medium, object(
-			optional("user", stringSpec("Requesting user or player name.")),
-			optional("channel", enumStringSpec("Request channel.", []any{"minecraft", "discord"}, nil)),
+		tool("next_action_recommendation", GroupNext, "Answer singular or open-ended next-work questions with exactly one deterministic questbook-aligned recommendation after prerequisite, ownership, freshness, and exact indexed inventory checks. Call this even when Minecraft identity is unknown; omit user for a party-level answer instead of asking for identity.", medium, object(
+			optional("user", stringSpec("Known Minecraft player name or UUID for personalized progress, claims, inventory, and task ownership. Omit when identity is unknown.")),
 			optional("message", stringSpec("Original user request.")),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_next_action", "recommend"}
 			if user := stringArg(a, "user"); user != "" {
 				argv = append(argv, "--user", user)
 			}
-			if channel := stringArg(a, "channel"); channel != "" {
-				argv = append(argv, "--channel", channel)
-			}
 			if message := stringArg(a, "message"); message != "" {
 				argv = append(argv, "--message", message)
 			}
 			return argv, nil
 		}),
-		tool("next_action_plan", GroupNext, "Return a deterministic prioritized GTNH to-do plan with score explanations, exact material shortages, and freshness evidence.", medium, object(
-			optional("user", stringSpec("Requesting user or player name.")),
-			optional("channel", enumStringSpec("Request channel.", []any{"minecraft", "discord"}, nil)),
+		tool("next_action_plan", GroupNext, "Return a deterministic prioritized GTNH to-do plan with score explanations, exact material shortages, and freshness evidence. Omit user for a party-level plan when Minecraft identity is unknown.", medium, object(
+			optional("user", stringSpec("Known Minecraft player name or UUID for personalized progress, claims, inventory, and task ownership. Omit when identity is unknown.")),
 			optional("message", stringSpec("Original user request, including any tier constraint.")),
-			optional("limit", intSpec("Maximum recommendations to return.", 1, 10, 5)),
+			optional("limit", intSpec("Maximum recommendations to return.", 1, 20, 5)),
 		), func(a Arguments) ([]string, error) {
 			argv := []string{"sh", "gtnh_next_action", "plan"}
 			if user := stringArg(a, "user"); user != "" {
 				argv = append(argv, "--user", user)
-			}
-			if channel := stringArg(a, "channel"); channel != "" {
-				argv = append(argv, "--channel", channel)
 			}
 			if message := stringArg(a, "message"); message != "" {
 				argv = append(argv, "--message", message)
@@ -276,8 +284,8 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			return argv, nil
 		}),
 
-		tool("task_board", GroupTask, "Show the GTNH task board.", short, object(), func(Arguments) ([]string, error) {
-			return []string{"sh", "gtnh_tasks", "board"}, nil
+		tool("task_board", GroupTask, "Show the user-facing GTNH task board in a Discord-ready text code block.", short, object(), func(Arguments) ([]string, error) {
+			return []string{"sh", "gtnh_tasks", "board-code"}, nil
 		}),
 		tool("task_board_json", GroupTask, "Show the GTNH task board as JSON.", short, object(), func(Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_tasks", "board-json"}, nil
@@ -369,8 +377,8 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "mc_poll", strconv.Itoa(intArg(a, "lines", 500))}, nil
 		}),
-		tool("mc_say", GroupMinecraft, "Send a Minecraft chat message through the bridge.", network, object(
-			required("text", stringSpec("Chat text to send.")),
+		tool("mc_say", GroupMinecraft, "Send a Minecraft chat message through the bridge. Text is sanitized and truncated to the configured reply limit (180 characters by default).", network, object(
+			required("text", stringSpec("ASCII chat text to send.")),
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "mc_say", stringArg(a, "text")}, nil
 		}),

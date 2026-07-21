@@ -8,6 +8,23 @@ STATUS_FILE="${GTNH_TASKS_STATUS_FILE:-state/gtnh_task_status_updates.json}"
 LOCK_FILE="${GTNH_TASKS_LOCK_FILE:-${TASKS_FILE}.lock}"
 LOCK_TIMEOUT_SECONDS="${GTNH_TASKS_LOCK_TIMEOUT_SECONDS:-30}"
 
+wait_for_lock() {
+  lock_fd="$1"
+  lock_path="$2"
+  remaining="$LOCK_TIMEOUT_SECONDS"
+  case "$remaining" in
+    ''|*[!0-9]*) echo "error: lock timeout must be a non-negative integer" >&2; exit 2 ;;
+  esac
+  while ! flock -n "$lock_fd"; do
+    if [ "$remaining" -eq 0 ]; then
+      echo "error: timed out waiting for task-store lock: $lock_path" >&2
+      exit 1
+    fi
+    sleep 1
+    remaining=$((remaining - 1))
+  done
+}
+
 acquire_store_lock() {
   command -v flock >/dev/null 2>&1 || {
     echo "error: flock is required for task-store concurrency safety" >&2
@@ -16,10 +33,7 @@ acquire_store_lock() {
   mkdir -p "$(dirname "$LOCK_FILE")"
   exec 9>"$LOCK_FILE"
   chmod 0600 "$LOCK_FILE"
-  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 9; then
-    echo "error: timed out waiting for task-store lock: $LOCK_FILE" >&2
-    exit 1
-  fi
+  wait_for_lock 9 "$LOCK_FILE"
 }
 
 usage() {

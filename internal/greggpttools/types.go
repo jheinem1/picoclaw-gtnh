@@ -9,6 +9,7 @@ type Group string
 
 const (
 	GroupGTNHData    Group = "gtnh_data"
+	GroupIdentity    Group = "identity"
 	GroupInventory   Group = "inventory"
 	GroupQuest       Group = "quest"
 	GroupNext        Group = "next_action"

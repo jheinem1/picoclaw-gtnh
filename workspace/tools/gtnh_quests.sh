@@ -139,8 +139,9 @@ case "${1:-}" in
     [ "$#" -eq 2 ] || usage
     id="$2"
     require_index
-    jq --arg id "$id" '
-      (.quests // [])[] | select((.id|tostring) == $id)
+    jq -e --arg id "$id" '
+      ([((.quests // [])[] | select((.id|tostring) == $id))][0]) as $quest
+      | if $quest == null then error("quest " + $id + " not found") else $quest end
     ' "$INDEX_FILE"
     ;;
   refresh)

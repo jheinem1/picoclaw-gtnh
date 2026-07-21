@@ -11,6 +11,23 @@ TASKS_LOCK_FILE="${GTNH_TASKS_LOCK_FILE:-${TASKS_FILE}.lock}"
 STATE_LOCK_FILE="${GTNH_TASK_CHECKIN_LOCK_FILE:-${STATE_FILE}.lock}"
 LOCK_TIMEOUT_SECONDS="${GTNH_TASKS_LOCK_TIMEOUT_SECONDS:-30}"
 
+wait_for_lock() {
+  lock_fd="$1"
+  lock_path="$2"
+  remaining="$LOCK_TIMEOUT_SECONDS"
+  case "$remaining" in
+    ''|*[!0-9]*) echo "error: lock timeout must be a non-negative integer" >&2; exit 2 ;;
+  esac
+  while ! flock -n "$lock_fd"; do
+    if [ "$remaining" -eq 0 ]; then
+      echo "error: timed out waiting for lock: $lock_path" >&2
+      exit 1
+    fi
+    sleep 1
+    remaining=$((remaining - 1))
+  done
+}
+
 acquire_store_locks() {
   command -v flock >/dev/null 2>&1 || {
     echo "error: flock is required for task check-in concurrency safety" >&2
@@ -19,16 +36,10 @@ acquire_store_locks() {
   mkdir -p "$(dirname "$TASKS_LOCK_FILE")" "$(dirname "$STATE_LOCK_FILE")"
   exec 9>"$TASKS_LOCK_FILE"
   chmod 0600 "$TASKS_LOCK_FILE"
-  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 9; then
-    echo "error: timed out waiting for task-store lock: $TASKS_LOCK_FILE" >&2
-    exit 1
-  fi
+  wait_for_lock 9 "$TASKS_LOCK_FILE"
   exec 8>"$STATE_LOCK_FILE"
   chmod 0600 "$STATE_LOCK_FILE"
-  if ! flock -w "$LOCK_TIMEOUT_SECONDS" 8; then
-    echo "error: timed out waiting for task-checkin lock: $STATE_LOCK_FILE" >&2
-    exit 1
-  fi
+  wait_for_lock 8 "$STATE_LOCK_FILE"
 }
 
 now_epoch() {

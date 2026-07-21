@@ -56,3 +56,19 @@ func TestGTNHQuestsRejectsInvalidLimit(t *testing.T) {
 		t.Fatalf("error = %q, want positive-integer guard", output)
 	}
 }
+
+func TestGTNHQuestsShowMissingQuestFails(t *testing.T) {
+	indexPath := filepath.Join(t.TempDir(), "quest_index.json")
+	if err := os.WriteFile(indexPath, []byte(`{"quests":[{"id":"known"}]}`), 0o600); err != nil {
+		t.Fatalf("write quest index: %v", err)
+	}
+	cmd := exec.Command("sh", "./gtnh_quests", "show", "missing")
+	cmd.Env = append(os.Environ(), "GTNH_QUEST_INDEX_FILE="+indexPath)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("missing quest succeeded unexpectedly: %s", output)
+	}
+	if !strings.Contains(string(output), "quest missing not found") {
+		t.Fatalf("missing quest error = %q", output)
+	}
+}

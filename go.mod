@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/openai/openai-go/v3 v3.42.0
+	github.com/openai/openai-go/v3 v3.44.0
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.53.0
 )

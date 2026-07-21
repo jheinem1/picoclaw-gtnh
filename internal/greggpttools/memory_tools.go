@@ -10,7 +10,7 @@ import (
 
 func memoryTools(store *MemoryStore, timeout time.Duration) []Tool {
 	return []Tool{
-		nativeTool("memory_search", GroupMemory, "Search GregGPT's local persistent memory. Reads only; does not modify memory.", timeout, object(
+		nativeTool("memory_search", GroupMemory, "Search shared persistent memory across all collaborators. User and channel fields are indexing filters, not visibility boundaries.", timeout, object(
 			optional("query", stringSpec("Text to search in memory key, value, and tags.")),
 			optional("scope", enumStringSpec("Restrict to one memory scope.", memoryScopeEnum, nil)),
 			optional("channel", stringSpec("Restrict channel-scoped memory to this channel.")),
@@ -29,7 +29,7 @@ func memoryTools(store *MemoryStore, timeout time.Duration) []Tool {
 			}
 			return memoryResult("memory_search", map[string]any{"items": items, "count": len(items)})
 		}),
-		nativeTool("memory_list", GroupMemory, "List GregGPT's local persistent memory by scope, channel, user, or tag. Reads only.", timeout, object(
+		nativeTool("memory_list", GroupMemory, "List shared persistent memory across all collaborators, optionally filtered by index scope, channel, user, or tag.", timeout, object(
 			optional("scope", enumStringSpec("Restrict to one memory scope.", memoryScopeEnum, nil)),
 			optional("channel", stringSpec("Restrict channel-scoped memory to this channel.")),
 			optional("user", stringSpec("Restrict user-scoped memory to this user.")),
@@ -46,12 +46,12 @@ func memoryTools(store *MemoryStore, timeout time.Duration) []Tool {
 			}
 			return memoryResult("memory_list", map[string]any{"items": items, "count": len(items)})
 		}),
-		nativeTool("memory_remember", GroupMemory, "Persist an explicit user-approved memory for later GregGPT requests. Use only when the user asks you to remember something or clearly consents.", timeout, object(
-			required("scope", enumStringSpec("Memory visibility scope.", memoryScopeEnum, nil)),
+		nativeTool("memory_remember", GroupMemory, "Proactively persist a stable, non-sensitive fact that will help future collaborative requests. User-indexed memories remain readable in every context.", timeout, object(
+			required("scope", enumStringSpec("Index category: user for facts about one collaborator, channel for channel-specific conventions, or global for shared facts.", memoryScopeEnum, nil)),
 			required("key", stringSpec("Short stable label for this memory.")),
 			required("value", stringSpec("Memory text to store.")),
-			optional("channel", stringSpec("Required for channel scope; use the current channel name.")),
-			optional("user", stringSpec("Required for user scope; use the current user name or ID.")),
+			optional("channel", stringSpec("Required for channel scope; the channel this fact is indexed under.")),
+			optional("user", stringSpec("Required for user scope; the collaborator this fact is about.")),
 			optional("tags", stringArraySpec("Audit/search tags.")),
 			optional("source", stringSpec("Why this memory was stored, such as user request or task context.")),
 			optional("ttl_seconds", intSpec("Time to live in seconds. Omit for default TTL; use 0 for no expiry.", 0, 315360000, nil)),
@@ -71,7 +71,7 @@ func memoryTools(store *MemoryStore, timeout time.Duration) []Tool {
 			}
 			return memoryResult("memory_remember", map[string]any{"remembered": entry})
 		}),
-		nativeTool("memory_forget", GroupMemory, "Delete one GregGPT memory by id. Requires a short reason for audit-friendly tool output.", timeout, object(
+		nativeTool("memory_forget", GroupMemory, "Delete one stale or unwanted shared memory by id. Requires a short reason for audit-friendly tool output.", timeout, object(
 			required("id", stringSpec("Memory id returned by memory_search or memory_list.")),
 			required("reason", stringSpec("Short reason for deleting this memory.")),
 		), func(_ context.Context, a Arguments) (Result, error) {

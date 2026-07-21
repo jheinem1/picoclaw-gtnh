@@ -3,8 +3,8 @@ package agent
 import "time"
 
 const (
-	DefaultModel           = "gpt-5.5"
-	DefaultReasoningEffort = "low"
+	DefaultModel           = "gpt-5.6-terra"
+	DefaultReasoningEffort = "high"
 	DefaultWorkspace       = "/root/.greggpt/workspace"
 	DefaultAuthFile        = "/root/.greggpt/auth.json"
 	DefaultMaxToolCalls    = 100

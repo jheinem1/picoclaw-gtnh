@@ -100,11 +100,11 @@ Scripts that use this exact access pattern:
 
 ## Pi storage and deployment
 
-`scripts/setup_pi_runtime.sh` requires `/home/jhein/greggpt-data` to be a mounted filesystem distinct from `/`, then configures rootless Podman with:
+`scripts/setup_pi_runtime.sh` requires `/home/jhein/picoclaw-data` to be a mounted filesystem distinct from `/`, then configures rootless Podman with:
 
-- graphroot: `/home/jhein/greggpt-data/containers/storage`
-- image-transfer staging: `/home/jhein/greggpt-data/prebuilt-images`
-- workspace: `/home/jhein/greggpt-data/workspace`, exposed as `/home/jhein/greggpt-gtnh/workspace`
+- graphroot: `/home/jhein/picoclaw-data/containers/storage`
+- image-transfer staging: `/home/jhein/picoclaw-data/prebuilt-images`
+- workspace: `/home/jhein/picoclaw-data/workspace`, exposed as `/home/jhein/greggpt-gtnh/workspace`
 
 The setup script refuses to switch graphroots when the old rootless Podman store still contains images or containers; migrate or clear that old store deliberately first. The deployment script also verifies the graphroot before loading images.
 
@@ -160,7 +160,7 @@ GregGPT can use a local JSON memory store when enabled:
 - Injection limits: `GREGGPT_MEMORY_MAX_INJECTED_BYTES` and `GREGGPT_MEMORY_MAX_INJECTED_ITEMS`
 - Optional default TTL: `GREGGPT_MEMORY_DEFAULT_TTL_SECONDS`
 
-Memory is selected by scope at request time: `global`, matching `channel`, and matching `user`. Writes are explicit through `memory_remember`; reads use `memory_search` or `memory_list`; deletes use `memory_forget` with a reason. The OpenAI response request still uses `Store=false`.
+Memory is shared across the collaborator whitelist. Automatic injection prefers `global`, matching `channel`, and matching `user` entries, while `memory_search` and `memory_list` can read every entry from every context. GregGPT proactively writes stable, reusable, non-sensitive facts through `memory_remember`; `user` and `channel` are indexes rather than visibility boundaries. Deletes use `memory_forget` with a reason. The OpenAI response request still uses `Store=false`.
 
 The JSON memory store and OAuth credential store use advisory file locks so both bot services can safely share their mounted state. The task TSV/status stores are likewise serialized with `flock`; the relay, Discord, and Kanban images include Alpine's dedicated `flock` package for that command.
 
@@ -252,7 +252,7 @@ Index outputs written under workspace state:
 Commands from workspace root:
 - `sh gtnh_inventory status`
 - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
-- `sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]`
+- `sh gtnh_inventory find-item --query "<name>" [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
 - `sh gtnh_inventory find-block --block "<name>" [--limit <n>]`
 - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
 - `sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]`
@@ -264,8 +264,8 @@ Notes:
 - `all` is the default lookup scope when the compiled `gtnh_inventory_query` helper is installed.
 - Super Chest and GregTech machine contents use the live block-inventory export when fresh, with MCA/NBT scanning as fallback.
 - `find --id` remains as strict legacy mode and requires `--damage`.
-- `--oredict` uses a true GTNH ore-dictionary cache built from a live dump, not display-name heuristics.
-- If `gtnh_inventory find-item --query "<alias>" --oredict` fails with a missing ore-dict index, build/import a fresh dump first.
+- Prefer `recipe_sql` to resolve exact `registry_name` and `damage` metadata, then use exact `gtnh_inventory find --item` for live locations and counts.
+- `find-item` remains a best-effort display-name shortcut and may require clarification when names are ambiguous.
 - `player --all` includes nested container contents from inventory items (for example backpacks/toolboxes) as `src=nested`.
 - Custom item names are indexed from item NBT when present and shown in inventory/chest listings.
 
@@ -330,7 +330,7 @@ Env vars in `deploy/env/greggpt.env`:
 - `INVENTORY_MAX_RESULTS`
 - `INVENTORY_DEFAULT_LIMIT`
 - `INVENTORY_HTTP_TIMEOUT_SECONDS`
-- `INVENTORY_SCAN_DIMS`
+- `INVENTORY_SCAN_DIMS` (defaults to `0,-1,1,183`; dimension 183 is the shared pocket dimension)
 - `INVENTORY_MAX_REGION_FILES_PER_RUN`
 - `INVENTORY_CHEST_BOUNDS` (`dim,min_x,min_z,max_x,max_z`; optional chest scan bounding box)
 

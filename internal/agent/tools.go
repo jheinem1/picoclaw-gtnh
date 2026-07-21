@@ -139,9 +139,12 @@ func (r *ToolRegistry) Execute(ctx context.Context, call ToolCall) (string, erro
 	if r == nil || r.registry == nil {
 		return "", fmt.Errorf("tool registry is nil")
 	}
+	if err := r.registry.Validate(call.Name, call.Arguments); err != nil {
+		return "", ValidationError{Message: err.Error()}
+	}
 	result, err := r.registry.Execute(ctx, call.Name, call.Arguments)
 	if err != nil {
-		return "", ValidationError{Message: err.Error()}
+		return "", err
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {

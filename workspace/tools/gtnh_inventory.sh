@@ -32,11 +32,11 @@ usage() {
   cat <<'USAGE'
 usage:
   sh gtnh_inventory status
-  sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]
-  sh gtnh_inventory find-item --query "<name>" [--oredict] [--scope players|chests|containers|me|both|all] [--limit <n>]
-  sh gtnh_inventory find-block --block "<name>" | --id <num> --meta <num> [--limit <n>]
+  sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--dim <int>] [--scope players|chests|containers|me|both|all] [--limit <n>]
+  sh gtnh_inventory find-item --query "<name>" [--player <name|uuid>] [--dim <int>] [--scope players|chests|containers|me|both|all] [--limit <n>]
+  sh gtnh_inventory find-block (--block "<name>" | --id <num> --meta <num>) [--dim <int>] [--limit <n>]
   sh gtnh_inventory player --name <player> | --uuid <uuid> [--all]
-  sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]
+  sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim <int>]
   sh gtnh_inventory refresh [--players|--chests|--containers|--me|--block-inventories|--blocks|--all]
 USAGE
   exit 2
@@ -247,7 +247,7 @@ next-step:
 - run exactly one inventory command (no cd/&& chaining):
   sh gtnh_inventory find --item <mod:name[:damage]> --scope both
   OR
-  sh gtnh_inventory find-item --query "<name>" [--oredict] --scope both
+  sh gtnh_inventory find-item --query "<name>" [--player <name|uuid>] --scope both
 - if query is ambiguous, pick one exact mod:name[:damage] and rerun with --item.
 EOF
 }
@@ -296,6 +296,7 @@ cmd_find() {
   scope="both"
   limit="$DEFAULT_LIMIT"
   player_filter=""
+  dim=""
   resolved_mode="exact"
   item_base=""
 
@@ -330,6 +331,11 @@ cmd_find() {
         player_filter="$2"
         shift 2
         ;;
+      --dim)
+        [ "$#" -ge 2 ] || usage
+        dim="$2"
+        shift 2
+        ;;
       --limit)
         [ "$#" -ge 2 ] || usage
         limit="$2"
@@ -350,6 +356,7 @@ cmd_find() {
       ;;
     *) echo "error: --scope must be players, chests, containers, me, both, or all" >&2; exit 2 ;;
   esac
+  [ -z "$dim" ] || is_int "$dim" || { echo "error: --dim must be integer" >&2; exit 2; }
 
   [ -n "$id$item" ] || { echo "error: provide --item <mod:name[:damage]> or --id with --damage" >&2; exit 2; }
   [ -z "$id" ] || [ -z "$item" ] || { echo "error: use either --item or --id/--damage, not both" >&2; exit 2; }
@@ -464,7 +471,7 @@ cmd_find() {
     echo "Item: $item_base (any damage)"
   fi
 
-  jq -r --argjson keys "$keys_json" --arg scope "$scope" --argjson limit "$limit" --arg mode "$resolved_mode" --arg player "$player_filter" '
+  jq -r --argjson keys "$keys_json" --arg scope "$scope" --argjson limit "$limit" --arg mode "$resolved_mode" --arg player "$player_filter" --arg dim "$dim" '
     def selected_player(root):
       ((root.players // [])
         | map(select(($player|length)>0 and ((((.name // "")|ascii_downcase)==($player|ascii_downcase)) or (((.uuid // "")|ascii_downcase)==($player|ascii_downcase)))))
@@ -528,6 +535,7 @@ cmd_find() {
          "Players:",
          ((merge_players($hits.players // [])
             | map(select(($player|length)==0 or (((.name // "")|ascii_downcase)==($player|ascii_downcase) or ((.uuid // "")|ascii_downcase)==($player|ascii_downcase))))
+            | map(select(($dim|length)==0 or (.dim == ($dim|tonumber))))
             | .[:$limit]) |
             if length == 0 then "(none)"
             else .[] | "- " + (.name // .uuid // "unknown") + " (" + (.uuid // "?") + ") count=" + ((.total_count // 0)|tostring) +
@@ -542,7 +550,7 @@ cmd_find() {
        else empty end),
       (if $scope == "chests" or $scope == "both" then
          "Containers:",
-         ((merge_chests($hits.chests // []; $ref))[:$limit] |
+         ((merge_chests($hits.chests // []; $ref) | map(select(($dim|length)==0 or (.dim == ($dim|tonumber)))) | .[:$limit]) |
             if length == 0 then "(none)"
             else .[] | "- count=" + ((.total_count // 0)|tostring) + " at (" + ((.x // 0)|tostring) + "," + ((.y // 0)|tostring) + "," + ((.z // 0)|tostring) + ") dim=" + ((.dim // 0)|tostring) + " type=" + (.type // "Chest") +
               (if (.distance // null) != null then " dist=" + (((.distance * 10 | round) / 10)|tostring) else "" end)
@@ -554,6 +562,7 @@ cmd_find_block() {
   id=""
   meta=""
   limit="$DEFAULT_LIMIT"
+  dim=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -576,6 +585,11 @@ cmd_find_block() {
         limit="$2"
         shift 2
         ;;
+      --dim)
+        [ "$#" -ge 2 ] || usage
+        dim="$2"
+        shift 2
+        ;;
       *) usage ;;
     esac
   done
@@ -583,19 +597,20 @@ cmd_find_block() {
   [ -n "$id" ] && [ -n "$meta" ] || { echo "error: provide --id <num> --meta <num>" >&2; exit 2; }
   is_int "$id" || { echo "error: --id must be numeric" >&2; exit 2; }
   is_int "$meta" || { echo "error: --meta must be numeric" >&2; exit 2; }
+  [ -z "$dim" ] || is_int "$dim" || { echo "error: --dim must be integer" >&2; exit 2; }
   limit="$(cap_limit "$limit")"
   require_file "$INDEX_FILE"
 
   key="$id:$meta"
   echo "Block: $key"
-  jq -r --arg key "$key" --argjson limit "$limit" '
+  jq -r --arg key "$key" --argjson limit "$limit" --arg dim "$dim" '
     (if (.block_status.registry_available // false) then
       "Block registry: available"
      else
       "Block registry: unavailable; numeric id/meta search only"
      end),
     (if ((.block_status.reason // "") | length) > 0 then "Block status: " + .block_status.reason else empty end),
-    ((.block_index[$key].blocks // []) | sort_by(.dim, .x, .y, .z) | .[:$limit]) as $hits
+    ((.block_index[$key].blocks // []) | map(select(($dim|length)==0 or (.dim == ($dim|tonumber)))) | sort_by(.dim, .x, .y, .z) | .[:$limit]) as $hits
     | if ($hits|length) == 0 then "(none)"
       else $hits[] | "- " + ((.id // 0)|tostring) + ":" + ((.meta // 0)|tostring) + " at (" + ((.x // 0)|tostring) + "," + ((.y // 0)|tostring) + "," + ((.z // 0)|tostring) + ") dim=" + ((.dim // 0)|tostring)
       end
@@ -606,7 +621,7 @@ cmd_find_item() {
   scope="both"
   limit="$DEFAULT_LIMIT"
   player_filter=""
-  use_oredict="0"
+  dim=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -614,10 +629,6 @@ cmd_find_item() {
         [ "$#" -ge 2 ] || usage
         query="$2"
         shift 2
-        ;;
-      --oredict|--ore-dict)
-        use_oredict="1"
-        shift
         ;;
       --scope)
         [ "$#" -ge 2 ] || usage
@@ -627,6 +638,11 @@ cmd_find_item() {
       --player)
         [ "$#" -ge 2 ] || usage
         player_filter="$2"
+        shift 2
+        ;;
+      --dim)
+        [ "$#" -ge 2 ] || usage
+        dim="$2"
         shift 2
         ;;
       --limit)
@@ -639,6 +655,7 @@ cmd_find_item() {
   done
 
   [ -n "$query" ] || { echo "error: --query is required" >&2; exit 2; }
+  [ -z "$dim" ] || is_int "$dim" || { echo "error: --dim must be integer" >&2; exit 2; }
   case "$scope" in
     players|chests|containers|both|all)
       [ "$scope" != "containers" ] || scope="chests"
