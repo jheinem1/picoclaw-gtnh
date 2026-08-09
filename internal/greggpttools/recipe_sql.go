@@ -20,7 +20,7 @@ var recipeSQLFirstKeyword = regexp.MustCompile(`(?is)^\s*(select|with)\b`)
 var recipeSQLSelectKeyword = regexp.MustCompile(`(?is)\bselect\b`)
 
 func recipeSQLTool(cfg Config, timeout time.Duration) Tool {
-	return nativeTool("recipe_sql", GroupGTNHData, "Run one read-only SELECT or WITH SELECT against the indexed GTNH recipe database. Duplicate result column names are preserved with _2, _3, and later suffixes.", timeout, object(
+	return nativeTool("recipe_sql", GroupGTNHData, "Run one read-only SELECT or WITH SELECT against the indexed GTNH production database. For viable production lines: (1) resolve the target in resource_catalog or item_search, (2) query recipe_routes by output_resource_key and compare expected_output_amount, voltage_tier, capability_key, and machine_name_hint, (3) query recipe_ingredients for candidate recipe_ids, (4) send all exact item identities to inventory_totals in one call, and (5) use handler_machine_options plus placed-block search to identify missing machines. Explore alternatives recursively only for missing inputs; do not assume the first recipe is best. recipe_routes excludes invalid, hidden, fake, and disabled recipes. Duplicate result column names are preserved with _2, _3, and later suffixes.", timeout, object(
 		required("sql", stringSpec("Read-only SQLite query. Must be a single SELECT or WITH SELECT statement with no semicolon.")),
 		optional("max_rows", intSpec("Maximum rows to return.", 1, 100, defaultRecipeSQLRows)),
 	), func(ctx context.Context, a Arguments) (Result, error) {

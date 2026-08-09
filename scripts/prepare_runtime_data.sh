@@ -44,7 +44,7 @@ to prevent accidental full-file reads and OOM/restarts.
 
 Use indexed files under index/:
 - item_index.tsv
-- greggpt_recipes.sqlite (SQLite recipe database)
+- greggpt_recipes.sqlite (SQLite recipe and ore-worldgen database)
 - oredict_index.tsv (optional; only present after importing a real ore-dict dump)
 EOF
 

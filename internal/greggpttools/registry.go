@@ -93,6 +93,7 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 
 	tools := []Tool{
 		recipeSQLTool(cfg, medium),
+		oreGenerationTool(cfg, medium),
 		identityMapTool(cfg, short),
 		interactionFailureLogTool(cfg, short),
 		tool("gtnh_wiki_page", GroupGTNHData, "Fetch a GTNH wiki page summary.", network, object(
@@ -123,6 +124,29 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 				argv = append(argv, "--dim", strconv.Itoa(intArg(a, "dim", 0)))
 			}
 			argv = appendScopeAndLimit(argv, a, "all", 20)
+			return argv, nil
+		}),
+		tool("inventory_totals", GroupInventory, "Return structured aggregate counts for up to 50 exact item identities in one snapshot load. Use this after recipe_sql returns recipe_ingredients: pass every item registry_name with its damage, compare total with input_amount, and optionally set dim=183 to evaluate the shared machine pocket dimension. This is the preferred inventory step when comparing production-line alternatives; use inventory_find only when locations are needed.", medium, object(
+			required("items", stringArraySpec("Exact item identities including damage, for example gregtech:gt.metaitem.01:2045.")),
+			optional("dim", intSpec("Restrict totals to this numeric dimension ID, for example 183 for the shared pocket dimension.", -2147483648, 2147483647, nil)),
+			optional("scope", enumStringSpec("Count players, world containers, ME, players plus containers, or all three.", scopeEnum, "all")),
+		), func(a Arguments) ([]string, error) {
+			items := stringSliceArg(a, "items")
+			if len(items) > 50 {
+				return nil, fmt.Errorf("inventory_totals accepts at most 50 items")
+			}
+			argv := []string{"sh", "gtnh_inventory", "totals"}
+			for _, item := range items {
+				argv = append(argv, "--item", item)
+			}
+			if _, ok := a["dim"]; ok {
+				argv = append(argv, "--dim", strconv.Itoa(intArg(a, "dim", 0)))
+			}
+			scope := stringArg(a, "scope")
+			if scope == "" {
+				scope = "all"
+			}
+			argv = append(argv, "--scope", scope)
 			return argv, nil
 		}),
 		tool("inventory_find_item", GroupInventory, "Best-effort natural-language item resolver and inventory lookup. Prefer recipe_sql followed by inventory_find when exact identity matters. Do not use for placed blocks.", medium, object(

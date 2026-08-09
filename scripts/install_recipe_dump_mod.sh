@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MOD_JAR="${MOD_JAR:-$ROOT/build/recipe-dump-mod/greggpt-recipe-dump-1.0.0.jar}"
+MOD_JAR="${MOD_JAR:-$ROOT/build/recipe-dump-mod/greggpt-recipe-dump-2.0.0.jar}"
 SQLITE_JDBC_JAR="${SQLITE_JDBC_JAR:-}"
 INSTANCE_DIR="${1:-}"
 
@@ -22,9 +22,10 @@ fi
 
 MODS_DIR="$INSTANCE_DIR/mods"
 mkdir -p "$MODS_DIR"
-cp -f "$MOD_JAR" "$MODS_DIR/greggpt-recipe-dump-1.0.0.jar"
+rm -f "$MODS_DIR/greggpt-recipe-dump-1.0.0.jar"
+cp -f "$MOD_JAR" "$MODS_DIR/greggpt-recipe-dump-2.0.0.jar"
 
-echo "installed: $MODS_DIR/greggpt-recipe-dump-1.0.0.jar"
+echo "installed: $MODS_DIR/greggpt-recipe-dump-2.0.0.jar"
 
 if [[ -n "$SQLITE_JDBC_JAR" ]]; then
   SQLITE_BASENAME="$(basename "$SQLITE_JDBC_JAR")"

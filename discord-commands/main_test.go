@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,44 @@ func (emptyToolRegistry) Tools(context.Context) ([]agent.ToolDefinition, error) 
 
 func (emptyToolRegistry) Execute(context.Context, agent.ToolCall) (string, error) {
 	return "", nil
+}
+
+type fakeDiscordMessageAPI struct {
+	sentChannels  []string
+	sentContents  []string
+	replyToIDs    []string
+	queuedIDs     []string
+	deletedIDs    []string
+	sendErr       error
+	deleteErrByID map[string]error
+}
+
+func (f *fakeDiscordMessageAPI) ChannelMessageSendReply(channelID, content string, reference *discordgo.MessageReference, options ...discordgo.RequestOption) (*discordgo.Message, error) {
+	messageID := ""
+	if reference != nil {
+		messageID = reference.MessageID
+	}
+	f.replyToIDs = append(f.replyToIDs, messageID)
+	return f.ChannelMessageSend(channelID, content, options...)
+}
+
+func (f *fakeDiscordMessageAPI) ChannelMessageSend(channelID, content string, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
+	f.sentChannels = append(f.sentChannels, channelID)
+	f.sentContents = append(f.sentContents, content)
+	if f.sendErr != nil {
+		return nil, f.sendErr
+	}
+	if len(f.queuedIDs) == 0 {
+		return &discordgo.Message{}, nil
+	}
+	id := f.queuedIDs[0]
+	f.queuedIDs = f.queuedIDs[1:]
+	return &discordgo.Message{ID: id}, nil
+}
+
+func (f *fakeDiscordMessageAPI) ChannelMessageDelete(_ string, messageID string, _ ...discordgo.RequestOption) error {
+	f.deletedIDs = append(f.deletedIDs, messageID)
+	return f.deleteErrByID[messageID]
 }
 
 func TestSplitNames(t *testing.T) {
@@ -187,6 +226,92 @@ func TestLoadConfigRequiresAllowlistUnlessExplicitlyAllowed(t *testing.T) {
 	if !cfg.AllowAllUsers {
 		t.Fatal("loadConfig() did not preserve explicit allow-all")
 	}
+	if !cfg.DiscordProgressEnabled {
+		t.Fatal("Discord progress should default to enabled")
+	}
+}
+
+func TestDiscordCommentaryPublisherSendsRegularMessagesThenDeletesThem(t *testing.T) {
+	api := &fakeDiscordMessageAPI{queuedIDs: []string{"comment-1", "comment-2"}, deleteErrByID: map[string]error{}}
+	publisher := newDiscordCommentaryPublisher(api, "channel-1", 1900)
+
+	publisher.Publish("Checking the quest index.")
+	publisher.Publish("Comparing inventory requirements.")
+
+	if len(api.sentContents) != 2 || api.sentContents[0] != "Checking the quest index." || api.sentContents[1] != "Comparing inventory requirements." {
+		t.Fatalf("sent commentary = %#v", api.sentContents)
+	}
+	if len(api.sentChannels) != 2 || api.sentChannels[0] != "channel-1" || api.sentChannels[1] != "channel-1" {
+		t.Fatalf("sent channels = %#v", api.sentChannels)
+	}
+	if len(api.deletedIDs) != 0 {
+		t.Fatalf("commentary deleted before terminal reply: %#v", api.deletedIDs)
+	}
+
+	publisher.DeleteAll()
+	if len(api.deletedIDs) != 2 || api.deletedIDs[0] != "comment-1" || api.deletedIDs[1] != "comment-2" {
+		t.Fatalf("deleted commentary = %#v", api.deletedIDs)
+	}
+}
+
+func TestDiscordCommentaryPublisherFailuresAreNonfatal(t *testing.T) {
+	api := &fakeDiscordMessageAPI{sendErr: errors.New("send failed"), deleteErrByID: map[string]error{}}
+	publisher := newDiscordCommentaryPublisher(api, "channel-1", 10)
+	publisher.Publish("this message is longer than ten characters")
+	publisher.DeleteAll()
+	if len(api.sentContents) != 1 || api.sentContents[0] != "this me..." {
+		t.Fatalf("truncated commentary = %#v", api.sentContents)
+	}
+	if len(api.deletedIDs) != 0 {
+		t.Fatalf("failed send should not enqueue deletion: %#v", api.deletedIDs)
+	}
+}
+
+func TestDiscordActiveTaskAcceptsUnmentionedSteeringAndRepliesToIt(t *testing.T) {
+	api := &fakeDiscordMessageAPI{queuedIDs: []string{"steering-comment"}, deleteErrByID: map[string]error{}}
+	publisher := newDiscordCommentaryPublisher(api, "channel-1", 1900)
+	svc := &Service{}
+	original := discordMentionMessage{
+		Content:     "<@bot> find the wrench",
+		AuthorID:    "user-1",
+		BotID:       "bot",
+		ChannelID:   "channel-1",
+		MessageID:   "original-message",
+		MentionsBot: true,
+	}
+	task, registered := svc.registerDiscordTask(original, publisher)
+	if !registered {
+		t.Fatal("initial task was not registered")
+	}
+	steeringMessage := discordMentionMessage{
+		Content:     "only check my inventory",
+		AuthorID:    "user-1",
+		BotID:       "bot",
+		ChannelID:   "channel-1",
+		MessageID:   "steering-message",
+		MentionsBot: false,
+	}
+	if !svc.enqueueDiscordSteering(steeringMessage) {
+		t.Fatal("ordinary same-user message was not accepted as steering")
+	}
+	steering := <-task.steering
+	if steering.Content != "only check my inventory" {
+		t.Fatalf("steering content = %q", steering.Content)
+	}
+	if steering.OnCommentary == nil {
+		t.Fatal("steering commentary callback was not attached")
+	}
+	steering.OnCommentary("Adjusting to check only your inventory.")
+	if !reflect.DeepEqual(api.replyToIDs, []string{"steering-message"}) {
+		t.Fatalf("commentary reply targets = %#v", api.replyToIDs)
+	}
+	if !reflect.DeepEqual(api.sentContents, []string{"Adjusting to check only your inventory."}) {
+		t.Fatalf("commentary contents = %#v", api.sentContents)
+	}
+	if svc.enqueueDiscordSteering(discordMentionMessage{Content: "unrelated", AuthorID: "user-2", ChannelID: "channel-1", MessageID: "other"}) {
+		t.Fatal("different user should not steer the task")
+	}
+	svc.unregisterDiscordTask(original, task)
 }
 
 func TestGregGPTMentionNonMentionIgnored(t *testing.T) {

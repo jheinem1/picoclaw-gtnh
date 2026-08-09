@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +42,12 @@ func TestRunnerFinalOnly(t *testing.T) {
 	if !strings.Contains(modelReq.Instructions, "ASCII only") {
 		t.Fatalf("minecraft instructions missing ASCII rule: %q", modelReq.Instructions)
 	}
+	if !strings.Contains(modelReq.Instructions, "must first emit one brief user-facing commentary message") ||
+		!strings.Contains(modelReq.Instructions, "exactly one brief ASCII plain-text sentence") ||
+		!strings.Contains(modelReq.Instructions, "without an '<player> - asking ...' preamble") ||
+		!strings.Contains(modelReq.Instructions, "Treat clearly fictional Minecraft or factory roleplay as fiction") {
+		t.Fatalf("minecraft instructions missing commentary or final-reply rules: %q", modelReq.Instructions)
+	}
 	if !strings.Contains(modelReq.Input[0].Content, "channel: minecraft") {
 		t.Fatalf("request missing channel context: %q", modelReq.Input[0].Content)
 	}
@@ -63,7 +71,10 @@ func TestRunnerLoadsWorkspaceAgentsInstructions(t *testing.T) {
 		t.Fatalf("expected one model request, got %d", len(client.requests))
 	}
 	instructions := client.requests[0].Instructions
-	if !strings.Contains(instructions, "Markdown is allowed") || !strings.Contains(instructions, "inventory_find_block_name") {
+	if !strings.Contains(instructions, "Markdown is allowed") ||
+		!strings.Contains(instructions, "must first emit one brief user-facing commentary message") ||
+		!strings.Contains(instructions, "explicitly name the Discord sender") ||
+		!strings.Contains(instructions, "inventory_find_block_name") {
 		t.Fatalf("runtime instructions missing profile or AGENTS.md content: %q", instructions)
 	}
 }
@@ -168,6 +179,45 @@ func TestRunnerSingleTool(t *testing.T) {
 	}
 	if !strings.Contains(client.requests[0].Instructions, "Markdown is allowed") {
 		t.Fatalf("discord instructions missing markdown allowance: %q", client.requests[0].Instructions)
+	}
+}
+
+func TestRunnerPublishesAndReplaysCommentaryBeforeToolCall(t *testing.T) {
+	client := &fakeClient{responses: []ModelResponse{
+		{
+			Commentary: []string{"**Checking the quest index.**"},
+			ToolCalls:  []ToolCall{toolCall("call-1", "lookup", `{"q":"steel"}`)},
+		},
+		{FinalText: "The steel quest is ready."},
+	}}
+	registry := newFakeRegistry()
+	registry.outputs["lookup"] = "ready"
+	var commentary []string
+	runner := NewRunner(Config{}, client, registry)
+
+	got, err := runner.Run(context.Background(), Request{
+		Channel:      ChannelDiscord,
+		Message:      "check the steel quest",
+		OnCommentary: func(text string) { commentary = append(commentary, text) },
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if got != "The steel quest is ready." {
+		t.Fatalf("final = %q", got)
+	}
+	if len(commentary) != 1 || commentary[0] != "**Checking the quest index.**" {
+		t.Fatalf("commentary = %#v", commentary)
+	}
+	input := client.requests[1].Input
+	if len(input) != 4 {
+		t.Fatalf("second input = %#v", input)
+	}
+	if input[1].Role != roleAssistant || input[1].Phase != phaseCommentary || input[1].Content != "**Checking the quest index.**" {
+		t.Fatalf("commentary input = %#v", input[1])
+	}
+	if input[2].Role != roleToolCall || input[3].Role != roleToolOutput {
+		t.Fatalf("tool input ordering = %#v", input)
 	}
 }
 
@@ -414,6 +464,85 @@ func toolCall(id, name, args string) ToolCall {
 	}
 }
 
+func TestRunnerInterruptsResponseAndIncorporatesSteering(t *testing.T) {
+	client := &steeringClient{started: make(chan struct{})}
+	runner := NewRunner(Config{Model: "test-model"}, client, newFakeRegistry())
+	steeringCh := make(chan SteeringMessage, 1)
+	var regularCommentary []string
+	var steeringCommentary []string
+	type runResult struct {
+		text string
+		err  error
+	}
+	done := make(chan runResult, 1)
+	go func() {
+		text, err := runner.Run(context.Background(), Request{
+			Channel:      ChannelDiscord,
+			Message:      "find the wrench",
+			OnCommentary: func(text string) { regularCommentary = append(regularCommentary, text) },
+			Steering:     steeringCh,
+		})
+		done <- runResult{text: text, err: err}
+	}()
+
+	<-client.started
+	steeringCh <- SteeringMessage{
+		Content:      "only check Steve's inventory",
+		OnCommentary: func(text string) { steeringCommentary = append(steeringCommentary, text) },
+	}
+	result := <-done
+	if result.err != nil {
+		t.Fatalf("Run failed: %v", result.err)
+	}
+	if result.text != "Steve has the wrench." {
+		t.Fatalf("final text = %q", result.text)
+	}
+	if len(regularCommentary) != 0 {
+		t.Fatalf("steering acknowledgement went to regular commentary: %#v", regularCommentary)
+	}
+	if !reflect.DeepEqual(steeringCommentary, []string{"Adjusting to check only Steve's inventory."}) {
+		t.Fatalf("steering commentary = %#v", steeringCommentary)
+	}
+	requests := client.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(requests))
+	}
+	lastInput := requests[1].Input[len(requests[1].Input)-1]
+	if lastInput.Role != roleUser || !strings.Contains(lastInput.Content, "only check Steve's inventory") || !strings.Contains(lastInput.Content, "Steering update") {
+		t.Fatalf("steering input = %#v", lastInput)
+	}
+}
+
+type steeringClient struct {
+	mu       sync.Mutex
+	started  chan struct{}
+	requests []ModelRequest
+	calls    int
+}
+
+func (c *steeringClient) CreateResponse(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.requests = append(c.requests, req)
+	c.mu.Unlock()
+	if call == 1 {
+		close(c.started)
+		<-ctx.Done()
+		return ModelResponse{}, ctx.Err()
+	}
+	if req.OnCommentary != nil {
+		req.OnCommentary("Adjusting to check only Steve's inventory.")
+	}
+	return ModelResponse{FinalText: "Steve has the wrench."}, nil
+}
+
+func (c *steeringClient) Requests() []ModelRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ModelRequest(nil), c.requests...)
+}
+
 type fakeClient struct {
 	responses         []ModelResponse
 	requests          []ModelRequest
@@ -442,6 +571,11 @@ func (f *fakeClient) CreateResponse(_ context.Context, req ModelRequest) (ModelR
 	}
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
+	if req.OnCommentary != nil {
+		for _, commentary := range resp.Commentary {
+			req.OnCommentary(commentary)
+		}
+	}
 	return resp, nil
 }
 

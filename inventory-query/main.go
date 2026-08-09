@@ -81,13 +81,14 @@ type PlayerRecord struct {
 }
 
 type ChestRecord struct {
-	Dimension int         `json:"dim"`
-	X         int         `json:"x"`
-	Y         int         `json:"y"`
-	Z         int         `json:"z"`
-	Type      string      `json:"type"`
-	Source    string      `json:"source,omitempty"`
-	Items     []ItemStack `json:"items"`
+	Dimension   int         `json:"dim"`
+	X           int         `json:"x"`
+	Y           int         `json:"y"`
+	Z           int         `json:"z"`
+	Type        string      `json:"type"`
+	Source      string      `json:"source,omitempty"`
+	InventoryID string      `json:"inventory_id,omitempty"`
+	Items       []ItemStack `json:"items"`
 }
 
 type MERecord struct {
@@ -116,12 +117,14 @@ type PlayerHit struct {
 }
 
 type ChestHit struct {
-	Dimension  int    `json:"dim"`
-	X          int    `json:"x"`
-	Y          int    `json:"y"`
-	Z          int    `json:"z"`
-	Type       string `json:"type"`
-	TotalCount int    `json:"total_count"`
+	Dimension   int    `json:"dim"`
+	X           int    `json:"x"`
+	Y           int    `json:"y"`
+	Z           int    `json:"z"`
+	Type        string `json:"type"`
+	Source      string `json:"source,omitempty"`
+	InventoryID string `json:"inventory_id,omitempty"`
+	TotalCount  int    `json:"total_count"`
 }
 
 type MEHit struct {
@@ -147,6 +150,7 @@ type BlockRecord struct {
 	Meta      int    `json:"meta"`
 	RegName   string `json:"reg_name,omitempty"`
 	Name      string `json:"name,omitempty"`
+	Source    string `json:"source,omitempty"`
 }
 
 type BlockHit struct {
@@ -158,6 +162,7 @@ type BlockHit struct {
 	Meta      int    `json:"meta"`
 	RegName   string `json:"reg_name,omitempty"`
 	Name      string `json:"name,omitempty"`
+	Source    string `json:"source,omitempty"`
 }
 
 type BlockHits struct {
@@ -230,6 +235,9 @@ func getenv(key, fallback string) string {
 
 func workspaceDir() string {
 	if v := strings.TrimSpace(os.Getenv("GTNH_WORKSPACE")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("GREGGPT_WORKSPACE")); v != "" {
 		return v
 	}
 	if wd, err := os.Getwd(); err == nil {
@@ -543,7 +551,7 @@ func cmdStatus() error {
 	if st.BlockStatus.RegistryAvailable {
 		fmt.Println("Block registry: available")
 	} else {
-		fmt.Println("Block registry: unavailable; numeric id/meta search only")
+		fmt.Println("Block registry: unavailable; exported block names remain searchable, otherwise use numeric id/meta")
 	}
 	if st.BlockStatus.Reason != "" {
 		fmt.Println("Block status:", st.BlockStatus.Reason)
@@ -628,6 +636,126 @@ func cmdFind(args []string) error {
 		return err
 	}
 	return printFind(idx, keys, label, *scope, *player, *dim, *limit, "exact")
+}
+
+type repeatedStringFlag []string
+
+func (f *repeatedStringFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *repeatedStringFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("item must not be empty")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
+type inventoryTotalRow struct {
+	Query        string `json:"query"`
+	ResourceKey  string `json:"resource_key,omitempty"`
+	RegistryName string `json:"registry_name,omitempty"`
+	Damage       int    `json:"damage,omitempty"`
+	DisplayName  string `json:"display_name,omitempty"`
+	Players      int    `json:"players"`
+	Containers   int    `json:"containers"`
+	ME           int    `json:"me"`
+	Total        int    `json:"total"`
+	Error        string `json:"error,omitempty"`
+}
+
+func cmdTotals(args []string) error {
+	fs := flag.NewFlagSet("totals", flag.ContinueOnError)
+	var queries repeatedStringFlag
+	fs.Var(&queries, "item", "exact registry item with damage; repeat for multiple ingredients")
+	scope := fs.String("scope", "all", "")
+	dim := fs.Int("dim", unsetDimension, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(queries) == 0 {
+		return errors.New("error: provide at least one --item <mod:name:damage>")
+	}
+	if len(queries) > 50 {
+		return errors.New("error: at most 50 --item values are allowed")
+	}
+	usePlayers, useContainers, useME, err := scopeSet(*scope)
+	if err != nil {
+		return err
+	}
+	idx, err := loadIndex()
+	if err != nil {
+		return err
+	}
+	items, _, err := loadItems()
+	if err != nil {
+		return err
+	}
+	rows := make([]inventoryTotalRow, 0, len(queries))
+	for _, query := range queries {
+		row := inventoryTotalRow{Query: query}
+		meta, ok := resolveExactItemMeta(items, query)
+		if !ok {
+			row.Error = "exact registry name and damage did not match the item index"
+			rows = append(rows, row)
+			continue
+		}
+		row.ResourceKey = "item:" + meta.RegName + ":" + strconv.Itoa(meta.Damage)
+		row.RegistryName = meta.RegName
+		row.Damage = meta.Damage
+		row.DisplayName = meta.DisplayName
+		hits := filterItemHitsByDimension(idx.ItemIndex[itemKey(meta.ID, meta.Damage)], *dim)
+		if usePlayers {
+			for _, hit := range hits.Players {
+				row.Players += hit.TotalCount
+			}
+		}
+		if useContainers {
+			for _, hit := range hits.Chests {
+				row.Containers += hit.TotalCount
+			}
+		}
+		if useME {
+			for _, hit := range hits.ME {
+				row.ME += hit.TotalCount
+			}
+		}
+		row.Total = row.Players + row.Containers + row.ME
+		rows = append(rows, row)
+	}
+	payload := map[string]any{
+		"generated_at": idx.GeneratedAt,
+		"freshness":    freshness(idx.Source),
+		"source":       idx.Source,
+		"scope":        valueOr(*scope, "all"),
+		"items":        rows,
+	}
+	if *dim != unsetDimension {
+		payload["dim"] = *dim
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
+}
+
+func resolveExactItemMeta(items []ItemMeta, query string) (ItemMeta, bool) {
+	parts := strings.Split(strings.TrimSpace(query), ":")
+	if len(parts) < 3 {
+		return ItemMeta{}, false
+	}
+	damage, err := strconv.Atoi(parts[len(parts)-1])
+	if err != nil {
+		return ItemMeta{}, false
+	}
+	registryName := strings.Join(parts[:len(parts)-1], ":")
+	for _, item := range items {
+		if strings.EqualFold(item.RegName, registryName) && item.Damage == damage {
+			return item, true
+		}
+	}
+	return ItemMeta{}, false
 }
 
 func resolveFindKeys(item string, id int, damage int, anyDamage bool, idx InventoryIndex) ([]string, string, error) {
@@ -1032,10 +1160,11 @@ func cmdFindBlock(args []string) error {
 			break
 		}
 		name := valueOr(h.Name, h.RegName)
+		source := valueOr(h.Source, "region")
 		if name != "" {
-			fmt.Printf("- %d:%d (%s) at (%d,%d,%d) dim=%d\n", h.ID, h.Meta, name, h.X, h.Y, h.Z, h.Dimension)
+			fmt.Printf("- %d:%d (%s) at (%d,%d,%d) dim=%d source=%s\n", h.ID, h.Meta, name, h.X, h.Y, h.Z, h.Dimension, source)
 		} else {
-			fmt.Printf("- %d:%d at (%d,%d,%d) dim=%d\n", h.ID, h.Meta, h.X, h.Y, h.Z, h.Dimension)
+			fmt.Printf("- %d:%d at (%d,%d,%d) dim=%d source=%s\n", h.ID, h.Meta, h.X, h.Y, h.Z, h.Dimension, source)
 		}
 	}
 	return nil
@@ -1162,7 +1291,7 @@ func cmdRefresh(args []string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|find-item|find-block|chest|refresh ...")
+	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|totals|find-item|find-block|chest|refresh ...")
 	os.Exit(2)
 }
 
@@ -1176,6 +1305,8 @@ func main() {
 		err = cmdStatus()
 	case "find":
 		err = cmdFind(os.Args[2:])
+	case "totals":
+		err = cmdTotals(os.Args[2:])
 	case "find-item":
 		err = cmdFindItem(os.Args[2:])
 	case "find-block":

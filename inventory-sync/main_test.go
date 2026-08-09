@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +237,87 @@ func TestParseBlockInventoryExport_SuperChest(t *testing.T) {
 	}
 }
 
+func TestParseBlockInventoryExportDeduplicatesStableInventoryIdentity(t *testing.T) {
+	raw := []byte(`{
+	  "generated_at":"2026-07-21T04:33:00Z",
+	  "inventories":[
+	    {"dim":183,"x":14,"y":43,"z":-6,"inventory_id":"block_export:183:15:43:-6","block_id":4209,"block_display_name":"Reactor Chamber","items":[{"id":4209,"damage":0,"count":1,"slot":0}]},
+	    {"dim":183,"x":15,"y":43,"z":-6,"inventory_id":"block_export:183:15:43:-6","block_id":4209,"block_display_name":"Reactor Chamber","items":[{"id":4209,"damage":0,"count":1,"slot":0}]}
+	  ]
+	}`)
+
+	chests, blocks, _, stackCount, err := parseBlockInventoryExport(raw)
+	if err != nil {
+		t.Fatalf("parseBlockInventoryExport failed: %v", err)
+	}
+	if len(chests) != 1 || stackCount != 1 {
+		t.Fatalf("stable inventory identity was double-counted: chests=%#v stackCount=%d", chests, stackCount)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("distinct placed block coordinates should remain searchable, got %#v", blocks)
+	}
+}
+
+func TestMergeChestRecordsPrefersFreshBlockExportAtSameCoordinate(t *testing.T) {
+	existing := []ChestRecord{{Dimension: 183, X: 1, Y: 2, Z: 3, Source: "region", Items: []ItemStack{{ID: 7, Count: 64}}}}
+	replacement := []ChestRecord{{Dimension: 183, X: 1, Y: 2, Z: 3, Source: "block_export", Items: []ItemStack{{ID: 7, Count: 8}}}}
+	got := mergeChestRecords(existing, replacement, "block_export")
+	if len(got) != 1 || got[0].Source != "block_export" || got[0].Items[0].Count != 8 {
+		t.Fatalf("cross-source coordinate was not deduplicated: %#v", got)
+	}
+}
+
+func TestMergeBlockRecordsReplacesWholeSourceSnapshot(t *testing.T) {
+	existing := []BlockRecord{
+		{Dimension: 183, X: 1, Y: 2, Z: 3, ID: 10, Source: "block_export"},
+		{Dimension: 183, X: 4, Y: 5, Z: 6, ID: 11, Source: "region"},
+	}
+	replacement := []BlockRecord{{Dimension: 183, X: 7, Y: 8, Z: 9, ID: 12, Source: "block_export"}}
+	got := mergeBlockRecords(existing, replacement, "block_export")
+	if len(got) != 2 {
+		t.Fatalf("unexpected merged blocks: %#v", got)
+	}
+	for _, block := range got {
+		if block.X == 1 {
+			t.Fatalf("stale block-export record survived replacement: %#v", got)
+		}
+	}
+}
+
+func TestLoadIndexInfersLegacyBlockExportSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inventory.json")
+	raw := []byte(`{
+	  "source":{"block_inventories_scan_at":"2026-07-20T12:00:00Z","blocks_scan_at":"2026-07-20T12:05:00Z"},
+	  "chests":[{"dim":183,"x":1,"y":2,"z":3,"source":"block_export","items":[]}],
+	  "blocks":[
+	    {"dim":183,"x":1,"y":2,"z":3,"id":10},
+	    {"dim":183,"x":4,"y":5,"z":6,"id":11}
+	  ]
+	}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := loadIndex(path)
+	if got := idx.Blocks[0].Source; got != "block_export" {
+		t.Fatalf("block matching an exported inventory got source %q", got)
+	}
+	if got := idx.Blocks[1].Source; got != "region" {
+		t.Fatalf("unmatched legacy block got source %q", got)
+	}
+}
+
+func TestLoadIndexTreatsExportOnlyLegacyBlocksAsExported(t *testing.T) {
+	idx := InventoryIndex{
+		Source: SourceMeta{BlockInvScanAt: "2026-07-20T12:00:00Z"},
+		Blocks: []BlockRecord{{Dimension: 183, X: 1, Y: 2, Z: 3}},
+	}
+	normalizeLegacyBlockSources(&idx)
+	if got := idx.Blocks[0].Source; got != "block_export" {
+		t.Fatalf("export-only legacy block got source %q", got)
+	}
+}
+
 func TestDimPathSupportsPocketDimension(t *testing.T) {
 	path, ok := dimPath(183)
 	if !ok || path != "world/DIM183/region/" {
@@ -391,6 +474,19 @@ func TestFetchDueUsesAttemptTimestampOverExportGeneratedAt(t *testing.T) {
 	}
 	if fetchDue(lastAttempt, lastExport, now, 5*time.Minute) {
 		t.Fatal("expected recent fetch attempt to suppress retry even when export generated_at is old")
+	}
+}
+
+func TestFailedChestAttemptUsesAttemptTimestampOverLastSuccessfulScan(t *testing.T) {
+	now := time.Date(2026, 8, 6, 6, 30, 0, 0, time.UTC)
+	lastSuccess := "2026-07-21T05:29:29Z"
+	lastAttempt := "2026-08-06T06:25:00Z"
+
+	if !fetchDue("", lastSuccess, now, 6*time.Hour) {
+		t.Fatal("expected a stale successful chest scan with no attempt timestamp to be due")
+	}
+	if fetchDue(lastAttempt, lastSuccess, now, 6*time.Hour) {
+		t.Fatal("expected a recent failed chest attempt to suppress an immediate full-world retry")
 	}
 }
 

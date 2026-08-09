@@ -79,6 +79,89 @@ func TestToResponseRequestDisableToolsOmitsWebAndFunctionTools(t *testing.T) {
 	}
 }
 
+func TestToResponseRequestPreservesAssistantCommentaryPhase(t *testing.T) {
+	req, err := toResponseRequest(ModelRequest{
+		Model: "gpt-5.6",
+		Input: []InputItem{{
+			Role:    roleAssistant,
+			Content: "I will check the quest index next.",
+			Phase:   phaseCommentary,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("toResponseRequest() error = %v", err)
+	}
+	if len(req.Input.OfInputItemList) != 1 || req.Input.OfInputItemList[0].OfMessage == nil {
+		t.Fatalf("assistant input missing: %#v", req.Input.OfInputItemList)
+	}
+	message := req.Input.OfInputItemList[0].OfMessage
+	if message.Role != responses.EasyInputMessageRoleAssistant {
+		t.Fatalf("assistant role = %q", message.Role)
+	}
+	if message.Phase != responses.EasyInputMessagePhaseCommentary {
+		t.Fatalf("assistant phase = %q", message.Phase)
+	}
+}
+
+func TestFromResponseSeparatesCommentaryFinalAndToolCalls(t *testing.T) {
+	var response Response
+	err := json.Unmarshal([]byte(`{
+		"id":"resp_1",
+		"output":[
+			{"id":"reason_1","type":"reasoning","summary":[{"type":"summary_text","text":"private summary"}]},
+			{"id":"msg_1","type":"message","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"I am checking the quest index."}]},
+			{"id":"call_item_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"steel\"}"}
+		]
+	}`), &response)
+	if err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+
+	got := fromResponse(&response)
+	if len(got.Commentary) != 1 || got.Commentary[0] != "I am checking the quest index." {
+		t.Fatalf("Commentary = %#v", got.Commentary)
+	}
+	if got.FinalText != "" {
+		t.Fatalf("FinalText included commentary or reasoning: %q", got.FinalText)
+	}
+	if len(got.ToolCalls) != 1 || got.ToolCalls[0].ID != "call_1" || got.ToolCalls[0].Name != "lookup" {
+		t.Fatalf("ToolCalls = %#v", got.ToolCalls)
+	}
+
+	var finalResponse Response
+	err = json.Unmarshal([]byte(`{
+		"id":"resp_2",
+		"output":[
+			{"id":"msg_2","type":"message","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"The quest is ready."}]}
+		]
+	}`), &finalResponse)
+	if err != nil {
+		t.Fatalf("Unmarshal final response: %v", err)
+	}
+	final := fromResponse(&finalResponse)
+	if final.FinalText != "The quest is ready." || len(final.Commentary) != 0 {
+		t.Fatalf("final response = %#v", final)
+	}
+}
+
+func TestFromResponseTreatsUnphasedPreambleAsCommentaryWhenToolsExist(t *testing.T) {
+	var response Response
+	err := json.Unmarshal([]byte(`{
+		"id":"resp_legacy",
+		"output":[
+			{"id":"msg_legacy","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Checking now."}]},
+			{"id":"call_legacy","type":"function_call","call_id":"call_legacy","name":"lookup","arguments":"{}"}
+		]
+	}`), &response)
+	if err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	got := fromResponse(&response)
+	if len(got.Commentary) != 1 || got.Commentary[0] != "Checking now." || got.FinalText != "" {
+		t.Fatalf("legacy response = %#v", got)
+	}
+}
+
 func TestCodexClientSelectsAccountIDHeader(t *testing.T) {
 	tests := []struct {
 		name       string

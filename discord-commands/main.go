@@ -32,6 +32,7 @@ type Config struct {
 	AllowedUsers             map[string]struct{}
 	AllowAllUsers            bool
 	MentionAgent             bool
+	DiscordProgressEnabled   bool
 	DiscordHistoryEnabled    bool
 	DiscordHistoryLimit      int
 	DiscordHistoryMaxChars   int
@@ -66,11 +67,19 @@ type wikiPageResponse struct {
 }
 
 type Service struct {
-	cfg    Config
-	s      *discordgo.Session
-	runner DiscordAgentRunner
-	histMu sync.Mutex
-	hist   discordHistoryBackend
+	cfg      Config
+	s        *discordgo.Session
+	runner   DiscordAgentRunner
+	histMu   sync.Mutex
+	hist     discordHistoryBackend
+	activeMu sync.Mutex
+	active   map[string]*discordActiveTask
+}
+
+type discordActiveTask struct {
+	originalMessageID string
+	steering          chan agent.SteeringMessage
+	commentary        *discordCommentaryPublisher
 }
 
 var legacyInventoryIntentRe = regexp.MustCompile(`(?i)\b(how\s+much|how\s+many|do we have|where (?:is|are)|who has|which chest|in storage|inventory|stored|in me|me system)\b`)
@@ -94,6 +103,8 @@ type DiscordAgentRequest struct {
 	History          []history.Message
 	RecalledContext  []history.RecallItem
 	RetryInventory   *InventoryRetry `json:"retry_inventory,omitempty"`
+	OnCommentary     func(string)    `json:"-"`
+	Steering         <-chan agent.SteeringMessage
 }
 
 type InventoryRetry struct {
@@ -112,13 +123,29 @@ type commandAgentRunner struct {
 }
 
 type discordMentionMessage struct {
-	Content     string
-	AuthorID    string
-	AuthorName  string
-	BotID       string
-	ChannelID   string
-	MessageID   string
-	MentionsBot bool
+	Content      string
+	AuthorID     string
+	AuthorName   string
+	BotID        string
+	ChannelID    string
+	MessageID    string
+	MentionsBot  bool
+	OnCommentary func(string)
+	Steering     <-chan agent.SteeringMessage
+}
+
+type discordMessageAPI interface {
+	ChannelMessageSend(channelID, content string, options ...discordgo.RequestOption) (*discordgo.Message, error)
+	ChannelMessageSendReply(channelID, content string, reference *discordgo.MessageReference, options ...discordgo.RequestOption) (*discordgo.Message, error)
+	ChannelMessageDelete(channelID, messageID string, options ...discordgo.RequestOption) error
+}
+
+type discordCommentaryPublisher struct {
+	mu         sync.Mutex
+	api        discordMessageAPI
+	channelID  string
+	replyLimit int
+	messageIDs []string
 }
 
 type discordHistoryMessage struct {
@@ -226,6 +253,7 @@ func loadConfig() (Config, error) {
 		AllowedUsers:             map[string]struct{}{},
 		AllowAllUsers:            getenvBool("GREGGPT_DISCORD_ALLOW_ALL", false),
 		MentionAgent:             getenvBool("GREGGPT_DISCORD_MENTIONS_ENABLED", true),
+		DiscordProgressEnabled:   getenvBool("GREGGPT_DISCORD_PROGRESS_ENABLED", true),
 		DiscordHistoryEnabled:    getenvBool("GREGGPT_DISCORD_HISTORY_ENABLED", true),
 		DiscordHistoryLimit:      getenvInt("GREGGPT_DISCORD_HISTORY_LIMIT", 10),
 		DiscordHistoryMaxChars:   getenvInt("GREGGPT_DISCORD_HISTORY_MAX_CHARS", 4000),
@@ -606,6 +634,15 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 		MessageID:   m.ID,
 		MentionsBot: s.mentionsBot(m),
 	}
+	if s.enqueueDiscordSteering(msg) {
+		s.recordObservedDiscordMessage(context.Background(), m.Message)
+		return
+	}
+	var commentary *discordCommentaryPublisher
+	if s.cfg.DiscordProgressEnabled {
+		commentary = newDiscordCommentaryPublisher(dg, m.ChannelID, s.cfg.ReplyLimit)
+		msg.OnCommentary = commentary.Publish
+	}
 	if !s.cfg.MentionAgent || !msg.MentionsBot {
 		s.recordObservedDiscordMessage(context.Background(), m.Message)
 		return
@@ -615,6 +652,15 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 		s.recordObservedDiscordMessage(context.Background(), m.Message)
 		return
 	}
+	activeTask, registered := s.registerDiscordTask(msg, commentary)
+	if !registered {
+		if s.enqueueDiscordSteering(msg) {
+			s.recordObservedDiscordMessage(context.Background(), m.Message)
+		}
+		return
+	}
+	defer s.unregisterDiscordTask(msg, activeTask)
+	msg.Steering = activeTask.steering
 	log.Printf("message_agent_start user_id=%s channel_id=%s message_id=%s content_len=%d", m.Author.ID, m.ChannelID, m.ID, len(m.Content))
 
 	isRetry := isInventoryRetryRequest(cleanBotMentionText(m.Content, msg.BotID))
@@ -651,8 +697,137 @@ func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCre
 	if sent != nil {
 		sentID = sent.ID
 	}
+	if commentary != nil {
+		commentary.DeleteAll()
+	}
 	s.recordGregGPTDiscordReply(context.Background(), msg, reply, sentID)
 	log.Printf("message_agent_reply_ok reason=%s user_id=%s channel_id=%s message_id=%s reply_len=%d", result.Reason, m.Author.ID, m.ChannelID, m.ID, len(reply))
+}
+
+func discordTaskKey(channelID, userID string) string {
+	return strings.TrimSpace(channelID) + "\x00" + strings.TrimSpace(userID)
+}
+
+func (s *Service) registerDiscordTask(msg discordMentionMessage, commentary *discordCommentaryPublisher) (*discordActiveTask, bool) {
+	key := discordTaskKey(msg.ChannelID, msg.AuthorID)
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	if s.active == nil {
+		s.active = make(map[string]*discordActiveTask)
+	}
+	if existing := s.active[key]; existing != nil {
+		return existing, false
+	}
+	task := &discordActiveTask{
+		originalMessageID: msg.MessageID,
+		steering:          make(chan agent.SteeringMessage, 32),
+		commentary:        commentary,
+	}
+	s.active[key] = task
+	return task, true
+}
+
+func (s *Service) unregisterDiscordTask(msg discordMentionMessage, task *discordActiveTask) {
+	key := discordTaskKey(msg.ChannelID, msg.AuthorID)
+	s.activeMu.Lock()
+	if s.active[key] == task {
+		delete(s.active, key)
+	}
+	s.activeMu.Unlock()
+}
+
+func (s *Service) enqueueDiscordSteering(msg discordMentionMessage) bool {
+	content := cleanBotMentionText(msg.Content, msg.BotID)
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	key := discordTaskKey(msg.ChannelID, msg.AuthorID)
+	s.activeMu.Lock()
+	task := s.active[key]
+	if task == nil || task.originalMessageID == msg.MessageID {
+		s.activeMu.Unlock()
+		return false
+	}
+	steering := agent.SteeringMessage{Content: content}
+	if task.commentary != nil {
+		steering.OnCommentary = task.commentary.PublishReplyingTo(msg.MessageID)
+	}
+	select {
+	case task.steering <- steering:
+		s.activeMu.Unlock()
+		log.Printf("message_agent_steering_queued user_id=%s channel_id=%s message_id=%s content_len=%d", msg.AuthorID, msg.ChannelID, msg.MessageID, len(content))
+		return true
+	default:
+		s.activeMu.Unlock()
+		log.Printf("message_agent_steering_dropped user_id=%s channel_id=%s message_id=%s reason=queue_full", msg.AuthorID, msg.ChannelID, msg.MessageID)
+		return true
+	}
+}
+
+func newDiscordCommentaryPublisher(api discordMessageAPI, channelID string, replyLimit int) *discordCommentaryPublisher {
+	return &discordCommentaryPublisher{
+		api:        api,
+		channelID:  channelID,
+		replyLimit: replyLimit,
+	}
+}
+
+func (p *discordCommentaryPublisher) Publish(text string) {
+	p.publish(text, "")
+}
+
+func (p *discordCommentaryPublisher) PublishReplyingTo(messageID string) func(string) {
+	return func(text string) {
+		p.publish(text, messageID)
+	}
+}
+
+func (p *discordCommentaryPublisher) publish(text, replyToMessageID string) {
+	if p == nil || p.api == nil {
+		return
+	}
+	text = truncate(strings.TrimSpace(text), p.replyLimit)
+	if text == "" {
+		return
+	}
+	var msg *discordgo.Message
+	var err error
+	if strings.TrimSpace(replyToMessageID) != "" {
+		msg, err = p.api.ChannelMessageSendReply(p.channelID, text, &discordgo.MessageReference{
+			MessageID: replyToMessageID,
+			ChannelID: p.channelID,
+		})
+	} else {
+		msg, err = p.api.ChannelMessageSend(p.channelID, text)
+	}
+	if err != nil {
+		log.Printf("message_agent_commentary_error channel_id=%s err=%q", p.channelID, err.Error())
+		return
+	}
+	if msg == nil || strings.TrimSpace(msg.ID) == "" {
+		return
+	}
+	p.mu.Lock()
+	p.messageIDs = append(p.messageIDs, msg.ID)
+	p.mu.Unlock()
+	log.Printf("message_agent_commentary_ok channel_id=%s message_id=%s commentary_len=%d", p.channelID, msg.ID, len(text))
+}
+
+func (p *discordCommentaryPublisher) DeleteAll() {
+	if p == nil || p.api == nil {
+		return
+	}
+	p.mu.Lock()
+	ids := append([]string(nil), p.messageIDs...)
+	p.messageIDs = nil
+	p.mu.Unlock()
+	for _, messageID := range ids {
+		if err := p.api.ChannelMessageDelete(p.channelID, messageID); err != nil {
+			log.Printf("message_agent_commentary_delete_error channel_id=%s message_id=%s err=%q", p.channelID, messageID, err.Error())
+			continue
+		}
+		log.Printf("message_agent_commentary_delete_ok channel_id=%s message_id=%s", p.channelID, messageID)
+	}
 }
 
 func (s *Service) startTyping(dg *discordgo.Session, channelID string, ctx context.Context) func() {
@@ -952,6 +1127,8 @@ func (s *Service) processGregGPTMention(ctx context.Context, msg discordMentionM
 		History:          append([]history.Message(nil), recentHistory...),
 		RecalledContext:  append([]history.RecallItem(nil), recalledContext...),
 		RetryInventory:   retry,
+		OnCommentary:     msg.OnCommentary,
+		Steering:         msg.Steering,
 	})
 	if err != nil {
 		reply := strings.TrimSpace(resp.Reply)
@@ -1616,6 +1793,8 @@ func (r *commandAgentRunner) Run(ctx context.Context, req DiscordAgentRequest) (
 		Context:         contextValues,
 		History:         req.History,
 		RecalledContext: req.RecalledContext,
+		OnCommentary:    req.OnCommentary,
+		Steering:        req.Steering,
 	})
 	if err != nil {
 		var timeoutErr agent.TimeoutSummaryError

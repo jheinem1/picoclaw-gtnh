@@ -1,0 +1,4 @@
+data/gtnh/greggpt_recipes.sqlite filter=lfs diff=lfs merge=lfs -text
+data/gtnh/index/greggpt_recipes.sqlite filter=lfs diff=lfs merge=lfs -text
+data/gtnh_runtime/index/greggpt_recipes.sqlite filter=lfs diff=lfs merge=lfs -text
+workspace/gtnh-data/index/greggpt_recipes.sqlite filter=lfs diff=lfs merge=lfs -text

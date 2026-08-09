@@ -1,183 +1,155 @@
-# GregGPT Recipe SQLite Schema
+# GregGPT Production SQLite Schema
 
-`greggpt_recipes.sqlite` is the only runtime recipe data source. Raw recipe JSON,
-`recipe_index.tsv`, `gtnh_resolve_recipes`, and `gtnh_search_recipes` are obsolete
-recipe paths and must not be used as fallbacks.
+`greggpt_recipes.sqlite` is the runtime source for recipe, machine-capability,
+resource-identity, and ore-generation data. Schema version 2 is designed for
+model-driven exploration: SQL exposes alternatives and current facts, while the
+agent decides which production lines to investigate.
 
-## Required Tables
+## Model-facing views
 
-```sql
-CREATE TABLE manifest (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
+### `resource_catalog`
 
-CREATE TABLE items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  registry_name TEXT NOT NULL,
-  damage INTEGER NOT NULL,
-  display_name TEXT,
-  unlocalized_name TEXT,
-  max_damage INTEGER,
-  UNIQUE(registry_name, damage)
-);
+One canonical row per item or fluid. `resource_key` is stable across the recipe
+and inventory tools:
 
-CREATE TABLE fluids (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  fluid_name TEXT NOT NULL UNIQUE,
-  localized_name TEXT
-);
+- `item:<registry_name>:<damage>`
+- `fluid:<fluid_name>`
 
--- Reserved for a future merge with the separate ore-dictionary dump.
-CREATE TABLE ore_dict_entries (ore_name TEXT NOT NULL, item_id INTEGER NOT NULL);
+Use `item_search MATCH '<terms>'` for fast item-name resolution. The FTS rowid
+is the corresponding `items.id`.
 
-CREATE TABLE recipe_handlers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE
-);
+### `recipe_routes`
 
-CREATE TABLE recipes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  handler_id INTEGER NOT NULL,
-  recipe_key TEXT NOT NULL,
-  category TEXT NOT NULL,
-  duration_ticks INTEGER,
-  eut INTEGER,
-  special_value INTEGER,
-  hidden INTEGER NOT NULL DEFAULT 0
-);
+One row per recipe output, including:
 
-CREATE TABLE recipe_inputs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  recipe_id INTEGER NOT NULL,
-  position INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  amount INTEGER,
-  label TEXT
-);
+- exact output identity and quantity;
+- normalized `chance`, where 10000 is 100 percent;
+- `expected_output_amount`;
+- `is_primary`, so byproducts are not mistaken for a route's main product;
+- handler, capability, machine-name hint, EU/t, and voltage tier.
 
-CREATE TABLE recipe_input_options (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  input_id INTEGER NOT NULL,
-  option_index INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  item_id INTEGER,
-  fluid_id INTEGER,
-  amount INTEGER,
-  ore_name TEXT,
-  label TEXT
-);
+The view excludes recipes that are invalid, hidden, fake, or disabled.
 
-CREATE TABLE recipe_outputs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  recipe_id INTEGER NOT NULL,
-  position INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  amount INTEGER,
-  item_id INTEGER,
-  fluid_id INTEGER,
-  chance INTEGER,
-  label TEXT
-);
+### `recipe_ingredients`
 
-CREATE TABLE recipe_metadata (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  recipe_id INTEGER NOT NULL,
-  key TEXT NOT NULL,
-  value TEXT
-);
-```
+One row per input alternative. Rows preserve the input position and option
+index, exact item/fluid/ore-dictionary identity, quantity, and the `consumed`
+and `catalyst` flags. Alternatives sharing an input position are choices, not
+additional required ingredients.
 
-## Required Indexes
+### `handler_machine_options`
+
+Connects recipe handlers to their normalized capability and machine-name hint.
+`machine_options` can contain exact item/block identities, tier ranges, and
+provenance when a trustworthy mapping is available. A null option means the
+capability is known but no exact machine mapping has been asserted.
+
+### `recipe_data_quality`
+
+Reports validity and input/output completeness per recipe. `dump_errors` holds
+per-record failures that were rolled back instead of leaving partial recipes.
+
+### `ore_generation_routes`
+
+Normalized vein and small-ore routes, including material role, internal
+dimension key, user-facing dimension name,
+height range, weight/density/size, and small-ore amount per chunk.
+The same normalized vein key may identify multiple initialized layers when GTNH
+registers that vein separately for different dimensions; the integer table ID
+identifies a layer, while queries intentionally group matching keys.
+When a fresh dump's recipe coverage is not acceptable, use
+`scripts/import_worldgen_db.sh` to atomically merge only its verified worldgen
+tables into an existing migrated schema-v2 recipe database.
+
+## Core tables
+
+- `manifest`
+- `items`, `fluids`, `ore_dict_entries`
+- `recipe_handlers`, `recipes`
+- `recipe_inputs`, `recipe_input_options`, `recipe_outputs`
+- `recipe_edges`, the materialized and indexed traversal layer used by the
+  model-facing route and ingredient views
+- `recipe_metadata`, `dump_errors`
+- `machine_capabilities`, `machine_options`
+- `ore_materials`, `ore_veins`, `ore_vein_materials`,
+  `ore_vein_dimensions`, `small_ores`, `small_ore_dimensions`
+
+Foreign keys use integer row IDs internally. Agent-facing joins should use the
+stable resource keys exposed by the views.
+
+## Production-line workflow
+
+Resolve a target:
 
 ```sql
-CREATE INDEX idx_items_registry_damage ON items(registry_name, damage);
-CREATE INDEX idx_recipe_inputs_recipe ON recipe_inputs(recipe_id);
-CREATE INDEX idx_recipe_outputs_recipe ON recipe_outputs(recipe_id);
-CREATE INDEX idx_recipes_handler ON recipes(handler_id);
+SELECT i.id, i.display_name, i.registry_name, i.damage
+FROM item_search s
+JOIN items i ON i.id = s.rowid
+WHERE item_search MATCH 'yttrium'
+ORDER BY i.display_name
+LIMIT 20
 ```
 
-## Sample Queries
-
-Find candidate items:
+Compare routes for exact Yttrium Dust:
 
 ```sql
-SELECT id, display_name, registry_name, damage
-FROM items
-WHERE lower(display_name) LIKE lower('%distillation tower%')
-   OR lower(registry_name) LIKE lower('%distillation tower%')
-ORDER BY display_name
-LIMIT 20;
+SELECT recipe_id, handler_name, capability_key, machine_name_hint,
+       voltage_tier, output_amount, chance, expected_output_amount, is_primary
+FROM recipe_routes
+WHERE output_resource_key = 'item:gregtech:gt.metaitem.01:2045'
+ORDER BY is_primary DESC, expected_output_amount DESC, eut, duration_ticks
+LIMIT 30
 ```
 
-List recipes that output an item:
+Fetch every input alternative for selected recipes in one query:
 
 ```sql
-SELECT r.id, r.recipe_key, h.name AS handler_name, r.category, r.duration_ticks, r.eut
-FROM recipes r
-JOIN recipe_handlers h ON h.id = r.handler_id
-JOIN recipe_outputs o ON o.recipe_id = r.id
-JOIN items i ON i.id = o.item_id
-WHERE i.registry_name = 'gregtech:gt.blockmachines' AND i.damage = 1126
-ORDER BY h.name, r.id
-LIMIT 20;
+SELECT recipe_id, input_position, option_index, input_resource_key,
+       input_name, input_amount, consumed, catalyst,
+       registry_name, damage
+FROM recipe_ingredients
+WHERE recipe_id IN (37955, 51984, 117182)
+ORDER BY recipe_id, input_position, option_index
 ```
 
-List inputs for one recipe. Use this shape for user-facing ingredient counts;
-`recipe_input_options.amount` is the resolved option quantity when present, and
-falls back to `recipe_inputs.amount` for optionless rows.
+Each input position is one required ingredient group across both item and fluid
+inputs. Rows sharing a position are alternatives; rows at different positions
+are simultaneous requirements.
 
-```sql
-SELECT
-  ri.position,
-  rio.option_index,
-  COALESCE(rio.kind, ri.kind) AS kind,
-  COALESCE(rio.amount, ri.amount) AS amount,
-  COALESCE(item.display_name, fluid.localized_name, rio.ore_name, rio.label, ri.label) AS ingredient,
-  item.registry_name,
-  item.damage
-FROM recipe_inputs ri
-LEFT JOIN recipe_input_options rio ON rio.input_id = ri.id
-LEFT JOIN items item ON item.id = rio.item_id
-LEFT JOIN fluids fluid ON fluid.id = rio.fluid_id
-WHERE ri.recipe_id = 123
-ORDER BY ri.position, rio.option_index;
-```
+Send the returned exact item identities to `inventory_totals` in one call.
+Compare totals with `input_amount`, then use `handler_machine_options` and placed
+block search—optionally filtered to dimension 183—to identify machine gaps.
+Recursively inspect recipes only for missing inputs on promising alternatives.
 
-List outputs for one recipe:
+## Required indexes
 
-```sql
-SELECT
-  ro.position,
-  ro.kind,
-  ro.amount,
-  COALESCE(item.display_name, fluid.localized_name, ro.label) AS output,
-  item.registry_name,
-  item.damage
-FROM recipe_outputs ro
-LEFT JOIN items item ON item.id = ro.item_id
-LEFT JOIN fluids fluid ON fluid.id = ro.fluid_id
-WHERE ro.recipe_id = 123
-ORDER BY ro.position;
-```
+Schema v2 indexes both traversal directions:
 
-Detect recipe rows with no material inputs:
+- recipe to inputs/outputs;
+- output item/fluid to producing recipes;
+- input option item/fluid/ore name to consuming recipes;
+- input to alternatives;
+- handler and usable-recipe filters;
+- machine capability to exact options;
+- ore material/dimension to generation routes;
+- FTS5 item-name search.
 
-```sql
-SELECT r.id, r.recipe_key, h.name AS handler_name, r.category
-FROM recipes r
-JOIN recipe_handlers h ON h.id = r.handler_id
-LEFT JOIN recipe_inputs i ON i.recipe_id = r.id
-WHERE i.recipe_id IS NULL
-LIMIT 50;
-```
+## Completeness rules
 
-## Validation Rules
+- `manifest.schema_version` must equal `2`.
+- `manifest.dump_complete=1` only when recipe and worldgen passes report no
+  record failures and every required source has nonzero coverage.
+- `manifest.worldgen_data_available=1` only when a successful dump contains ore
+  veins.
+- `crafting_recipe_count` and `furnace_recipe_count` are separate; furnace rows
+  cannot make a failed crafting pass appear complete.
+- Every output has a non-null normalized chance.
+- Partial recipe inserts are rolled back with a savepoint and recorded in
+  `dump_errors`.
+- `recipe_routes` must never expose invalid, hidden, fake, or disabled rows.
 
-- `manifest.schema_version` must exist.
-- `items`, `recipe_handlers`, `recipes`, and `recipe_outputs` must be non-empty.
-- Any recipe used for a build/material answer must have at least one
-  `recipe_inputs` row. Empty-input rows are data-quality warnings, not valid
-  no-material recipes.
-- Distillation Tower must return either non-empty candidate inputs or a clear
-  data-quality warning.
+Legacy schema-v1 files can be upgraded with
+`scripts/migrate_recipe_db_v2.sh`. The migration restores query structure and
+chance normalization but correctly leaves `dump_complete=0` and
+`worldgen_data_available=0` when the legacy dump lacks crafting/worldgen data.
+A fresh dump is required to fill those missing sources.

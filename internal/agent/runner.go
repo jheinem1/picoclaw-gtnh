@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"greggpt-gtnh/internal/agent/history"
@@ -17,8 +18,12 @@ import (
 
 const (
 	roleUser       = "user"
+	roleAssistant  = "assistant"
 	roleToolCall   = "tool_call"
 	roleToolOutput = "tool"
+
+	phaseCommentary  = "commentary"
+	phaseFinalAnswer = "final_answer"
 )
 
 type Client interface {
@@ -43,6 +48,13 @@ type Request struct {
 	Context         map[string]string
 	History         []history.Message
 	RecalledContext []history.RecallItem
+	OnCommentary    func(string)
+	Steering        <-chan SteeringMessage
+}
+
+type SteeringMessage struct {
+	Content      string
+	OnCommentary func(string)
 }
 
 type ModelRequest struct {
@@ -53,6 +65,7 @@ type ModelRequest struct {
 	Input              []InputItem
 	Tools              []ToolDefinition
 	DisableTools       bool
+	OnCommentary       func(string)
 }
 
 type InputItem struct {
@@ -60,12 +73,14 @@ type InputItem struct {
 	Content    string
 	ToolCallID string
 	ToolName   string
+	Phase      string
 }
 
 type ModelResponse struct {
-	ID        string
-	FinalText string
-	ToolCalls []ToolCall
+	ID         string
+	Commentary []string
+	FinalText  string
+	ToolCalls  []ToolCall
 }
 
 type ToolDefinition struct {
@@ -175,14 +190,65 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 	toolCalls := 0
 	progress := make([]toolProgress, 0, r.cfg.MaxToolCalls)
 
+	commentaryTarget := req.OnCommentary
 	for {
-		resp, err := r.client.CreateResponse(ctx, ModelRequest{
-			Model:           r.cfg.Model,
-			ReasoningEffort: r.cfg.ReasoningEffort,
-			Instructions:    instructions,
-			Input:           append([]InputItem(nil), input...),
-			Tools:           append([]ToolDefinition(nil), tools...),
-		})
+		onCommentary := func(text string) {
+			if commentaryTarget == nil {
+				return
+			}
+			if text = profile.formatFinal(text); text != "" {
+				commentaryTarget(text)
+			}
+		}
+		responseCtx, cancelResponse := context.WithCancel(ctx)
+		type responseResult struct {
+			response ModelResponse
+			err      error
+		}
+		responseCh := make(chan responseResult, 1)
+		go func() {
+			resp, err := r.client.CreateResponse(responseCtx, ModelRequest{
+				Model:           r.cfg.Model,
+				ReasoningEffort: r.cfg.ReasoningEffort,
+				Instructions:    instructions,
+				Input:           append([]InputItem(nil), input...),
+				Tools:           append([]ToolDefinition(nil), tools...),
+				OnCommentary:    onCommentary,
+			})
+			responseCh <- responseResult{response: resp, err: err}
+		}()
+
+		var resp ModelResponse
+		select {
+		case result := <-responseCh:
+			cancelResponse()
+			resp, err = result.response, result.err
+		case steering, open := <-req.Steering:
+			if !open {
+				req.Steering = nil
+				result := <-responseCh
+				cancelResponse()
+				resp, err = result.response, result.err
+				break
+			}
+			cancelResponse()
+			<-responseCh
+			if content := strings.TrimSpace(steering.Content); content != "" {
+				input = append(input, steeringInput(content))
+				commentaryTarget = firstCommentaryTarget(steering.OnCommentary, req.OnCommentary)
+			}
+			continue
+		case <-ctx.Done():
+			cancelResponse()
+			<-responseCh
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", TimeoutSummaryError{
+					Summary: r.recoverTimeoutSummary(profile, instructions, input, progress),
+					Cause:   ctx.Err(),
+				}
+			}
+			return "", ctx.Err()
+		}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return "", TimeoutSummaryError{
@@ -191,6 +257,23 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 				}
 			}
 			return "", err
+		}
+
+		for _, commentary := range resp.Commentary {
+			if commentary = strings.TrimSpace(commentary); commentary != "" {
+				input = append(input, InputItem{
+					Role:    roleAssistant,
+					Content: commentary,
+					Phase:   phaseCommentary,
+				})
+			}
+		}
+		if steering, ok := pendingSteering(req.Steering); ok {
+			if content := strings.TrimSpace(steering.Content); content != "" {
+				input = append(input, steeringInput(content))
+				commentaryTarget = firstCommentaryTarget(steering.OnCommentary, req.OnCommentary)
+			}
+			continue
 		}
 
 		if strings.TrimSpace(resp.FinalText) != "" {
@@ -224,6 +307,42 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 			})
 			toolCalls++
 		}
+	}
+}
+
+func steeringInput(content string) InputItem {
+	return InputItem{
+		Role:    roleUser,
+		Content: "Steering update from the user while the task was running:\n" + strings.TrimSpace(content),
+	}
+}
+
+func firstCommentaryTarget(primary, fallback func(string)) func(string) {
+	if primary == nil {
+		return fallback
+	}
+	var once sync.Once
+	return func(text string) {
+		usedPrimary := false
+		once.Do(func() {
+			usedPrimary = true
+			primary(text)
+		})
+		if !usedPrimary && fallback != nil {
+			fallback(text)
+		}
+	}
+}
+
+func pendingSteering(ch <-chan SteeringMessage) (SteeringMessage, bool) {
+	if ch == nil {
+		return SteeringMessage{}, false
+	}
+	select {
+	case steering, open := <-ch:
+		return steering, open
+	default:
+		return SteeringMessage{}, false
 	}
 }
 
@@ -275,6 +394,8 @@ func timeoutSummaryTranscript(input []InputItem) string {
 		switch item.Role {
 		case roleUser:
 			fmt.Fprintf(&b, "\n[%d] User/request context:\n<<<\n%s\n>>>\n", i+1, strings.TrimSpace(item.Content))
+		case roleAssistant:
+			fmt.Fprintf(&b, "\n[%d] Assistant %s:\n<<<\n%s\n>>>\n", i+1, strings.TrimSpace(item.Phase), strings.TrimSpace(item.Content))
 		case roleToolCall:
 			fmt.Fprintf(&b, "\n[%d] Tool call `%s` id=%s arguments:\n<<<\n%s\n>>>\n", i+1, strings.TrimSpace(item.ToolName), strings.TrimSpace(item.ToolCallID), strings.TrimSpace(defaultJSON(item.Content)))
 		case roleToolOutput:

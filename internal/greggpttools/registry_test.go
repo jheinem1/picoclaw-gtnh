@@ -64,6 +64,7 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
 		{"inventory_find", `{"item":"gregtech:gt.metaitem.01","any_damage":true,"player":"Snow","dim":183,"scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01", "--any-damage", "--player", "Snow", "--dim", "183", "--scope", "players", "--limit", "5"}},
+		{"inventory_totals", `{"items":["gregtech:gt.metaitem.01:2045","IC2:itemCellEmpty:0"],"dim":183,"scope":"all"}`, []string{"sh", "gtnh_inventory", "totals", "--item", "gregtech:gt.metaitem.01:2045", "--item", "IC2:itemCellEmpty:0", "--dim", "183", "--scope", "all"}},
 		{"inventory_find_item", `{"query":"steel ingot","player":"Snow","dim":183,"scope":"me","limit":7}`, []string{"sh", "gtnh_inventory", "find-item", "--query", "steel ingot", "--player", "Snow", "--dim", "183", "--scope", "me", "--limit", "7"}},
 		{"inventory_player", `{"name":"Snow","all":true}`, []string{"sh", "gtnh_inventory", "player", "--name", "Snow", "--all"}},
 		{"inventory_chest", `{"x":1,"y":64,"z":-2,"dim":-1}`, []string{"sh", "gtnh_inventory", "chest", "--x", "1", "--y", "64", "--z", "-2", "--dim", "-1"}},
@@ -241,10 +242,14 @@ func TestCorrectedToolSchemaRanges(t *testing.T) {
 
 func TestExecuteUsesConfiguredWorkspaceAndOutputLimit(t *testing.T) {
 	workspace := t.TempDir()
+	expectedWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatalf("resolve workspace symlinks: %v", err)
+	}
 	writeScript(t, workspace, "gtnh_tasks", "printf '%s\\n' \"$PWD\"; printf 'abcdef'")
 	cfg := DefaultConfig()
 	cfg.Workspace = workspace
-	cfg.MaxOutputBytes = len(workspace) + 2
+	cfg.MaxOutputBytes = len(expectedWorkspace) + 2
 	registry := testRegistry(t, cfg)
 
 	result, err := registry.Execute(context.Background(), "task_summary", json.RawMessage(`{}`))
@@ -254,8 +259,8 @@ func TestExecuteUsesConfiguredWorkspaceAndOutputLimit(t *testing.T) {
 	if !result.OK {
 		t.Fatalf("Execute result not OK: %+v", result)
 	}
-	if !strings.HasPrefix(result.Stdout, workspace+"\n") {
-		t.Fatalf("stdout = %q, want prefix %q", result.Stdout, workspace+"\n")
+	if !strings.HasPrefix(result.Stdout, expectedWorkspace+"\n") {
+		t.Fatalf("stdout = %q, want prefix %q", result.Stdout, expectedWorkspace+"\n")
 	}
 	if len(result.Stdout)+len(result.Stderr) > cfg.MaxOutputBytes {
 		t.Fatalf("output length = %d, want <= %d", len(result.Stdout)+len(result.Stderr), cfg.MaxOutputBytes)

@@ -7,20 +7,45 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	agentcore "greggpt-gtnh/internal/agent"
 	"greggpt-gtnh/internal/agent/history"
 )
 
 type fakeAgentRunner struct {
-	calls []AgentRequest
-	reply string
-	err   error
+	calls      []AgentRequest
+	reply      string
+	commentary []string
+	err        error
+}
+
+type steeringAgentRunner struct {
+	received chan agentcore.SteeringMessage
+}
+
+func (r *steeringAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentResponse, error) {
+	select {
+	case steering := <-req.Steering:
+		r.received <- steering
+		if steering.OnCommentary != nil {
+			steering.OnCommentary("Adjusting to your latest direction. This sentence is removed.")
+		}
+		return AgentResponse{Text: "Steve - asking for only the nearby chest: The wrench is there."}, nil
+	case <-ctx.Done():
+		return AgentResponse{}, ctx.Err()
+	}
 }
 
 func (f *fakeAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentResponse, error) {
 	f.calls = append(f.calls, req)
+	for _, update := range f.commentary {
+		if req.OnCommentary != nil {
+			req.OnCommentary(update)
+		}
+	}
 	if f.err != nil {
 		return AgentResponse{}, f.err
 	}
@@ -145,7 +170,7 @@ func TestAskAgentUsesRunner(t *testing.T) {
 
 	recent := []history.Message{{Source: agentChannelMinecraft, AuthorName: "Alex", Content: "I need a wrench"}}
 	recalled := []history.RecallItem{{Message: history.Message{Source: agentChannelMinecraft, AuthorName: "Alex", Content: "The wrench was in the LV chest"}, Reason: "fts"}}
-	got, err := askAgent(runner, cfg, ev, "mc:relay:test", false, recent, recalled)
+	got, err := askAgent(runner, cfg, ev, "mc:relay:test", false, recent, recalled, nil, nil)
 	if err != nil {
 		t.Fatalf("askAgent failed: %v", err)
 	}
@@ -162,8 +187,14 @@ func TestAskAgentUsesRunner(t *testing.T) {
 	if call.Session != "mc:relay:test" {
 		t.Fatalf("unexpected session: %q", call.Session)
 	}
-	if !strings.Contains(call.Message, "Minecraft player 'Steve' asked") {
+	if !strings.Contains(call.Message, `Minecraft player "Steve" says`) {
 		t.Fatalf("prompt did not include player context: %q", call.Message)
+	}
+	if !strings.Contains(call.Message, "Treat clearly fictional Minecraft or factory roleplay as fiction") {
+		t.Fatalf("prompt did not preserve fictional Minecraft context: %q", call.Message)
+	}
+	if strings.Contains(call.Message, "briefly restate what you understood") || strings.Contains(call.Message, "Use the compact shape") {
+		t.Fatalf("prompt still requires the repetitive interpretation preamble: %q", call.Message)
 	}
 	if !reflect.DeepEqual(call.RecentHistory, recent) {
 		t.Fatalf("recent history was not passed through: got=%#v want=%#v", call.RecentHistory, recent)
@@ -178,7 +209,7 @@ func TestAskAgentRecipePromptUsesRecipeSQL(t *testing.T) {
 	cfg := Config{AgentTimeout: time.Second}
 	ev := ConsoleEvent{Player: "Steve", Text: "greg what recipe should I use for a distillation tower?"}
 
-	if _, err := askAgent(runner, cfg, ev, "mc:relay:recipe", true, nil, nil); err != nil {
+	if _, err := askAgent(runner, cfg, ev, "mc:relay:recipe", true, nil, nil, nil, nil); err != nil {
 		t.Fatalf("askAgent failed: %v", err)
 	}
 	if len(runner.calls) != 1 {
@@ -188,8 +219,8 @@ func TestAskAgentRecipePromptUsesRecipeSQL(t *testing.T) {
 	if !strings.Contains(prompt, "recipe_sql") {
 		t.Fatalf("prompt missing recipe_sql guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Preserve SQL quantities exactly") || !strings.Contains(prompt, "recipe_input_options.amount") || !strings.Contains(prompt, "recipe_inputs.amount") {
-		t.Fatalf("prompt missing recipe quantity preservation guidance: %q", prompt)
+	if !strings.Contains(prompt, "Preserve returned quantities and freshness exactly") {
+		t.Fatalf("prompt missing concise lookup accuracy guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "gtnh_resolve_recipes") || strings.Contains(prompt, "gtnh_search_recipes") || strings.Contains(prompt, "gtnh_find_item") {
 		t.Fatalf("prompt still references old recipe wrappers: %q", prompt)
@@ -268,6 +299,165 @@ func TestProcessOnceUsesFakeAgentRunnerAndSaysReply(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls[0].RecalledContext, history.recalled) {
 		t.Fatalf("recalled context was not passed to runner: got=%#v", runner.calls[0].RecalledContext)
+	}
+}
+
+func TestProcessOncePublishesOneSentenceCommentaryBeforeFinalReply(t *testing.T) {
+	var said []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mc/console":
+			_ = json.NewEncoder(w).Encode(ConsoleResponse{
+				OK:    true,
+				Count: 1,
+				Events: []ConsoleEvent{{
+					EventID:   "event-commentary",
+					Timestamp: "2026-04-28T00:00:00Z",
+					Player:    "Steve",
+					Text:      "greg where is my wrench?",
+					Triggered: true,
+				}},
+			})
+		case "/mc/say":
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode say payload: %v", err)
+			}
+			said = append(said, payload["text"])
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		BridgeURL:          server.URL,
+		ConsoleLines:       10,
+		ReplyMaxChars:      180,
+		MaxReplyParts:      4,
+		StateFile:          t.TempDir() + "/state.json",
+		SessionPrefix:      "mc:relay",
+		AgentTimeout:       time.Second,
+		HTTPTimeout:        time.Second,
+		ProgressEnabled:    true,
+		ProgressMaxUpdates: 2,
+	}
+	state := State{Initialized: true, Seen: map[string]int64{}}
+	runner := &fakeAgentRunner{
+		reply: "Steve - asking where your wrench is: It is in the LV chest.",
+		commentary: []string{
+			"Checking the inventory index. This second sentence must be removed.",
+			"Checking the inventory index. This duplicate must be removed.",
+			"Comparing nearby chests! This second sentence must be removed.",
+			"This update exceeds the configured cap.",
+		},
+	}
+	history := &fakeHistoryStore{}
+
+	processOnceWithHistory(server.Client(), cfg, &state, runner, history)
+
+	want := []string{
+		"Checking the inventory index.",
+		"Comparing nearby chests!",
+		"Steve - asking where your wrench is: It is in the LV chest.",
+	}
+	if !reflect.DeepEqual(said, want) {
+		t.Fatalf("unexpected Minecraft message order: got=%#v want=%#v", said, want)
+	}
+	if len(history.recordedReplies) != 1 || history.recordedReplies[0].Content != want[2] {
+		t.Fatalf("commentary should not be recorded in history: %#v", history.recordedReplies)
+	}
+}
+
+func TestProcessOnceAcceptsUntriggeredSamePlayerMessageAsSteering(t *testing.T) {
+	var mu sync.Mutex
+	consoleCalls := 0
+	var said []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mc/console":
+			mu.Lock()
+			consoleCalls++
+			call := consoleCalls
+			mu.Unlock()
+			events := []ConsoleEvent{{
+				EventID:   "event-original",
+				Timestamp: "2026-04-28T00:00:00Z",
+				Player:    "Steve",
+				Text:      "greg find my wrench",
+				Triggered: true,
+			}}
+			if call > 1 {
+				events = append(events, ConsoleEvent{
+					EventID:   "event-steering",
+					Timestamp: "2026-04-28T00:00:01Z",
+					Player:    "Steve",
+					Text:      "only check the nearby chest",
+					Triggered: false,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(ConsoleResponse{OK: true, Count: len(events), Events: events})
+		case "/mc/say":
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode say payload: %v", err)
+			}
+			mu.Lock()
+			said = append(said, payload["text"])
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		BridgeURL:            server.URL,
+		ConsoleLines:         10,
+		ReplyMaxChars:        180,
+		MaxReplyParts:        4,
+		StateFile:            t.TempDir() + "/state.json",
+		SessionPrefix:        "mc:relay",
+		AgentTimeout:         time.Second,
+		HTTPTimeout:          time.Second,
+		ProgressEnabled:      true,
+		ProgressMaxUpdates:   3,
+		SteeringPollInterval: 5 * time.Millisecond,
+	}
+	state := State{Initialized: true, Seen: map[string]int64{}}
+	runner := &steeringAgentRunner{received: make(chan agentcore.SteeringMessage, 1)}
+	history := &fakeHistoryStore{}
+
+	processOnceWithHistory(server.Client(), cfg, &state, runner, history)
+
+	steering := <-runner.received
+	if steering.Content != "only check the nearby chest" {
+		t.Fatalf("steering content = %q", steering.Content)
+	}
+	mu.Lock()
+	gotSaid := append([]string(nil), said...)
+	mu.Unlock()
+	wantSaid := []string{
+		"Adjusting to your latest direction.",
+		"Steve - asking for only the nearby chest: The wrench is there.",
+	}
+	if !reflect.DeepEqual(gotSaid, wantSaid) {
+		t.Fatalf("Minecraft messages = %#v, want %#v", gotSaid, wantSaid)
+	}
+	if _, ok := state.Seen["event-steering"]; !ok {
+		t.Fatal("steering event was not marked seen")
+	}
+	if len(history.recordedChats) != 2 {
+		t.Fatalf("original and steering chat should be recorded: %#v", history.recordedChats)
+	}
+}
+
+func TestOneSentenceForMCTruncatesToChatLimit(t *testing.T) {
+	got := oneSentenceForMC("Checking   the inventory index without punctuation\nand another line", 24)
+	if got != "Checking the inventory" {
+		t.Fatalf("unexpected commentary truncation: %q", got)
 	}
 }
 

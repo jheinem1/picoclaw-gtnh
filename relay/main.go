@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	agentcore "greggpt-gtnh/internal/agent"
 	"greggpt-gtnh/internal/agent/history"
@@ -28,20 +29,23 @@ import (
 )
 
 type Config struct {
-	BridgeURL          string
-	PollInterval       time.Duration
-	ConsoleLines       int
-	ReplyMaxChars      int
-	MaxReplyParts      int
-	StateFile          string
-	SessionPrefix      string
-	AgentTimeout       time.Duration
-	HTTPTimeout        time.Duration
-	Workspace          string
-	HistoryEnabled     bool
-	HistoryPath        string
-	HistoryMaxMessages int
-	RecallMaxItems     int
+	BridgeURL            string
+	PollInterval         time.Duration
+	ConsoleLines         int
+	ReplyMaxChars        int
+	MaxReplyParts        int
+	StateFile            string
+	SessionPrefix        string
+	AgentTimeout         time.Duration
+	HTTPTimeout          time.Duration
+	Workspace            string
+	HistoryEnabled       bool
+	HistoryPath          string
+	HistoryMaxMessages   int
+	RecallMaxItems       int
+	ProgressEnabled      bool
+	ProgressMaxUpdates   int
+	SteeringPollInterval time.Duration
 }
 
 type State struct {
@@ -76,6 +80,8 @@ type AgentRequest struct {
 	Message         string
 	RecentHistory   []history.Message
 	RecalledContext []history.RecallItem
+	OnCommentary    func(string)
+	Steering        <-chan agentcore.SteeringMessage
 }
 
 type AgentResponse struct {
@@ -113,6 +119,8 @@ func (r *sharedAgentRunner) Run(ctx context.Context, req AgentRequest) (AgentRes
 		},
 		History:         append([]history.Message(nil), req.RecentHistory...),
 		RecalledContext: append([]history.RecallItem(nil), req.RecalledContext...),
+		OnCommentary:    req.OnCommentary,
+		Steering:        req.Steering,
 	}
 	text, err := r.runner.Run(ctx, coreReq)
 	if err != nil {
@@ -185,20 +193,23 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		BridgeURL:          strings.TrimRight(getenv("DATHOST_BRIDGE_URL", "http://dathost-bridge:8080"), "/"),
-		PollInterval:       time.Duration(poll) * time.Second,
-		ConsoleLines:       getenvInt("DATHOST_CONSOLE_LINES", 500),
-		ReplyMaxChars:      getenvInt("MC_REPLY_MAX_CHARS", 180),
-		MaxReplyParts:      getenvInt("MC_REPLY_MAX_PARTS", 4),
-		StateFile:          getenv("MC_RELAY_STATE_FILE", "/var/lib/mc-relay/state.json"),
-		SessionPrefix:      getenv("MC_RELAY_SESSION", "mc:relay"),
-		AgentTimeout:       time.Duration(getenvInt(greggptEnvAgentTimeout, 60)) * time.Second,
-		HTTPTimeout:        time.Duration(getenvInt("MC_RELAY_HTTP_TIMEOUT_SECONDS", 20)) * time.Second,
-		Workspace:          getenv(greggptEnvWorkspace, greggptDefaultWorkspace),
-		HistoryEnabled:     getenvBool(agentcore.EnvHistoryEnabled, true),
-		HistoryPath:        getenv(agentcore.EnvHistoryPath, agentcore.DefaultHistoryPath),
-		HistoryMaxMessages: getenvInt(agentcore.EnvHistoryMaxMessages, agentcore.DefaultHistoryMessages),
-		RecallMaxItems:     getenvInt(agentcore.EnvRecallMaxItems, agentcore.DefaultRecallMaxItems),
+		BridgeURL:            strings.TrimRight(getenv("DATHOST_BRIDGE_URL", "http://dathost-bridge:8080"), "/"),
+		PollInterval:         time.Duration(poll) * time.Second,
+		ConsoleLines:         getenvInt("DATHOST_CONSOLE_LINES", 500),
+		ReplyMaxChars:        getenvInt("MC_REPLY_MAX_CHARS", 180),
+		MaxReplyParts:        getenvInt("MC_REPLY_MAX_PARTS", 4),
+		StateFile:            getenv("MC_RELAY_STATE_FILE", "/var/lib/mc-relay/state.json"),
+		SessionPrefix:        getenv("MC_RELAY_SESSION", "mc:relay"),
+		AgentTimeout:         time.Duration(getenvInt(greggptEnvAgentTimeout, 60)) * time.Second,
+		HTTPTimeout:          time.Duration(getenvInt("MC_RELAY_HTTP_TIMEOUT_SECONDS", 20)) * time.Second,
+		Workspace:            getenv(greggptEnvWorkspace, greggptDefaultWorkspace),
+		HistoryEnabled:       getenvBool(agentcore.EnvHistoryEnabled, true),
+		HistoryPath:          getenv(agentcore.EnvHistoryPath, agentcore.DefaultHistoryPath),
+		HistoryMaxMessages:   getenvInt(agentcore.EnvHistoryMaxMessages, agentcore.DefaultHistoryMessages),
+		RecallMaxItems:       getenvInt(agentcore.EnvRecallMaxItems, agentcore.DefaultRecallMaxItems),
+		ProgressEnabled:      getenvBool("GREGGPT_MINECRAFT_PROGRESS_ENABLED", true),
+		ProgressMaxUpdates:   getenvInt("GREGGPT_MINECRAFT_PROGRESS_MAX_UPDATES", 3),
+		SteeringPollInterval: time.Duration(getenvInt("GREGGPT_MINECRAFT_STEERING_POLL_SECONDS", 2)) * time.Second,
 	}
 }
 
@@ -284,8 +295,12 @@ func pruneSeen(st *State, max int) {
 }
 
 func getConsole(client *http.Client, cfg Config) (ConsoleResponse, error) {
+	return getConsoleWithContext(context.Background(), client, cfg)
+}
+
+func getConsoleWithContext(ctx context.Context, client *http.Client, cfg Config) (ConsoleResponse, error) {
 	url := fmt.Sprintf("%s/mc/console?lines=%d", cfg.BridgeURL, cfg.ConsoleLines)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ConsoleResponse{}, err
 	}
@@ -325,6 +340,123 @@ func say(client *http.Client, cfg Config, text string) error {
 	return nil
 }
 
+type minecraftCommentaryPublisher struct {
+	client    *http.Client
+	cfg       Config
+	eventID   string
+	player    string
+	sent      map[string]struct{}
+	sentCount int
+}
+
+func newMinecraftCommentaryPublisher(client *http.Client, cfg Config, eventID, player string) *minecraftCommentaryPublisher {
+	return &minecraftCommentaryPublisher{
+		client:  client,
+		cfg:     cfg,
+		eventID: eventID,
+		player:  player,
+		sent:    make(map[string]struct{}),
+	}
+}
+
+func (p *minecraftCommentaryPublisher) Publish(text string) {
+	if p == nil || p.client == nil || !p.cfg.ProgressEnabled {
+		return
+	}
+	text = oneSentenceForMC(text, p.cfg.ReplyMaxChars)
+	if text == "" {
+		return
+	}
+	if _, exists := p.sent[text]; exists {
+		return
+	}
+	if p.cfg.ProgressMaxUpdates > 0 && p.sentCount >= p.cfg.ProgressMaxUpdates {
+		log.Printf("event=commentary_suppressed event_id=%q player=%q reason=max_updates", p.eventID, p.player)
+		return
+	}
+	if err := say(p.client, p.cfg, text); err != nil {
+		log.Printf("event=commentary_send_error event_id=%q player=%q err=%q", p.eventID, p.player, err.Error())
+		return
+	}
+	p.sent[text] = struct{}{}
+	p.sentCount++
+	log.Printf("event=commentary_sent event_id=%q player=%q commentary_len=%d", p.eventID, p.player, len([]rune(text)))
+}
+
+func oneSentenceForMC(text string, maxChars int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	for i, r := range runes {
+		if r != '.' && r != '!' && r != '?' {
+			continue
+		}
+		if i == len(runes)-1 || unicode.IsSpace(runes[i+1]) {
+			runes = runes[:i+1]
+			break
+		}
+	}
+	parts := splitForMC(string(runes), maxChars, 1)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
+func startMinecraftSteeringMonitor(client *http.Client, cfg Config, st *State, history HistoryStore, activePlayer string, onCommentary func(string)) (<-chan agentcore.SteeringMessage, func()) {
+	steering := make(chan agentcore.SteeringMessage, 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	interval := cfg.SteeringPollInterval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				resp, err := getConsoleWithContext(ctx, client, cfg)
+				if err != nil {
+					log.Printf("event=steering_poll_error player=%q err=%q", activePlayer, err.Error())
+					continue
+				}
+				for _, ev := range resp.Events {
+					if !strings.EqualFold(strings.TrimSpace(ev.Player), strings.TrimSpace(activePlayer)) || strings.TrimSpace(ev.Text) == "" {
+						continue
+					}
+					id := firstNonEmpty(ev.EventID, fallbackID(ev))
+					if _, seen := st.Seen[id]; seen {
+						continue
+					}
+					message := agentcore.SteeringMessage{Content: strings.TrimSpace(ev.Text), OnCommentary: onCommentary}
+					select {
+					case steering <- message:
+						st.Seen[id] = time.Now().Unix()
+						recordMinecraftChat(history, ev)
+						pruneSeen(st, 10000)
+						saveState(cfg.StateFile, *st)
+						log.Printf("event=steering_queued event_id=%q player=%q content_len=%d", id, ev.Player, len(ev.Text))
+					default:
+						log.Printf("event=steering_dropped event_id=%q player=%q reason=queue_full", id, ev.Player)
+					}
+				}
+			}
+		}
+	}()
+	stop := func() {
+		cancel()
+		<-done
+	}
+	return steering, stop
+}
+
 func trimChars(s string, max int) string {
 	r := []rune(strings.TrimSpace(s))
 	if len(r) <= max {
@@ -333,7 +465,7 @@ func trimChars(s string, max int) string {
 	return string(r[:max])
 }
 
-func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string, recent []history.Message, recalled []history.RecallItem) (string, error) {
+func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string, recent []history.Message, recalled []history.RecallItem, onCommentary func(string), steering <-chan agentcore.SteeringMessage) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.AgentTimeout)
 	defer cancel()
 	out, err := runner.Run(ctx, AgentRequest{
@@ -342,6 +474,8 @@ func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string, 
 		Message:         prompt,
 		RecentHistory:   append([]history.Message(nil), recent...),
 		RecalledContext: append([]history.RecallItem(nil), recalled...),
+		OnCommentary:    onCommentary,
+		Steering:        steering,
 	})
 	if err != nil {
 		return "", fmt.Errorf("agent call failed: %w", err)
@@ -353,55 +487,24 @@ func askAgentWithPrompt(runner AgentRunner, cfg Config, session, prompt string, 
 	return text, nil
 }
 
-func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, mustVerify bool, recent []history.Message, recalled []history.RecallItem) (string, error) {
-	prompt := fmt.Sprintf("Minecraft player '%s' asked: %q. Reply as GregGPT in GTNH context by default. Keep it concise, plain text, no markdown.", ev.Player, ev.Text)
-	prompt += "\nTool execution rule: execute one direct workspace command only; do not use cd, &&, pipes, or chained shell fragments."
+func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, mustVerify bool, recent []history.Message, recalled []history.RecallItem, onCommentary func(string), steering <-chan agentcore.SteeringMessage) (string, error) {
+	prompt := fmt.Sprintf("Minecraft player %q says: %q. Reply directly as GregGPT in GTNH context. Keep it concise, ASCII plain text, and do not add a routine summary or '<player> - asking ...' preamble.", ev.Player, ev.Text)
+	prompt += "\nTreat clearly fictional Minecraft or factory roleplay as fiction. Give real-world emergency guidance only when the player clearly indicates real-world danger; if that distinction is genuinely unclear, ask one brief clarifying question."
 	prompt += "\nDo not claim a command was blocked by safety guard unless a tool call in this same turn returned stderr containing that exact phrase."
-	if taskMutationIntentRe.MatchString(ev.Text) {
-		prompt += "\nIf this is a GTNH task-management request, you should execute the task command directly in workspace using sh gtnh_tasks, then reply with the command result."
-		prompt += "\nYou do have access to task tools. Do not claim you cannot run board commands."
-		prompt += "\nUseful commands: sh gtnh_tasks assign <id> <owner> [<owner> ...], sh gtnh_tasks unassign <id> <owner> [<owner> ...], sh gtnh_tasks reassign <id> <owner> [<owner> ...], sh gtnh_tasks move <id> --status todo|doing|paused|done [--owner <id> ...] [--reason \"...\"], sh gtnh_tasks pause <id> \"...\", sh gtnh_tasks unpause <id>, sh gtnh_tasks describe <id> \"...\", sh gtnh_tasks status-update <id> \"...\"."
-		prompt += "\nUse assign to add one or more owners without removing the existing ones."
-		prompt += "\nUse unassign to remove one or more owners while keeping any others that remain."
-		prompt += "\nUse reassign only when you want to replace the entire owner list."
-		prompt += "\nFor requests to add a progress update or status update to an existing task, use exactly: sh gtnh_tasks status-update <id> \"<update text>\"."
-		prompt += "\nDo not invent alternate task-update commands, and do not prepend cd or use shell chaining."
-	}
-	if inventoryIntentRe.MatchString(ev.Text) {
-		prompt += "\nIf this asks who has an item, where an item is stored, or chest/inventory location, run exactly one inventory command (no cd/&& chaining) and answer only from that command output."
-		prompt += "\nUseful commands: sh gtnh_inventory status; sh gtnh_inventory find --item <mod:name[:damage]> [--scope players|containers|me|all] [--limit <n>] for exact lookups; sh gtnh_inventory find-item --query \"<name>\" [--scope players|containers|me|all] [--limit <n>] for natural-language requests; sh gtnh_inventory player --name <player>|--uuid <uuid>; sh gtnh_inventory chest --x <int> --y <int> --z <int> [--dim 0|-1|1]."
-		prompt += "\nIf the request names a specific player (for example __exx), include --player <name> in gtnh_inventory find to avoid top-N false negatives."
-		prompt += "\nDo not claim you lack access to inventory/chest data if these tools are available."
-		prompt += "\nUse --scope all by default. Use --scope me when the player explicitly asks about the ME system. Include the Freshness line from the tool output in the answer."
-		prompt += "\nFor name-based requests (for example steel ingot), use sh gtnh_inventory find-item --query \"<name>\" first; do not guess numeric IDs."
-		prompt += "\nStale fallback is forbidden: do not say jq/curl is missing unless the command you ran in this turn returned that exact stderr."
-		prompt += "\nIf find is called with --id but without --damage, treat it as invalid input and rerun with --item or find-item."
-		prompt += "\nValidate output before answering: accepted markers are lines starting with Inventory find, Inventory Index Status, Resolved item, or error:. If markers are missing, treat as tool failure and retry once."
-		prompt += "\nMinecraft coordinate format: use JourneyMap-style tags like [x:<num>, y:<num>, z:<num>, dim:<num>] and include count=<num> outside the brackets when relevant."
-	}
 	if mustVerify {
-		prompt += "\nVerification is required for this question. Prefer hosted web verification from the GTNH wiki (wiki.gtnewhorizons.com) when possible; use recipe_sql for recipe and item metadata, or inventory tools for storage/location questions."
-		prompt += "\nBefore answering, you must use either hosted web search, recipe_sql, or one concrete local lookup command and base the reply on that output."
-		prompt += "\nUse the command that matches user intent:"
-		prompt += "\n- specific wiki page summary: sh gtnh_wiki_page \"<title>\""
-		prompt += "\n- inventory item storage lookup: sh gtnh_inventory find-item --query \"<query>\" --scope all"
-		prompt += "\n- recipe lookup: use recipe_sql to query greggpt_recipes.sqlite"
-		prompt += "\nFor recipe or missing-material questions with multiple recipe rows, list concise choices and ask which recipe path to use unless the user named a machine/path."
-		prompt += "\nFor recipe ingredients, identify the exact recipe row first, then query inputs for that recipe_id. Preserve SQL quantities exactly: use recipe_input_options.amount when present, otherwise recipe_inputs.amount. Do not infer or rewrite counts from memory."
-		prompt += "\nIf lookup is ambiguous or missing, ask one concise clarifying question and do not present failure as final."
-		prompt += "\nDo not claim you need the user to provide a page before searching. Try one lookup first, then clarify only if results are ambiguous."
+		prompt += "\nVerify current facts with the appropriate native tool before answering: recipe_sql for recipes, inventory tools for live stock and locations, quest tools for progression, and GTNH wiki lookup for documentation. Preserve returned quantities and freshness exactly. If the result is ambiguous, ask one concise clarifying question."
 	}
 
-	reply, err := askAgentWithPrompt(runner, cfg, session, prompt, recent, recalled)
+	reply, err := askAgentWithPrompt(runner, cfg, session, prompt, recent, recalled, onCommentary, steering)
 	if err == nil {
 		return reply, nil
 	}
 
 	// Retry once with stricter guidance in a fresh session to avoid bad tool-call loops.
 	retryPrompt := fmt.Sprintf(
-		"Reply concisely. Prefer GTNH context. Do not run more than one tool call. If lookup fails, say you could not resolve it from current snapshot.",
+		"Reply directly and concisely to Minecraft player %q in GTNH context, without an '<player> - asking ...' preamble. If a required lookup fails, say you could not resolve it from the current snapshot.", ev.Player,
 	)
-	retryReply, retryErr := askAgentWithPrompt(runner, cfg, session+":retry", retryPrompt+"\n\nUser: "+ev.Text, recent, recalled)
+	retryReply, retryErr := askAgentWithPrompt(runner, cfg, session+":retry", retryPrompt+"\n\nUser: "+ev.Text, recent, recalled, onCommentary, steering)
 	if retryErr == nil {
 		return retryReply, nil
 	}
@@ -806,7 +909,14 @@ func processOnceWithHistory(client *http.Client, cfg Config, st *State, runner A
 
 		mustVerify := needsVerification(ev.Text)
 		recent, recalled := historyContext(history, cfg, ev)
-		reply, err := askAgent(runner, cfg, ev, sessionForEvent(cfg, id), mustVerify, recent, recalled)
+		var onCommentary func(string)
+		if cfg.ProgressEnabled {
+			commentary := newMinecraftCommentaryPublisher(client, cfg, id, ev.Player)
+			onCommentary = commentary.Publish
+		}
+		steering, stopSteering := startMinecraftSteeringMonitor(client, cfg, st, history, ev.Player, onCommentary)
+		reply, err := askAgent(runner, cfg, ev, sessionForEvent(cfg, id), mustVerify, recent, recalled, onCommentary, steering)
+		stopSteering()
 		if err != nil {
 			fallbackCount++
 			log.Printf("event=agent_error event_id=%q player=%q err=%q", id, ev.Player, err.Error())

@@ -31,6 +31,7 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 - `scripts/setup_pi_runtime.sh`: install Podman/runtime on Pi
 - `scripts/deploy_to_pi.sh`: rsync project to Pi
 - `scripts/deploy_prebuilt_to_pi.sh`: cross-compile every Go service locally, deploy the ARM64 images, and recreate the full Pi stack without Pi-side compilation
+- `scripts/deploy_discord_prebuilt_to_pi.sh`: transfer an already-built Discord ARM64 image and recreate only `discord-commands`, without syncing source or restarting sibling services
 - `scripts/build_pi_images.sh`: cross-compile all Go binaries and build/export ARM64 Podman images locally for Pi deployment
 - `scripts/install_user_service.sh`: install `systemd --user` service on Pi
 - `scripts/login_greggpt_oauth_on_pi.sh`: run an isolated Codex device-code login on the workstation and atomically install the resulting credentials on the Pi
@@ -93,6 +94,7 @@ Scripts that use this exact access pattern:
 - `scripts/setup_pi_runtime.sh`
 - `scripts/deploy_to_pi.sh`
 - `scripts/deploy_prebuilt_to_pi.sh`
+- `scripts/deploy_discord_prebuilt_to_pi.sh`
 - `scripts/install_user_service.sh`
 - `scripts/login_greggpt_oauth_on_pi.sh`
 - `scripts/set_discord_token.sh`
@@ -108,7 +110,11 @@ Scripts that use this exact access pattern:
 
 The setup script refuses to switch graphroots when the old rootless Podman store still contains images or containers; migrate or clear that old store deliberately first. The deployment script also verifies the graphroot before loading images.
 
-`scripts/deploy_to_pi.sh` creates or validates the flash-backed workspace symlink before syncing and uses `rsync --keep-dirlinks`, so a deploy cannot silently replace the symlink with a boot-drive directory. `scripts/deploy_prebuilt_to_pi.sh` locally builds and deploys `dathost-bridge`, `mc-relay`, `discord-commands`, `kanban-sync`, `inventory-sync`, and the shared inventory-query helpers.
+`scripts/deploy_to_pi.sh` creates or validates the flash-backed workspace symlink before syncing and uses `rsync --keep-dirlinks`, so a deploy cannot silently replace the symlink with a boot-drive directory. `scripts/deploy_prebuilt_to_pi.sh` locally builds and deploys `dathost-bridge`, `mc-relay`, `discord-commands`, `kanban-sync`, `inventory-sync`, and the shared inventory-query helpers. After `scripts/build_pi_images.sh`, use `scripts/deploy_discord_prebuilt_to_pi.sh` or `scripts/deploy_mc_relay_prebuilt_to_pi.sh` for an isolated agent-service rollout that must not sync concurrent source changes or restart the other services.
+
+For Minecraft tool-backed requests, `mc-relay` publishes model-authored commentary through `/mc/say` before the final answer. Commentary is permanent, so the relay keeps only the first sentence, applies the Minecraft chat-length limit, deduplicates identical updates, and defaults to three updates per request. Set `GREGGPT_MINECRAFT_PROGRESS_ENABLED=false` to disable it or change `GREGGPT_MINECRAFT_PROGRESS_MAX_UPDATES` to adjust the cap. Commentary is not written to chat history, and raw reasoning or reasoning summaries are never published. Final replies identify the player and restate the interpreted question before answering.
+
+Active GregGPT tasks accept live steering. In Discord, any subsequent non-empty message from the same user in the same channel is queued into the active task without another bot mention; the first model-authored acknowledgement is posted as a temporary reply to that steering message. In Minecraft, `mc-relay` polls during the active model call and treats new chat from the same player as steering without requiring the normal trigger substring. Outside an active task, existing Discord mention and Minecraft trigger rules still apply. Set `GREGGPT_MINECRAFT_STEERING_POLL_SECONDS` to tune the Minecraft steering poll interval (default: 2 seconds).
 
 ## GTNH query workflow
 Runtime mount is index-only (`data/gtnh_runtime`), intentionally excluding full raw dumps.
@@ -117,9 +123,12 @@ Use indexed queries:
 - Build recipe SQLite dump mod: `scripts/build_recipe_dump_mod.sh`
 - Install recipe SQLite dump mod: `scripts/install_recipe_dump_mod.sh "/path/to/instance/minecraft"`
 - Import generated recipe DB: `scripts/import_recipe_db.sh "/path/to/instance/minecraft/dumps/greggpt_recipes.sqlite"`
+- Merge only verified worldgen rows into an existing schema-v2 recipe DB: `scripts/import_worldgen_db.sh "/path/to/fresh/greggpt_recipes.sqlite"`
+- Upgrade a legacy recipe DB for compatibility: `scripts/migrate_recipe_db_v2.sh "/path/to/greggpt_recipes.sqlite"` (missing crafting/worldgen sources remain explicitly incomplete)
 - Build ore-dict index after importing a real dump: `workspace/tools/build_oredict_index.py`
 - Prepare runtime dataset: `scripts/prepare_runtime_data.sh`
-- Recipe data for GregGPT: use the single `recipe_sql` tool against `gtnh-data/index/greggpt_recipes.sqlite`
+- Recipe data for GregGPT: use `recipe_sql` against `gtnh-data/index/greggpt_recipes.sqlite`; prefer the schema-v2 `resource_catalog`, `recipe_routes`, `recipe_ingredients`, and `handler_machine_options` views
+- Ore veins, small ores, Y ranges, and dimensions: use `ore_generation_lookup` against the same schema-v2 database
 - Wiki topic verification uses the hosted OpenAI web search tool restricted to `wiki.gtnewhorizons.com`.
 - Inventory/storage lookup uses `sh gtnh_inventory find-item --query "<name>" --scope all`.
 - Focused commands:
@@ -252,6 +261,7 @@ Index outputs written under workspace state:
 Commands from workspace root:
 - `sh gtnh_inventory status`
 - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
+- `sh gtnh_inventory totals --item <mod:name:damage> [--item <mod:name:damage> ...] [--scope players|chests|containers|me|both|all] [--dim <id>]`
 - `sh gtnh_inventory find-item --query "<name>" [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
 - `sh gtnh_inventory find-block --block "<name>" [--limit <n>]`
 - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
@@ -333,6 +343,11 @@ Env vars in `deploy/env/greggpt.env`:
 - `INVENTORY_SCAN_DIMS` (defaults to `0,-1,1,183`; dimension 183 is the shared pocket dimension)
 - `INVENTORY_MAX_REGION_FILES_PER_RUN`
 - `INVENTORY_CHEST_BOUNDS` (`dim,min_x,min_z,max_x,max_z`; optional chest scan bounding box)
+
+The ME and block-inventory exporters are fetched before an all-region chest pass, so a slow
+world scan cannot delay pocket-dimension machine data. Chest scheduling records the last
+attempt as well as the last successful snapshot; failed complete scans retain the previous
+snapshot and wait for the configured interval instead of retrying every loop.
 
 ## DatHost bridge workflow (v1)
 The bridge is chat-only in v1:

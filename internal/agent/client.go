@@ -73,7 +73,7 @@ func (c *CodexClient) CreateResponse(ctx context.Context, request ResponseReques
 	return client.Responses.New(ctx, request)
 }
 
-func (c *CodexClient) CreateStreamingResponse(ctx context.Context, request ResponseRequest) (*Response, error) {
+func (c *CodexClient) CreateStreamingResponse(ctx context.Context, request ResponseRequest, onCommentary func(string)) (*Response, error) {
 	client, err := c.openAIClient(ctx)
 	if err != nil {
 		return nil, err
@@ -84,6 +84,7 @@ func (c *CodexClient) CreateStreamingResponse(ctx context.Context, request Respo
 
 	var last *Response
 	var output []responses.ResponseOutputItemUnion
+	emittedCommentary := map[string]struct{}{}
 	for stream.Next() {
 		event := stream.Current()
 		switch event.Type {
@@ -91,12 +92,15 @@ func (c *CodexClient) CreateStreamingResponse(ctx context.Context, request Respo
 			resp := event.Response
 			last = &resp
 		case "response.output_item.done":
-			output = append(output, event.AsResponseOutputItemDone().Item)
+			item := event.AsResponseOutputItemDone().Item
+			output = append(output, item)
+			emitCommentaryItem(item, false, emittedCommentary, onCommentary)
 		case "response.completed":
 			resp := event.AsResponseCompleted().Response
 			if len(resp.Output) == 0 {
 				resp.Output = output
 			}
+			emitResponseCommentary(&resp, emittedCommentary, onCommentary)
 			return &resp, nil
 		case "response.failed":
 			resp := event.AsResponseFailed().Response
@@ -116,6 +120,7 @@ func (c *CodexClient) CreateStreamingResponse(ctx context.Context, request Respo
 		if len(last.Output) == 0 {
 			last.Output = output
 		}
+		emitResponseCommentary(last, emittedCommentary, onCommentary)
 		return last, nil
 	}
 	return nil, fmt.Errorf("codex stream ended without a response")
@@ -174,7 +179,7 @@ func (c *CodexAgentClient) CreateResponse(ctx context.Context, request ModelRequ
 	}
 	var response *Response
 	if c.streaming != nil {
-		response, err = c.streaming.CreateStreamingResponse(ctx, sdkRequest)
+		response, err = c.streaming.CreateStreamingResponse(ctx, sdkRequest, request.OnCommentary)
 	} else {
 		response, err = c.raw.CreateResponse(ctx, sdkRequest)
 	}
@@ -184,7 +189,13 @@ func (c *CodexAgentClient) CreateResponse(ctx context.Context, request ModelRequ
 	if response == nil {
 		return ModelResponse{}, fmt.Errorf("codex response is nil")
 	}
-	return fromResponse(response), nil
+	parsed := fromResponse(response)
+	if c.streaming == nil && request.OnCommentary != nil {
+		for _, commentary := range parsed.Commentary {
+			request.OnCommentary(commentary)
+		}
+	}
+	return parsed, nil
 }
 
 func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
@@ -195,6 +206,20 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 			input = append(input, responses.ResponseInputItemUnionParam{
 				OfMessage: &responses.EasyInputMessageParam{
 					Role: responses.EasyInputMessageRoleUser,
+					Content: responses.EasyInputMessageContentUnionParam{
+						OfString: openai.String(item.Content),
+					},
+				},
+			})
+		case roleAssistant:
+			phase := responses.EasyInputMessagePhase(item.Phase)
+			if phase != responses.EasyInputMessagePhaseCommentary && phase != responses.EasyInputMessagePhaseFinalAnswer {
+				return ResponseRequest{}, fmt.Errorf("unsupported assistant phase %q", item.Phase)
+			}
+			input = append(input, responses.ResponseInputItemUnionParam{
+				OfMessage: &responses.EasyInputMessageParam{
+					Role:  responses.EasyInputMessageRoleAssistant,
+					Phase: phase,
 					Content: responses.EasyInputMessageContentUnionParam{
 						OfString: openai.String(item.Content),
 					},
@@ -298,22 +323,91 @@ func reasoningEffort(raw string) shared.ReasoningEffort {
 
 func fromResponse(response *Response) ModelResponse {
 	out := ModelResponse{
-		ID:        response.ID,
-		FinalText: response.OutputText(),
+		ID: response.ID,
+	}
+	hasToolCalls := false
+	for _, item := range response.Output {
+		if item.Type == "function_call" {
+			hasToolCalls = true
+			call := item.AsFunctionCall()
+			args := strings.TrimSpace(call.Arguments)
+			out.ToolCalls = append(out.ToolCalls, ToolCall{
+				ID:        firstNonEmpty(call.CallID, item.CallID, call.ID, item.ID),
+				Name:      firstNonEmpty(call.Name, item.Name),
+				Arguments: json.RawMessage(defaultJSON(args)),
+			})
+		}
 	}
 	for _, item := range response.Output {
-		if item.Type != "function_call" {
+		if item.Type != "message" {
 			continue
 		}
-		call := item.AsFunctionCall()
-		args := strings.TrimSpace(call.Arguments)
-		out.ToolCalls = append(out.ToolCalls, ToolCall{
-			ID:        firstNonEmpty(call.CallID, item.CallID, call.ID, item.ID),
-			Name:      firstNonEmpty(call.Name, item.Name),
-			Arguments: json.RawMessage(defaultJSON(args)),
-		})
+		text := outputItemText(item)
+		if text == "" {
+			continue
+		}
+		switch item.Phase {
+		case responses.ResponseOutputMessagePhaseCommentary:
+			out.Commentary = append(out.Commentary, text)
+		case responses.ResponseOutputMessagePhaseFinalAnswer:
+			out.FinalText += text
+		default:
+			if hasToolCalls {
+				out.Commentary = append(out.Commentary, text)
+			} else {
+				out.FinalText += text
+			}
+		}
 	}
 	return out
+}
+
+func outputItemText(item responses.ResponseOutputItemUnion) string {
+	var b strings.Builder
+	for _, content := range item.Content {
+		if content.Type == "output_text" {
+			b.WriteString(content.Text)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func emitResponseCommentary(response *Response, emitted map[string]struct{}, onCommentary func(string)) {
+	if response == nil || onCommentary == nil {
+		return
+	}
+	hasToolCalls := false
+	for _, item := range response.Output {
+		if item.Type == "function_call" {
+			hasToolCalls = true
+			break
+		}
+	}
+	for _, item := range response.Output {
+		emitCommentaryItem(item, hasToolCalls, emitted, onCommentary)
+	}
+}
+
+func emitCommentaryItem(item responses.ResponseOutputItemUnion, phaseFallback bool, emitted map[string]struct{}, onCommentary func(string)) {
+	if onCommentary == nil || item.Type != "message" {
+		return
+	}
+	if item.Phase != responses.ResponseOutputMessagePhaseCommentary && !(phaseFallback && item.Phase == "") {
+		return
+	}
+	text := outputItemText(item)
+	if text == "" {
+		return
+	}
+	key := item.ID
+	if key == "" {
+		key = string(item.Phase) + "\x00" + text
+	}
+	if _, ok := emitted[key]; ok {
+		return
+	}
+	emitted[key] = struct{}{}
+	onCommentary(text)
 }
 
 func defaultJSON(s string) string {

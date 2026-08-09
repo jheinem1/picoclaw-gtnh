@@ -1,10 +1,25 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestWorkspaceDirUsesGregGPTWorkspace(t *testing.T) {
+	t.Setenv("GTNH_WORKSPACE", "")
+	t.Setenv("GREGGPT_WORKSPACE", "/root/.greggpt/workspace")
+	t.Setenv("GTNH_INVENTORY_INDEX_FILE", "")
+
+	if got := workspaceDir(); got != "/root/.greggpt/workspace" {
+		t.Fatalf("workspaceDir() = %q", got)
+	}
+	if got := defaultIndexFile(); got != "/root/.greggpt/workspace/state/inventory_index.json" {
+		t.Fatalf("defaultIndexFile() = %q", got)
+	}
+}
 
 func writeTestWorkspace(t *testing.T) string {
 	t.Helper()
@@ -102,6 +117,58 @@ func TestResolveFindKeysRejectsExplicitAndAnyDamage(t *testing.T) {
 	_, _, err = resolveFindKeys("gregtech:gt.metaitem.01:11305", 0, unsetDamage, true, idx)
 	if err == nil {
 		t.Fatal("expected explicit damage plus any-damage to fail")
+	}
+}
+
+func TestResolveExactItemMetaRequiresDamage(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+	items, _, err := loadItems()
+	if err != nil {
+		t.Fatalf("loadItems failed: %v", err)
+	}
+	got, ok := resolveExactItemMeta(items, "gregtech:gt.metaitem.01:11305")
+	if !ok || got.DisplayName != "Steel Ingot" {
+		t.Fatalf("unexpected exact item resolution: %#v ok=%t", got, ok)
+	}
+	if _, ok := resolveExactItemMeta(items, "gregtech:gt.metaitem.01"); ok {
+		t.Fatal("damage-less identity should not resolve in batch totals")
+	}
+}
+
+func TestCmdTotalsLoadsOnceAndReturnsDimensionFilteredAggregates(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	err = cmdTotals([]string{"--item", "gregtech:gt.metaitem.01:11305", "--dim", "183", "--scope", "all"})
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	if err != nil {
+		t.Fatalf("cmdTotals failed: %v", err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Dim   int                 `json:"dim"`
+		Items []inventoryTotalRow `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode totals JSON: %v\n%s", err, raw)
+	}
+	if payload.Dim != 183 || len(payload.Items) != 1 {
+		t.Fatalf("unexpected totals payload: %#v", payload)
+	}
+	row := payload.Items[0]
+	if row.Containers != 128 || row.ME != 0 || row.Total != 128 || row.ResourceKey != "item:gregtech:gt.metaitem.01:11305" {
+		t.Fatalf("unexpected aggregate row: %#v", row)
 	}
 }
 

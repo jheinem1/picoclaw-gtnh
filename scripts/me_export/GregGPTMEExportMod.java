@@ -446,6 +446,7 @@ public final class GregGPTMEExportMod {
     }
     File out = blockInventoryOutputFile(server);
     List<Object> tiles = new ArrayList<Object>();
+    Set<String> seenInventories = new LinkedHashSet<String>();
     Object[] worlds = (Object[]) getField(server, "worldServers", "field_71305_c");
     for (Object world : worlds) {
       if (world == null) {
@@ -456,6 +457,10 @@ public final class GregGPTMEExportMod {
         continue;
       }
       for (Object te : (Iterable<?>) loaded) {
+        String inventoryID = inventoryIdentity(te);
+        if (!seenInventories.add(inventoryID)) {
+          continue;
+        }
         tiles.add(te);
       }
     }
@@ -556,6 +561,7 @@ public final class GregGPTMEExportMod {
     String gtMetaName = gregTechMetaName(gtMeta);
     String displayName = firstNonEmptyString(gtMetaName, blockDisplayName(block));
     String source = inventorySource(te);
+    String inventoryID = inventoryIdentity(te);
 
     w.print("{\"dim\":");
     w.print(dim);
@@ -565,6 +571,9 @@ public final class GregGPTMEExportMod {
     w.print(y);
     w.print(",\"z\":");
     w.print(z);
+    w.print(",\"inventory_id\":\"");
+    w.print(escape(inventoryID));
+    w.print("\"");
     w.print(",\"tile_class\":\"");
     w.print(escape(te.getClass().getName()));
     w.print("\",\"tile_id\":\"");
@@ -1187,6 +1196,22 @@ public final class GregGPTMEExportMod {
     } catch (Throwable ignored) {
     }
     return "tile-fields";
+  }
+
+  private static String inventoryIdentity(Object te) {
+    Object owner = te;
+    String className = te == null ? "" : te.getClass().getName();
+    if (className.toLowerCase().contains("reactorchamber")) {
+      Object reactor = invokeQuiet(te, new String[] {"getReactor", "getReactorTileEntity"}, new Class[0], new Object[0]);
+      if (reactor != null) {
+        owner = reactor;
+      }
+    }
+    int dim = dimensionID(owner);
+    int x = intField(owner, "xCoord", "field_145851_c");
+    int y = intField(owner, "yCoord", "field_145848_d");
+    int z = intField(owner, "zCoord", "field_145849_e");
+    return "block_export:" + dim + ":" + x + ":" + y + ":" + z;
   }
 
   private static Object gregTechMetaTileEntity(Object te) {

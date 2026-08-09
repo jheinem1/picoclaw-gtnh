@@ -1,6 +1,6 @@
 # GregGPT GTNH Project State
 
-Last updated: 2026-07-13
+Last updated: 2026-07-20
 
 ## Deployment target
 - Host: `jhein@100.84.87.81` over Tailscale (Raspberry Pi 3, Debian 13, aarch64)
@@ -26,6 +26,12 @@ Last updated: 2026-07-13
   - `244618985553920001`
   - `862546744453103636`
 - `mention_only=true`
+- Discord mention tasks publish user-facing commentary as temporary regular channel messages. Once the terminal reply is sent successfully as a reply to the original mention, those commentary messages are deleted.
+- Raw reasoning and reasoning-summary events are never sent to Discord. Set `GREGGPT_DISCORD_PROGRESS_ENABLED=false` to disable commentary messages.
+- Minecraft tool-backed requests publish model-authored commentary as permanent chat messages before the final answer. Each update is reduced to one sentence, deduplicated, and capped per request; raw reasoning remains excluded.
+- Minecraft final replies explicitly name the sender and briefly restate the interpreted question before answering.
+- While a Discord task is active, ordinary messages from the same user in the same channel steer that task without requiring another mention; the first acknowledgement is posted as a reply to the steering message when commentary is enabled.
+- While a Minecraft task is active, ordinary chat from the same player steers that task without requiring the normal trigger substring; `mc-relay` polls for steering every two seconds by default.
 - Channel restriction strategy: enforce in Discord server/channel permissions and `GREGGPT_DISCORD_ALLOW_FROM`.
 - Fixed Kanban board channel (fishtank server): `1477539994825392128` via `KANBAN_CHANNEL_ID`.
 - Kanban board embed includes `Paused` column for blocked tasks with short reason text.
@@ -114,6 +120,9 @@ Last updated: 2026-07-13
 ## Key scripts
 - `scripts/setup_pi_runtime.sh`
 - `scripts/deploy_to_pi.sh`
+- `scripts/deploy_discord_prebuilt_to_pi.sh` for isolated Discord image rollouts that must not sync repository source or restart sibling services
+- `scripts/deploy_mc_relay_prebuilt_to_pi.sh` for isolated Minecraft relay image rollouts
+- `scripts/deploy_inventory_prebuilt_to_pi.sh` for isolated inventory-sync image rollouts
 - `scripts/install_user_service.sh`
 - `scripts/sync_gtnh_data.sh`
 - `scripts/login_greggpt_oauth_on_pi.sh`
@@ -124,6 +133,7 @@ The OAuth script now performs official Codex CLI device authentication in an iso
 - Exec safety guard can block commands that include `/` even when otherwise safe.
   - Prefer slashless command invocations from workspace root.
 - For best stability, keep raw GTNH dumps out of runtime mount and regenerate/sync `data/gtnh_runtime` after data refresh.
+- Complete DatHost region-chest scans are expensive on large worlds. The runtime keeps their freshness separate from ME and exported block inventories, checkpoints failed attempts, and refreshes the lightweight sources first.
 - Empty Discord allowlists are rejected at startup unless `GREGGPT_DISCORD_ALLOW_ALL=true` is explicitly configured.
 - OAuth, memory, task, and history state are coordinated across the Discord and Minecraft services; history uses SQLite WAL plus a five-second busy timeout.
 - Heartbeat behavior is controlled by the GregGPT runtime configuration and service env.

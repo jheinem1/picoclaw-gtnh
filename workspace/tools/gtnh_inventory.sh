@@ -274,7 +274,7 @@ cmd_status() {
     (if (.block_status.registry_available // false) then
       "Block registry: available"
      else
-      "Block registry: unavailable; numeric id/meta search only"
+      "Block registry: unavailable; exported block names remain searchable, otherwise use numeric id/meta"
      end),
     (if ((.block_status.reason // "") | length) > 0 then "Block status: " + .block_status.reason else empty end),
     (if (.stale.players // false) then "WARNING: players data is stale (>30m)" else empty end),
@@ -607,7 +607,7 @@ cmd_find_block() {
     (if (.block_status.registry_available // false) then
       "Block registry: available"
      else
-      "Block registry: unavailable; numeric id/meta search only"
+      "Block registry: unavailable; exported block names remain searchable, otherwise use numeric id/meta"
      end),
     (if ((.block_status.reason // "") | length) > 0 then "Block status: " + .block_status.reason else empty end),
     ((.block_index[$key].blocks // []) | map(select(($dim|length)==0 or (.dim == ($dim|tonumber)))) | sort_by(.dim, .x, .y, .z) | .[:$limit]) as $hits

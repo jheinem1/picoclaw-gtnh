@@ -75,6 +75,7 @@ type BlockBounds struct {
 type RuntimeState struct {
 	LastPlayersScan     string `json:"last_players_scan"`
 	LastChestsScan      string `json:"last_chests_scan"`
+	LastChestsAttempt   string `json:"last_chests_scan_attempt,omitempty"`
 	LastMEScan          string `json:"last_me_scan"`
 	LastMEAttempt       string `json:"last_me_fetch_attempt,omitempty"`
 	LastQuestsScan      string `json:"last_quests_scan"`
@@ -146,13 +147,14 @@ type PlayerRecord struct {
 }
 
 type ChestRecord struct {
-	Dimension int         `json:"dim"`
-	X         int         `json:"x"`
-	Y         int         `json:"y"`
-	Z         int         `json:"z"`
-	Type      string      `json:"type"`
-	Source    string      `json:"source,omitempty"`
-	Items     []ItemStack `json:"items"`
+	Dimension   int         `json:"dim"`
+	X           int         `json:"x"`
+	Y           int         `json:"y"`
+	Z           int         `json:"z"`
+	Type        string      `json:"type"`
+	Source      string      `json:"source,omitempty"`
+	InventoryID string      `json:"inventory_id,omitempty"`
+	Items       []ItemStack `json:"items"`
 }
 
 type MERecord struct {
@@ -190,12 +192,14 @@ type PlayerHit struct {
 }
 
 type ChestHit struct {
-	Dimension  int    `json:"dim"`
-	X          int    `json:"x"`
-	Y          int    `json:"y"`
-	Z          int    `json:"z"`
-	Type       string `json:"type"`
-	TotalCount int    `json:"total_count"`
+	Dimension   int    `json:"dim"`
+	X           int    `json:"x"`
+	Y           int    `json:"y"`
+	Z           int    `json:"z"`
+	Type        string `json:"type"`
+	Source      string `json:"source,omitempty"`
+	InventoryID string `json:"inventory_id,omitempty"`
+	TotalCount  int    `json:"total_count"`
 }
 
 type MEHit struct {
@@ -215,6 +219,7 @@ type BlockRecord struct {
 	Meta      int    `json:"meta"`
 	RegName   string `json:"reg_name,omitempty"`
 	Name      string `json:"name,omitempty"`
+	Source    string `json:"source,omitempty"`
 }
 
 type BlockHit struct {
@@ -226,6 +231,7 @@ type BlockHit struct {
 	Meta      int    `json:"meta"`
 	RegName   string `json:"reg_name,omitempty"`
 	Name      string `json:"name,omitempty"`
+	Source    string `json:"source,omitempty"`
 }
 
 type ItemHits struct {
@@ -338,7 +344,7 @@ func loadConfig() (Config, error) {
 		BlockInvPaths:      parseCSV(getenv("INVENTORY_BLOCK_INVENTORY_EXPORT_PATHS", "world/picoclaw/block_inventories.json,world/greggpt/block_inventories.json")),
 		BlocksInterval:     time.Duration(max(300, getenvInt("INVENTORY_BLOCKS_INTERVAL_SECONDS", 86400))) * time.Second,
 		HTTPTimeout:        time.Duration(max(5, getenvInt("INVENTORY_HTTP_TIMEOUT_SECONDS", 20))) * time.Second,
-		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 64)),
+		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 0)),
 		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1,183")),
 		ChestBounds:        parseChestBounds(strings.TrimSpace(os.Getenv("INVENTORY_CHEST_BOUNDS"))),
 		BlockBounds:        parseBlockBounds(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_BOUNDS"))),
@@ -581,7 +587,37 @@ func loadIndex(path string) InventoryIndex {
 	if idx.BlockIndex == nil {
 		idx.BlockIndex = map[string]BlockHits{}
 	}
+	normalizeLegacyBlockSources(&idx)
 	return idx
+}
+
+// Older indexes did not label block provenance. Infer it once while loading so
+// the first source-specific refresh can replace stale exported blocks instead
+// of retaining them as region-scan records.
+func normalizeLegacyBlockSources(idx *InventoryIndex) {
+	if idx == nil {
+		return
+	}
+	exportedCoordinates := make(map[string]struct{})
+	for _, chest := range idx.Chests {
+		if chestSource(chest) == "block_export" {
+			exportedCoordinates[blockCoordinate(chest.Dimension, chest.X, chest.Y, chest.Z)] = struct{}{}
+		}
+	}
+	exportOnlyLegacyIndex := idx.Source.BlocksScanAt == "" && idx.Source.BlockInvScanAt != ""
+	for i := range idx.Blocks {
+		if strings.TrimSpace(idx.Blocks[i].Source) != "" {
+			continue
+		}
+		_, exportedInventory := exportedCoordinates[blockCoordinate(
+			idx.Blocks[i].Dimension, idx.Blocks[i].X, idx.Blocks[i].Y, idx.Blocks[i].Z,
+		)]
+		if exportedInventory || exportOnlyLegacyIndex {
+			idx.Blocks[i].Source = "block_export"
+		} else {
+			idx.Blocks[i].Source = "region"
+		}
+	}
 }
 
 func loadRefreshRequest(path string) (RefreshRequest, bool) {
@@ -1315,13 +1351,14 @@ func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string
 		items := parseExportedBlockInventoryItems(toList(m["items"]), firstNonEmptyString(m["source"], m["inventory_type"], m["inventoryType"]))
 		label := firstNonEmptyString(m["gt_meta_name"], m["gtMetaName"], m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["block_reg_name"], m["blockRegName"], m["tile_id"], m["tileId"], m["tile_class"], m["tileClass"])
 		chests = append(chests, ChestRecord{
-			Dimension: numberToInt(firstPresent(m, "dim", "dimension")),
-			X:         numberToInt(m["x"]),
-			Y:         numberToInt(m["y"]),
-			Z:         numberToInt(m["z"]),
-			Type:      tileEntityType(label),
-			Source:    "block_export",
-			Items:     items,
+			Dimension:   numberToInt(firstPresent(m, "dim", "dimension")),
+			X:           numberToInt(m["x"]),
+			Y:           numberToInt(m["y"]),
+			Z:           numberToInt(m["z"]),
+			Type:        tileEntityType(label),
+			Source:      "block_export",
+			InventoryID: firstNonEmptyString(m["inventory_id"], m["inventoryId"]),
+			Items:       items,
 		})
 		stackCount += len(items)
 
@@ -1337,9 +1374,13 @@ func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string
 				Meta:      meta,
 				RegName:   firstNonEmptyString(m["block_reg_name"], m["blockRegName"], m["reg_name"], m["registry_name"]),
 				Name:      firstNonEmptyString(m["gt_meta_name"], m["gtMetaName"], m["block_display_name"], m["blockDisplayName"], m["display_name"], m["displayName"], m["name"]),
+				Source:    "block_export",
 			})
 		}
 	}
+	chests = dedupeExportedChests(chests)
+	blocks = mergeBlockRecords(nil, blocks, "block_export")
+	stackCount = countChestStacks(chests)
 	sort.Slice(chests, func(i, j int) bool {
 		if chests[i].Dimension != chests[j].Dimension {
 			return chests[i].Dimension < chests[j].Dimension
@@ -1365,6 +1406,26 @@ func parseBlockInventoryExport(raw []byte) ([]ChestRecord, []BlockRecord, string
 		return blocks[i].Z < blocks[j].Z
 	})
 	return chests, blocks, generatedAt, stackCount, nil
+}
+
+func dedupeExportedChests(chests []ChestRecord) []ChestRecord {
+	byIdentity := make(map[string]ChestRecord, len(chests))
+	order := make([]string, 0, len(chests))
+	for _, chest := range chests {
+		key := strings.TrimSpace(chest.InventoryID)
+		if key == "" {
+			key = chestIdentity(chest)
+		}
+		if _, found := byIdentity[key]; !found {
+			order = append(order, key)
+		}
+		byIdentity[key] = chest
+	}
+	out := make([]ChestRecord, 0, len(byIdentity))
+	for _, key := range order {
+		out = append(out, byIdentity[key])
+	}
+	return out
 }
 
 func parseExportedBlockInventoryItems(rows []any, defaultSource string) []ItemStack {
@@ -1687,7 +1748,7 @@ func decodeSectionBlocks(section map[string]any, dim, chunkX, chunkZ int, bounds
 			if !inBlockBounds(dim, x, y, z, bounds) {
 				continue
 			}
-			rec := BlockRecord{Dimension: dim, X: x, Y: y, Z: z, ID: id, Meta: meta}
+			rec := BlockRecord{Dimension: dim, X: x, Y: y, Z: z, ID: id, Meta: meta, Source: "region"}
 			if m, ok := registry[blockKey(id, meta)]; ok {
 				rec.RegName, rec.Name = m.RegName, m.Name
 			}
@@ -1715,7 +1776,7 @@ func decodeSectionBlocks(section map[string]any, dim, chunkX, chunkZ int, bounds
 		if !inBlockBounds(dim, x, y, z, bounds) {
 			continue
 		}
-		rec := BlockRecord{Dimension: dim, X: x, Y: y, Z: z, ID: id, Meta: meta}
+		rec := BlockRecord{Dimension: dim, X: x, Y: y, Z: z, ID: id, Meta: meta, Source: "region"}
 		if m, ok := registry[blockKey(id, meta)]; ok {
 			rec.RegName, rec.Name = m.RegName, m.Name
 		}
@@ -1850,7 +1911,7 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, 
 				}
 			}
 			if !found {
-				h.Chests = append(h.Chests, ChestHit{Dimension: c.Dimension, X: c.X, Y: c.Y, Z: c.Z, Type: c.Type, TotalCount: it.Count})
+				h.Chests = append(h.Chests, ChestHit{Dimension: c.Dimension, X: c.X, Y: c.Y, Z: c.Z, Type: c.Type, Source: chestSource(c), InventoryID: c.InventoryID, TotalCount: it.Count})
 			}
 			idx.ItemIndex[k] = h
 		}
@@ -1895,6 +1956,7 @@ func indexFromData(players []PlayerRecord, chests []ChestRecord, me []MERecord, 
 			Meta:      b.Meta,
 			RegName:   b.RegName,
 			Name:      b.Name,
+			Source:    b.Source,
 		})
 		idx.BlockIndex[k] = h
 	}
@@ -2002,6 +2064,7 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 	all := make([]ChestRecord, 0, 512)
 	regionCount := 0
 	chestStacks := 0
+	scanErrors := make([]string, 0)
 	for _, dim := range cfg.ScanDims {
 		path, ok := dimPath(dim)
 		if !ok {
@@ -2010,6 +2073,7 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 		entries, err := listFiles(client, cfg, path)
 		if err != nil {
 			log.Printf("event=inventory_region_list_error path=%q err=%q", path, err.Error())
+			scanErrors = append(scanErrors, fmt.Sprintf("list %s: %v", path, err))
 			continue
 		}
 		regionFiles := make([]string, 0, len(entries))
@@ -2021,7 +2085,8 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 		}
 		sort.Strings(regionFiles)
 		if cfg.MaxRegionFiles > 0 && len(regionFiles) > cfg.MaxRegionFiles {
-			regionFiles = regionFiles[:cfg.MaxRegionFiles]
+			scanErrors = append(scanErrors, fmt.Sprintf("%s has %d region files, exceeding configured complete-scan limit %d", path, len(regionFiles), cfg.MaxRegionFiles))
+			continue
 		}
 		for _, relPath := range regionFiles {
 			regionCount++
@@ -2029,11 +2094,13 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 			raw, err := getFile(client, cfg, fullPath)
 			if err != nil {
 				log.Printf("event=inventory_region_file_error file=%q err=%q", fullPath, err.Error())
+				scanErrors = append(scanErrors, fmt.Sprintf("download %s: %v", fullPath, err))
 				continue
 			}
 			chests, err := parseMCAChests(raw, dim)
 			if err != nil {
 				log.Printf("event=inventory_region_parse_error file=%q err=%q", fullPath, err.Error())
+				scanErrors = append(scanErrors, fmt.Sprintf("parse %s: %v", fullPath, err))
 				continue
 			}
 			for _, c := range chests {
@@ -2061,6 +2128,9 @@ func scanChests(client *http.Client, cfg Config) ([]ChestRecord, int, int, error
 		}
 		return all[i].Z < all[j].Z
 	})
+	if len(scanErrors) > 0 {
+		return nil, regionCount, 0, fmt.Errorf("incomplete chest scan: %s", strings.Join(scanErrors, "; "))
+	}
 	return all, regionCount, chestStacks, nil
 }
 
@@ -2120,6 +2190,7 @@ func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndex
 
 	all := make([]BlockRecord, 0, 1024)
 	regionCount := 0
+	scanErrors := make([]string, 0)
 	for _, dim := range cfg.ScanDims {
 		path, ok := dimPath(dim)
 		if !ok {
@@ -2128,6 +2199,7 @@ func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndex
 		entries, err := listFiles(client, cfg, path)
 		if err != nil {
 			log.Printf("event=inventory_block_region_list_error path=%q err=%q", path, err.Error())
+			scanErrors = append(scanErrors, fmt.Sprintf("list %s: %v", path, err))
 			continue
 		}
 		regionFiles := make([]string, 0, len(entries))
@@ -2139,7 +2211,8 @@ func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndex
 		}
 		sort.Strings(regionFiles)
 		if cfg.MaxRegionFiles > 0 && len(regionFiles) > cfg.MaxRegionFiles {
-			regionFiles = regionFiles[:cfg.MaxRegionFiles]
+			scanErrors = append(scanErrors, fmt.Sprintf("%s has %d region files, exceeding configured complete-scan limit %d", path, len(regionFiles), cfg.MaxRegionFiles))
+			continue
 		}
 		for _, relPath := range regionFiles {
 			regionCount++
@@ -2147,11 +2220,13 @@ func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndex
 			raw, err := getFile(client, cfg, fullPath)
 			if err != nil {
 				log.Printf("event=inventory_block_region_file_error file=%q err=%q", fullPath, err.Error())
+				scanErrors = append(scanErrors, fmt.Sprintf("download %s: %v", fullPath, err))
 				continue
 			}
 			blocks, err := parseMCABlocks(raw, dim, cfg.BlockBounds, cfg.BlockAllowlist, registry)
 			if err != nil {
 				log.Printf("event=inventory_block_region_parse_error file=%q err=%q", fullPath, err.Error())
+				scanErrors = append(scanErrors, fmt.Sprintf("parse %s: %v", fullPath, err))
 				continue
 			}
 			all = append(all, blocks...)
@@ -2169,6 +2244,9 @@ func scanBlocks(client *http.Client, cfg Config) ([]BlockRecord, int, BlockIndex
 		}
 		return all[i].Z < all[j].Z
 	})
+	if len(scanErrors) > 0 {
+		return nil, regionCount, status, fmt.Errorf("incomplete block scan: %s", strings.Join(scanErrors, "; "))
+	}
 	return all, regionCount, status, nil
 }
 
@@ -2238,14 +2316,30 @@ func scanBlockInventories(client *http.Client, cfg Config) ([]ChestRecord, []Blo
 }
 
 func mergeChestRecords(existing, replacement []ChestRecord, source string) []ChestRecord {
-	out := make([]ChestRecord, 0, len(existing)+len(replacement))
+	candidates := make([]ChestRecord, 0, len(existing)+len(replacement))
 	for _, c := range existing {
 		if chestSource(c) == source {
 			continue
 		}
-		out = append(out, c)
+		candidates = append(candidates, c)
 	}
-	out = append(out, replacement...)
+	candidates = append(candidates, replacement...)
+	byInventory := make(map[string]ChestRecord, len(candidates))
+	order := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		key := chestIdentity(c)
+		previous, found := byInventory[key]
+		if !found {
+			order = append(order, key)
+		}
+		if !found || chestPriority(c) >= chestPriority(previous) {
+			byInventory[key] = c
+		}
+	}
+	out := make([]ChestRecord, 0, len(byInventory))
+	for _, key := range order {
+		out = append(out, byInventory[key])
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Dimension != out[j].Dimension {
 			return out[i].Dimension < out[j].Dimension
@@ -2261,19 +2355,27 @@ func mergeChestRecords(existing, replacement []ChestRecord, source string) []Che
 	return out
 }
 
-func mergeBlockRecords(existing, replacement []BlockRecord) []BlockRecord {
+func mergeBlockRecords(existing, replacement []BlockRecord, source string) []BlockRecord {
 	out := make([]BlockRecord, 0, len(existing)+len(replacement))
-	replaceAt := map[string]bool{}
-	for _, b := range replacement {
-		replaceAt[fmt.Sprintf("%d:%d:%d:%d", b.Dimension, b.X, b.Y, b.Z)] = true
-	}
 	for _, b := range existing {
-		if replaceAt[fmt.Sprintf("%d:%d:%d:%d", b.Dimension, b.X, b.Y, b.Z)] {
+		if blockSource(b) == source {
 			continue
 		}
 		out = append(out, b)
 	}
 	out = append(out, replacement...)
+	byCoordinate := make(map[string]BlockRecord, len(out))
+	for _, b := range out {
+		key := blockCoordinate(b.Dimension, b.X, b.Y, b.Z)
+		previous, found := byCoordinate[key]
+		if !found || blockPriority(b) >= blockPriority(previous) {
+			byCoordinate[key] = b
+		}
+	}
+	out = out[:0]
+	for _, b := range byCoordinate {
+		out = append(out, b)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Dimension != out[j].Dimension {
 			return out[i].Dimension < out[j].Dimension
@@ -2287,6 +2389,35 @@ func mergeBlockRecords(existing, replacement []BlockRecord) []BlockRecord {
 		return out[i].Z < out[j].Z
 	})
 	return out
+}
+
+func blockCoordinate(dimension, x, y, z int) string {
+	return fmt.Sprintf("%d:%d:%d:%d", dimension, x, y, z)
+}
+
+func chestIdentity(c ChestRecord) string {
+	return fmt.Sprintf("position:%d:%d:%d:%d", c.Dimension, c.X, c.Y, c.Z)
+}
+
+func chestPriority(c ChestRecord) int {
+	if chestSource(c) == "block_export" {
+		return 2
+	}
+	return 1
+}
+
+func blockSource(b BlockRecord) string {
+	if strings.TrimSpace(b.Source) != "" {
+		return b.Source
+	}
+	return "region"
+}
+
+func blockPriority(b BlockRecord) int {
+	if blockSource(b) == "block_export" {
+		return 2
+	}
+	return 1
 }
 
 func chestSource(c ChestRecord) string {
@@ -2334,7 +2465,7 @@ func main() {
 
 		now := time.Now().UTC()
 		playersDue := dueSince(state.LastPlayersScan, now, cfg.PlayersInterval)
-		chestsDue := dueSince(state.LastChestsScan, now, cfg.ChestsInterval)
+		chestsDue := fetchDue(state.LastChestsAttempt, state.LastChestsScan, now, cfg.ChestsInterval)
 		meDue := fetchDue(state.LastMEAttempt, state.LastMEScan, now, cfg.MEInterval)
 		questsDue := dueSince(state.LastQuestsScan, now, cfg.QuestsInterval)
 		blockInvDue := fetchDue(state.LastBlockInvAttempt, state.LastBlockInvScan, now, cfg.BlockInvInterval)
@@ -2409,26 +2540,6 @@ func main() {
 			}
 		}
 
-		if chestsDue {
-			c, regionCount, chestStacks, err := scanChests(client, cfg)
-			if err != nil {
-				errorsMap["chests"] = err.Error()
-				log.Printf("event=inventory_chests_scan_error err=%q", err.Error())
-			} else {
-				for i := range c {
-					c[i].Source = "region"
-				}
-				chests = mergeChestRecords(chests, c, "region")
-				state.LastChestsScan = nowUTC()
-				source.ChestsScanAt = state.LastChestsScan
-				source.ChestsVersion++
-				stats.ChestCount = len(chests)
-				stats.ChestStacks = countChestStacks(chests)
-				stats.RegionFilesScanned = regionCount
-				_ = chestStacks
-			}
-		}
-
 		if meDue {
 			attemptAt := nowUTC()
 			state.LastMEAttempt = attemptAt
@@ -2494,7 +2605,7 @@ func main() {
 				log.Printf("event=inventory_block_inventories_scan_stale generated_at=%q stale_after=%s", blockInvScanAt, cfg.BlockInvStaleAfter)
 			} else {
 				chests = mergeChestRecords(chests, c, "block_export")
-				blocks = mergeBlockRecords(blocks, b)
+				blocks = mergeBlockRecords(blocks, b, "block_export")
 				state.LastBlockInvScan = blockInvScanAt
 				source.BlockInvScanAt = state.LastBlockInvScan
 				source.BlockInvVersion++
@@ -2506,6 +2617,34 @@ func main() {
 				if len(b) > 0 && !blockStatus.Enabled {
 					blockStatus.Reason = "block scan disabled; using exported inventory block positions"
 				}
+			}
+		}
+
+		// Run the expensive all-region chest pass after the small, live exporter
+		// fetches. A slow chest scan must not prevent ME or pocket-dimension
+		// machine data from being refreshed and published first.
+		if chestsDue {
+			state.LastChestsAttempt = nowUTC()
+			// A complete world scan can run for many minutes. Persist the attempt
+			// before starting so a restart or failed scan cannot immediately launch
+			// another expensive pass from the last successful timestamp.
+			saveRuntimeState(stateFile, state)
+			c, regionCount, chestStacks, err := scanChests(client, cfg)
+			if err != nil {
+				errorsMap["chests"] = err.Error()
+				log.Printf("event=inventory_chests_scan_error err=%q", err.Error())
+			} else {
+				for i := range c {
+					c[i].Source = "region"
+				}
+				chests = mergeChestRecords(chests, c, "region")
+				state.LastChestsScan = nowUTC()
+				source.ChestsScanAt = state.LastChestsScan
+				source.ChestsVersion++
+				stats.ChestCount = len(chests)
+				stats.ChestStacks = countChestStacks(chests)
+				stats.RegionFilesScanned = regionCount
+				_ = chestStacks
 			}
 		}
 
