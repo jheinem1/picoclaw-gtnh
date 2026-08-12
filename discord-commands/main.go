@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,6 +24,7 @@ import (
 	"greggpt-gtnh/internal/agent/history"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/snowflake/v2"
 )
 
 type Config struct {
@@ -37,6 +42,7 @@ type Config struct {
 	DiscordHistoryLimit      int
 	DiscordHistoryMaxChars   int
 	DiscordHistoryIncludeBot bool
+	Voice                    VoiceConfig
 	Agent                    AgentConfig
 }
 
@@ -70,6 +76,7 @@ type Service struct {
 	cfg      Config
 	s        *discordgo.Session
 	runner   DiscordAgentRunner
+	voice    DiscordVoiceController
 	histMu   sync.Mutex
 	hist     discordHistoryBackend
 	activeMu sync.Mutex
@@ -87,6 +94,75 @@ var mentionCleanupRe = regexp.MustCompile(`<@!?\d+>`)
 var discordRetryRe = regexp.MustCompile(`(?i)\b(try (that )?again|retry|run (that|it) again|same query)\b`)
 var inventoryCommandQueryRe = regexp.MustCompile(`(?i)gtnh_inventory\s+find-item\s+--query\s+"([^"]+)"(?:.*--scope\s+([a-z]+))?`)
 var inventoryScopeRe = regexp.MustCompile(`(?i)\b(in me|me system|me storage|ae2|ae system)\b`)
+
+var interactionHTTPClient = newInteractionHTTPClient()
+
+func newInteractionHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 16
+	// Discord interaction acknowledgements have a hard three-second deadline.
+	// A degraded HTTP/2 connection can consume that window waiting for headers,
+	// so use an independently recoverable HTTP/1.1 connection pool.
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	transport.MaxIdleConnsPerHost = 4
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	}
+	transport.IdleConnTimeout = 2 * time.Minute
+	transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	transport.TLSHandshakeTimeout = 2400 * time.Millisecond
+	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{Timeout: 2400 * time.Millisecond, KeepAlive: 30 * time.Second},
+			Config:    transport.TLSClientConfig.Clone(),
+		}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if tlsConn, ok := conn.(*tls.Conn); ok && tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+			_ = conn.Close()
+			return nil, errors.New("Discord interaction TLS unexpectedly negotiated HTTP/2")
+		}
+		return conn, nil
+	}
+	transport.ResponseHeaderTimeout = 2400 * time.Millisecond
+	return &http.Client{Transport: transport, Timeout: 2600 * time.Millisecond}
+}
+
+func keepInteractionHTTPWarm(ctx context.Context) {
+	warm := func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, discordgo.EndpointGateway, nil)
+		if err != nil {
+			log.Printf("interaction_http_warm_error err=%q", err.Error())
+			return
+		}
+		resp, err := interactionHTTPClient.Do(req)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("interaction_http_warm_error err=%q", err.Error())
+			}
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	warm()
+	ticker := time.NewTicker(45 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			warm()
+		}
+	}
+}
 
 type DiscordAgentRunner interface {
 	Run(ctx context.Context, req DiscordAgentRequest) (DiscordAgentResponse, error)
@@ -258,6 +334,7 @@ func loadConfig() (Config, error) {
 		DiscordHistoryLimit:      getenvInt("GREGGPT_DISCORD_HISTORY_LIMIT", 10),
 		DiscordHistoryMaxChars:   getenvInt("GREGGPT_DISCORD_HISTORY_MAX_CHARS", 4000),
 		DiscordHistoryIncludeBot: getenvBool("GREGGPT_DISCORD_HISTORY_INCLUDE_BOTS", false),
+		Voice:                    loadVoiceConfig(agentCfg.AuthFile),
 		Agent: AgentConfig{
 			Config: agentCfg,
 		},
@@ -321,9 +398,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("discord_session_error: %v", err)
 	}
-	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
+	session.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent | discordgo.IntentsGuildVoiceStates
 
 	svc := &Service{cfg: cfg, s: session, runner: newCommandAgentRunner(cfg.Agent)}
+	svc.voice = newDiscordVoiceManager(cfg, session, svc.runner)
 	session.AddHandler(svc.onInteractionCreate)
 	session.AddHandler(svc.onMessageCreate)
 
@@ -340,6 +418,10 @@ func main() {
 		log.Fatalf("discord_open_error: %v", err)
 	}
 	defer session.Close()
+	defer svc.voice.Close()
+	warmCtx, stopWarm := context.WithCancel(context.Background())
+	defer stopWarm()
+	go keepInteractionHTTPWarm(warmCtx)
 
 	appID := <-ready
 	if appID == "" {
@@ -364,6 +446,7 @@ func (s *Service) registerCommands(appID string) error {
 		queryCommand(),
 		minecraftCommand(),
 		checkinCommand(),
+		voiceCommand(),
 	}
 	if s.cfg.GuildID != "" {
 		_, err := s.s.ApplicationCommandBulkOverwrite(appID, s.cfg.GuildID, cmds)
@@ -528,6 +611,20 @@ func checkinCommand() *discordgo.ApplicationCommand {
 	}
 }
 
+func voiceCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "voice",
+		Description: "Experimental GregGPT live voice controls",
+		Options: []*discordgo.ApplicationCommandOption{
+			subcommand("join", "Join a voice channel and start live voice",
+				channelOption("channel", "Voice channel to join", true),
+			),
+			subcommand("leave", "Stop live voice and leave the channel"),
+			subcommand("status", "Show live voice status"),
+		},
+	}
+}
+
 func subcommand(name, desc string, opts ...*discordgo.ApplicationCommandOption) *discordgo.ApplicationCommandOption {
 	return &discordgo.ApplicationCommandOption{
 		Type:        discordgo.ApplicationCommandOptionSubCommand,
@@ -578,30 +675,132 @@ func boolOption(name, desc string) *discordgo.ApplicationCommandOption {
 	}
 }
 
+func channelOption(name, desc string, required bool) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{
+		Type:         discordgo.ApplicationCommandOptionChannel,
+		Name:         name,
+		Description:  desc,
+		Required:     required,
+		ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildVoice, discordgo.ChannelTypeGuildStageVoice},
+	}
+}
+
+type discordCommandContext struct {
+	GuildID       string
+	TextChannelID string
+	UserID        string
+	Username      string
+}
+
+func commandContextFromInteraction(i *discordgo.InteractionCreate) discordCommandContext {
+	ctx := discordCommandContext{GuildID: i.GuildID, TextChannelID: i.ChannelID}
+	if i.Member != nil && i.Member.User != nil {
+		ctx.UserID = i.Member.User.ID
+		ctx.Username = i.Member.User.GlobalName
+		if strings.TrimSpace(ctx.Username) == "" {
+			ctx.Username = i.Member.User.Username
+		}
+	} else if i.User != nil {
+		ctx.UserID = i.User.ID
+		ctx.Username = i.User.GlobalName
+		if strings.TrimSpace(ctx.Username) == "" {
+			ctx.Username = i.User.Username
+		}
+	}
+	return ctx
+}
+
 func (s *Service) onInteractionCreate(dg *discordgo.Session, i *discordgo.InteractionCreate) {
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}
+	data := i.ApplicationCommandData()
+	receivedAt := time.Now()
+	gatewayDelay := time.Duration(0)
+	if interactionID, err := snowflake.Parse(i.ID); err == nil {
+		gatewayDelay = receivedAt.Sub(interactionID.Time())
+	}
+	log.Printf("interaction_received command=%s interaction_id=%s gateway_delay_ms=%d", data.Name, i.ID, gatewayDelay.Milliseconds())
 	if !s.allowedUser(i) {
-		_ = dg.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		if err := respondInteraction(dg, i, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
 				Content: "not allowed",
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
-		})
+		}); err != nil {
+			log.Printf("interaction_ack_error command=%s interaction_id=%s gateway_delay_ms=%d ack_elapsed_ms=%d err=%q", data.Name, i.ID, gatewayDelay.Milliseconds(), time.Since(receivedAt).Milliseconds(), err.Error())
+		}
 		return
 	}
 
+	ack := interactionAcknowledgement(data)
+	if err := respondInteraction(dg, i, ack); err != nil {
+		log.Printf("interaction_ack_error command=%s interaction_id=%s gateway_delay_ms=%d ack_elapsed_ms=%d err=%q", data.Name, i.ID, gatewayDelay.Milliseconds(), time.Since(receivedAt).Milliseconds(), err.Error())
+		if shouldCompleteAfterAckFailure(data) {
+			go s.completeUnacknowledgedInteraction(i, data)
+		}
+		return
+	}
+	log.Printf("interaction_ack_ok command=%s interaction_id=%s gateway_delay_ms=%d ack_elapsed_ms=%d", data.Name, i.ID, gatewayDelay.Milliseconds(), time.Since(receivedAt).Milliseconds())
+	go s.completeInteraction(dg, i, data)
+}
+
+func respondInteraction(dg *discordgo.Session, i *discordgo.InteractionCreate, response *discordgo.InteractionResponse) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2800*time.Millisecond)
+	defer cancel()
+	return dg.InteractionRespond(i.Interaction, response,
+		discordgo.WithContext(ctx),
+		discordgo.WithClient(interactionHTTPClient),
+		discordgo.WithRestRetries(0),
+		discordgo.WithRetryOnRatelimit(false),
+	)
+}
+
+func shouldCompleteAfterAckFailure(data discordgo.ApplicationCommandInteractionData) bool {
+	if data.Name != "voice" {
+		return false
+	}
+	subcommand, _ := firstSubcommand(data.Options)
+	return subcommand == "leave"
+}
+
+func (s *Service) completeUnacknowledgedInteraction(i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	startedAt := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.CommandTimeout)
+	defer cancel()
+	_, err := s.dispatch(ctx, commandContextFromInteraction(i), data)
+	if err != nil {
+		log.Printf("interaction_unacknowledged_fallback_error command=%s interaction_id=%s elapsed_ms=%d err=%q", data.Name, i.ID, time.Since(startedAt).Milliseconds(), err.Error())
+		return
+	}
+	log.Printf("interaction_unacknowledged_fallback_complete command=%s interaction_id=%s elapsed_ms=%d", data.Name, i.ID, time.Since(startedAt).Milliseconds())
+}
+
+func interactionAcknowledgement(data discordgo.ApplicationCommandInteractionData) *discordgo.InteractionResponse {
+	responseType := discordgo.InteractionResponseDeferredChannelMessageWithSource
+	responseData := &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}
+	if data.Name == "voice" {
+		sub, _ := firstSubcommand(data.Options)
+		content := map[string]string{
+			"join":   "Joining GregGPT voice…",
+			"leave":  "Leaving GregGPT voice…",
+			"status": "Checking GregGPT voice status…",
+		}[sub]
+		if content != "" {
+			responseType = discordgo.InteractionResponseChannelMessageWithSource
+			responseData.Content = content
+		}
+	}
+	return &discordgo.InteractionResponse{Type: responseType, Data: responseData}
+}
+
+func (s *Service) completeInteraction(dg *discordgo.Session, i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.CommandTimeout)
 	defer cancel()
 
-	_ = dg.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral},
-	})
-
-	content, err := s.dispatch(ctx, i.ApplicationCommandData())
+	content, err := s.dispatch(ctx, commandContextFromInteraction(i), data)
 	if err != nil {
 		if content != "" {
 			content = content + "\n\nerror: " + err.Error()
@@ -612,7 +811,11 @@ func (s *Service) onInteractionCreate(dg *discordgo.Session, i *discordgo.Intera
 	content = truncate(content, s.cfg.ReplyLimit)
 	content = wrapCodeBlock(content)
 
-	_, _ = dg.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
+	if _, editErr := dg.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content}); editErr != nil {
+		log.Printf("interaction_edit_error command=%s interaction_id=%s elapsed_ms=%d err=%q", data.Name, i.ID, time.Since(startedAt).Milliseconds(), editErr.Error())
+		return
+	}
+	log.Printf("interaction_complete command=%s interaction_id=%s elapsed_ms=%d", data.Name, i.ID, time.Since(startedAt).Milliseconds())
 }
 
 func (s *Service) onMessageCreate(dg *discordgo.Session, m *discordgo.MessageCreate) {
@@ -1422,7 +1625,7 @@ func (s *Service) allowedUser(i *discordgo.InteractionCreate) bool {
 	return ok
 }
 
-func (s *Service) dispatch(ctx context.Context, data discordgo.ApplicationCommandInteractionData) (string, error) {
+func (s *Service) dispatch(ctx context.Context, commandCtx discordCommandContext, data discordgo.ApplicationCommandInteractionData) (string, error) {
 	switch data.Name {
 	case "tasks":
 		return s.dispatchTasks(ctx, data.Options)
@@ -1434,8 +1637,33 @@ func (s *Service) dispatch(ctx context.Context, data discordgo.ApplicationComman
 		return s.dispatchMinecraft(ctx, data.Options)
 	case "checkin":
 		return s.dispatchCheckin(ctx, data.Options)
+	case "voice":
+		return s.dispatchVoice(ctx, commandCtx, data.Options)
 	default:
 		return "", fmt.Errorf("unknown command %q", data.Name)
+	}
+}
+
+func (s *Service) dispatchVoice(ctx context.Context, commandCtx discordCommandContext, opts []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
+	if s.voice == nil {
+		return "", errors.New("voice controller is unavailable")
+	}
+	sub, subOpts := firstSubcommand(opts)
+	switch sub {
+	case "join":
+		return s.voice.Join(ctx, VoiceJoinRequest{
+			GuildID:        commandCtx.GuildID,
+			VoiceChannelID: optString(subOpts, "channel"),
+			TextChannelID:  commandCtx.TextChannelID,
+			UserID:         commandCtx.UserID,
+			Username:       commandCtx.Username,
+		})
+	case "leave":
+		return s.voice.Leave(ctx, commandCtx.GuildID)
+	case "status":
+		return s.voice.Status(ctx, commandCtx.GuildID), nil
+	default:
+		return "", fmt.Errorf("unknown voice subcommand %q", sub)
 	}
 }
 

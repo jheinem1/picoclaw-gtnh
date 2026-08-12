@@ -106,6 +106,23 @@ SET valid = CASE
    AND EXISTS (SELECT 1 FROM recipe_outputs ro WHERE ro.recipe_id = recipes.id)
   THEN 1 ELSE 0 END;
 
+-- GregTech represents reusable tools, molds, shapes, and programmed circuits
+-- as zero-sized item stacks. Normalize that implementation detail into a
+-- one-item presence requirement which is not consumed.
+UPDATE recipe_inputs
+SET amount=1, consumed=0, catalyst=1
+WHERE amount=0
+  AND recipe_id IN (SELECT id FROM recipes WHERE category='gregtech');
+UPDATE recipe_input_options
+SET amount=1
+WHERE amount=0
+  AND input_id IN (
+    SELECT ri.id
+    FROM recipe_inputs ri
+    JOIN recipes r ON r.id=ri.recipe_id
+    WHERE r.category='gregtech' AND ri.catalyst=1
+  );
+
 -- Legacy dumps numbered item and fluid arrays independently from zero. Shift
 -- every fluid group only when a recipe still has a colliding item position so
 -- the migration is idempotent and each position represents one requirement.
@@ -344,18 +361,38 @@ JOIN recipe_handlers h ON h.id=r.handler_id
 LEFT JOIN machine_capabilities mc ON mc.handler_id=h.id
 LEFT JOIN items i ON i.id=e.item_id
 LEFT JOIN fluids f ON f.id=e.fluid_id
-WHERE e.direction='output' AND r.valid=1 AND r.hidden=0 AND r.fake=0 AND r.enabled=1;
+WHERE e.direction='output' AND r.valid=1 AND r.hidden=0 AND r.fake=0 AND r.enabled=1
+  AND NOT EXISTS (
+    SELECT 1
+    FROM recipe_inputs ri
+    WHERE ri.recipe_id=r.id
+      AND NOT EXISTS (
+        SELECT 1 FROM recipe_input_options rio WHERE rio.input_id=ri.id
+      )
+  );
 
 DROP VIEW IF EXISTS recipe_ingredients;
 CREATE VIEW recipe_ingredients AS
 SELECT e.recipe_id, e.position AS input_position, e.option_index,
        e.resource_kind AS input_kind, e.resource_key AS input_resource_key,
-       e.resource_name AS input_name, i.registry_name, i.damage, f.fluid_name,
+       COALESCE(NULLIF(trim(e.resource_name), ''), e.resource_key) AS input_name,
+       i.registry_name, i.damage, f.fluid_name,
        e.ore_name, e.amount AS input_amount, e.consumed, e.catalyst
 FROM recipe_edges e
+JOIN recipes r ON r.id=e.recipe_id
 LEFT JOIN items i ON i.id=e.item_id
 LEFT JOIN fluids f ON f.id=e.fluid_id
-WHERE e.direction='input';
+WHERE e.direction='input'
+  AND r.valid=1 AND r.hidden=0 AND r.fake=0 AND r.enabled=1
+  AND e.resource_key NOT IN ('item:', 'fluid:', 'oredict:')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM recipe_inputs ri
+    WHERE ri.recipe_id=r.id
+      AND NOT EXISTS (
+        SELECT 1 FROM recipe_input_options rio WHERE rio.input_id=ri.id
+      )
+  );
 
 DROP VIEW IF EXISTS handler_machine_options;
 CREATE VIEW handler_machine_options AS
@@ -403,7 +440,9 @@ INSERT OR REPLACE INTO manifest(key, value) VALUES ('schema_version', '2');
 INSERT OR REPLACE INTO manifest(key, value) VALUES ('migrated_from_schema_version', '1');
 INSERT OR REPLACE INTO manifest(key, value) VALUES ('crafting_recipe_count', (SELECT CAST(count(*) AS TEXT) FROM recipes WHERE category='crafting'));
 INSERT OR REPLACE INTO manifest(key, value) VALUES ('furnace_recipe_count', (SELECT CAST(count(*) AS TEXT) FROM recipes WHERE category='furnace'));
-INSERT OR REPLACE INTO manifest(key, value) VALUES ('dump_complete', CASE WHEN EXISTS (SELECT 1 FROM recipes WHERE category='crafting') THEN '1' ELSE '0' END);
+-- A migration cannot prove that every required dump pass completed without
+-- record errors. Only a fresh dump can set this authoritative flag to one.
+INSERT OR REPLACE INTO manifest(key, value) VALUES ('dump_complete', '0');
 INSERT OR REPLACE INTO manifest(key, value) VALUES ('worldgen_data_available', CASE WHEN EXISTS (SELECT 1 FROM ore_veins) THEN '1' ELSE '0' END);
 
 COMMIT;

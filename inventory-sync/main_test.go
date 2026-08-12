@@ -10,6 +10,67 @@ import (
 	"time"
 )
 
+func TestPlannerInventorySnapshotAggregatesAllSources(t *testing.T) {
+	index := InventoryIndex{
+		Version:     2,
+		GeneratedAt: "2026-08-11T20:00:00Z",
+		Source:      SourceMeta{PlayersScanAt: "players", ChestsScanAt: "chests", MEScanAt: "me"},
+		ItemIndex: map[string]ItemHits{
+			"7437:11305": {
+				Players: []PlayerHit{{TotalCount: 2}},
+				Chests:  []ChestHit{{TotalCount: 3}},
+				ME:      []MEHit{{TotalCount: 4}},
+			},
+		},
+	}
+	snapshot := plannerInventorySnapshot(index)
+	if got := snapshot.Totals["7437:11305"]; got != 9 {
+		t.Fatalf("compact total = %d, want 9", got)
+	}
+	if snapshot.Source.ChestsScanAt != "chests" || snapshot.GeneratedAt != index.GeneratedAt {
+		t.Fatalf("compact metadata not preserved: %#v", snapshot)
+	}
+}
+func TestPlannerQuestSnapshotKeepsPlanningEvidence(t *testing.T) {
+	index := QuestIndex{
+		Version: 2,
+		Source:  QuestSourceMeta{QuestsScanAt: "fresh"},
+		Quests: []QuestRecord{{
+			ID: "42", Title: "Build It", Description: "large text omitted", State: "in_progress",
+			Prerequisites: []string{"41"}, Unlocks: []string{"43"}, ClaimableBy: []string{"Snow"},
+			CompletionRatio: 0.5,
+			PlayerProgress:  []QuestPlayerProgress{{Name: "Snow", Completed: true}},
+			Tasks:           []QuestTask{{ID: "0", Description: "Submit parts", RequiredItems: []QuestItem{{ID: 1, Count: 4}}}},
+		}},
+	}
+	snapshot := plannerQuestSnapshot(index)
+	if len(snapshot.Quests) != 1 || snapshot.Quests[0].ID != "42" || snapshot.Quests[0].CompletionRatio != 0.5 {
+		t.Fatalf("planning evidence missing: %#v", snapshot)
+	}
+	if snapshot.Quests[0].Tasks[0].RequiredItems[0].Count != 4 || snapshot.Quests[0].Prerequisites[0] != "41" {
+		t.Fatalf("task or graph evidence missing: %#v", snapshot.Quests[0])
+	}
+}
+
+func TestParseChestAreasAndRegionIntersection(t *testing.T) {
+	areas := parseChestAreas("0,319,-1105,240,-1184;183,1,2,3,4;invalid")
+	if len(areas) != 2 {
+		t.Fatalf("parsed areas = %#v, want 2 valid entries", areas)
+	}
+	if got := areas[0]; got.Dim != 0 || got.MinX != 240 || got.MaxX != 319 || got.MinZ != -1184 || got.MaxZ != -1105 {
+		t.Fatalf("normalized outpost area = %#v", got)
+	}
+	if !regionIntersectsChestAreas(0, "world/region/r.0.-3.mca", areas) {
+		t.Fatal("outpost region did not intersect configured area")
+	}
+	if regionIntersectsChestAreas(0, "world/region/r.1.-3.mca", areas) {
+		t.Fatal("unrelated region intersected configured area")
+	}
+	if !chestInAreas(ChestRecord{Dimension: 0, X: 272, Z: -1147}, areas) {
+		t.Fatal("screenshot coordinates were not included")
+	}
+}
+
 func TestParseItemList_ExtractsNestedAndCustomNames(t *testing.T) {
 	list := []any{
 		map[string]any{
@@ -1070,4 +1131,42 @@ func questFileServer(t *testing.T, files map[string]string) *httptest.Server {
 		}
 		http.NotFound(w, r)
 	}))
+}
+
+func TestPlannerInventorySnapshotPreservesScopeTotals(t *testing.T) {
+	index := InventoryIndex{
+		GeneratedAt: "2026-08-11T00:00:00Z",
+		ItemIndex: map[string]ItemHits{
+			"7820:0": {
+				Players: []PlayerHit{{TotalCount: 2}},
+				Chests:  []ChestHit{{TotalCount: 7}},
+				ME:      []MEHit{{TotalCount: 11}},
+			},
+		},
+	}
+	snapshot := plannerInventorySnapshot(index)
+	counts := snapshot.Scopes["7820:0"]
+	if snapshot.Version != 2 || snapshot.Totals["7820:0"] != 20 || counts.Players != 2 || counts.Containers != 7 || counts.ME != 11 || counts.Total != 20 {
+		t.Fatalf("unexpected compact snapshot: %#v", snapshot)
+	}
+}
+
+func TestParseMEExportIncludesPatternsAndActiveCrafts(t *testing.T) {
+	raw := []byte(`{"generated_at":"2026-08-11T12:00:00Z","networks":[{"network_id":"main","label":"Main ME","dim":0,"x":1,"y":2,"z":3,"items":[],"crafting_patterns_truncated":true,"crafting_patterns":[{"craftable":true,"can_substitute":false,"priority":7,"inputs":[{"id":1,"damage":0,"count":4,"display_name":"Iron Ingot"}],"outputs":[{"id":2,"damage":0,"count":1,"display_name":"Energetic Alloy"}]}],"active_crafts":[{"cpu_name":"CPU 1","output":{"id":2,"damage":0,"count":64,"display_name":"Energetic Alloy"},"start_count":64,"remaining_count":12}]}]}`)
+	records, generatedAt, _, err := parseMEExport(raw)
+	if err != nil {
+		t.Fatalf("parseMEExport failed: %v", err)
+	}
+	if generatedAt != "2026-08-11T12:00:00Z" || len(records) != 1 {
+		t.Fatalf("unexpected ME export: generatedAt=%q records=%#v", generatedAt, records)
+	}
+	record := records[0]
+	if !record.PatternsTruncated || len(record.Patterns) != 1 || len(record.ActiveCrafts) != 1 || record.Patterns[0].Inputs[0].Count != 4 || record.ActiveCrafts[0].RemainingCount != 12 {
+		t.Fatalf("crafting data was not preserved: %#v", record)
+	}
+	index := InventoryIndex{GeneratedAt: generatedAt, Source: SourceMeta{MEScanAt: generatedAt}, ME: records}
+	snapshot := meCraftingSnapshot(index)
+	if snapshot.Version != 2 || len(snapshot.Networks) != 1 || !snapshot.Networks[0].PatternsTruncated {
+		t.Fatalf("unexpected compact ME crafting snapshot: %#v", snapshot)
+	}
 }

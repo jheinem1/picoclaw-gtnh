@@ -52,6 +52,7 @@ public final class GregGPTMEExportMod {
   private static long nextMETick = 0L;
   private static long nextBlockInventoryTick = 0L;
   private static long tickCounter = 0L;
+  private static long nextPlayerPositionTick = 0L;
   private static MEExportJob meExportJob = null;
   private static BlockInventoryJob blockInventoryJob = null;
 
@@ -66,6 +67,19 @@ public final class GregGPTMEExportMod {
     }
     tickCounter++;
     Object server = null;
+
+    if (boolProperty("greggpt.player_position_export_enabled", true)
+        && tickCounter >= nextPlayerPositionTick) {
+      nextPlayerPositionTick =
+          tickCounter + intervalTicks("greggpt.player_position_export_interval_seconds", 5L);
+      try {
+        server = serverInstance();
+        writePlayerPositionDump(server);
+      } catch (Throwable t) {
+        System.out.println("[GREGGPT-PLAYERS] export failed: " + t);
+        t.printStackTrace(System.out);
+      }
+    }
 
     if (!boolProperty("greggpt.me_export_enabled", true)) {
       meExportJob = null;
@@ -214,9 +228,9 @@ public final class GregGPTMEExportMod {
       int itemsProcessed = 0;
       while (true) {
         if (current != null) {
-          int before = current.entryCount;
+          int before = current.workCount;
           boolean done = current.process(itemsPerTick - itemsProcessed);
-          itemsProcessed += current.entryCount - before;
+          itemsProcessed += current.workCount - before;
           if (done) {
             networks.add(current.finish());
             totalEntries += current.entryCount;
@@ -285,12 +299,20 @@ public final class GregGPTMEExportMod {
     private final int y;
     private final int z;
     private final StringBuilder itemJson = new StringBuilder();
+    private final StringBuilder patternJson = new StringBuilder();
+    private Iterator<?> patterns = null;
+    private final int maxPatterns;
+    private int workCount = 0;
     private int entryCount = 0;
     private int convertedCount = 0;
     private int positiveCount = 0;
     private String firstEntryClass = "";
     private String firstStackClass = "";
     private boolean first = true;
+    private boolean firstPattern = true;
+    private int patternCount = 0;
+    private int patternScanCount = 0;
+    private boolean patternsTruncated = false;
 
     MENetworkSnapshot(Object grid, Object te, Iterable<?> items) {
       this.grid = grid;
@@ -301,6 +323,7 @@ public final class GregGPTMEExportMod {
       this.dim = dimensionID(te);
       this.networkID = Integer.toHexString(System.identityHashCode(grid));
       this.label = "ME network " + x + "," + y + "," + z;
+      this.maxPatterns = intProperty("greggpt.me_export_max_patterns_per_network", 5000, 1);
     }
 
     boolean process(int maxItems) {
@@ -311,6 +334,7 @@ public final class GregGPTMEExportMod {
       while (items.hasNext() && processed < maxItems) {
         Object entry = items.next();
         processed++;
+        workCount++;
         entryCount++;
         if (firstEntryClass.length() == 0 && entry != null) {
           firstEntryClass = entry.getClass().getName();
@@ -334,7 +358,33 @@ public final class GregGPTMEExportMod {
         first = false;
         itemJson.append(itemJson(stack));
       }
-      return !items.hasNext();
+      if (items.hasNext()) {
+        return false;
+      }
+      if (patterns == null) {
+        patterns = craftingPatternIterator(grid);
+      }
+      while (patternScanCount < maxPatterns && patterns.hasNext() && processed < maxItems) {
+        Object pattern = patterns.next();
+        processed++;
+        workCount++;
+        patternScanCount++;
+        String row = craftingPatternJson(pattern);
+        if (row.length() == 0) {
+          continue;
+        }
+        if (!firstPattern) {
+          patternJson.append(',');
+        }
+        firstPattern = false;
+        patternJson.append(row);
+        patternCount++;
+      }
+      if (patternScanCount >= maxPatterns && patterns.hasNext()) {
+        patternsTruncated = true;
+        return true;
+      }
+      return !patterns.hasNext();
     }
 
     String finish() {
@@ -363,7 +413,15 @@ public final class GregGPTMEExportMod {
       out.append(escape(firstStackClass));
       out.append("\",\"items\":[");
       out.append(itemJson.toString());
-      out.append("]}");
+      out.append("],\"crafting_pattern_count\":");
+      out.append(patternCount);
+      out.append(",\"crafting_patterns_truncated\":");
+      out.append(patternsTruncated);
+      out.append(",\"crafting_patterns\":[");
+      out.append(patternJson.toString());
+      out.append("],\"active_crafts\":");
+      out.append(activeCraftsJson(craftingGrid(grid)));
+      out.append("}");
       return out.toString();
     }
   }
@@ -413,7 +471,9 @@ public final class GregGPTMEExportMod {
           public void run() {
             try {
               writeJsonFile(out, json);
-              System.out.println(logPrefix + " " + successMessage);
+              if (successMessage != null && !successMessage.isEmpty()) {
+                System.out.println(logPrefix + " " + successMessage);
+              }
             } catch (Throwable t) {
               System.out.println(logPrefix + " write failed: " + t);
               t.printStackTrace(System.out);
@@ -535,6 +595,77 @@ public final class GregGPTMEExportMod {
     String folder = String.valueOf(invokeAny(server, new String[] {"getFolderName", "func_71270_I"}, new Class[0], new Object[0]));
     File worldDir = (File) invokeAny(server, new String[] {"getFile", "func_71209_f"}, new Class[] {String.class}, new Object[] {folder});
     return new File(new File(worldDir, "greggpt"), "me_index.json");
+  }
+
+  private static void writePlayerPositionDump(Object server) throws Exception {
+    if (server == null) {
+      return;
+    }
+    Object manager =
+        invokeAny(
+            server,
+            new String[] {"getConfigurationManager", "func_71203_ab"},
+            new Class[0],
+            new Object[0]);
+    Object rawPlayers = getField(manager, "playerEntityList", "field_72404_b");
+    StringBuilder json = new StringBuilder(256);
+    json.append("{\"generated_at\":\"");
+    json.append(escape(nowUTC()));
+    json.append("\",\"players\":[");
+    boolean first = true;
+    if (rawPlayers instanceof Iterable) {
+      for (Object player : (Iterable<?>) rawPlayers) {
+        if (player == null) {
+          continue;
+        }
+        if (!first) {
+          json.append(',');
+        }
+        first = false;
+        Object rawName =
+            invokeQuiet(
+                player,
+                new String[] {"getCommandSenderName", "func_70005_c_"},
+                new Class[0],
+                new Object[0]);
+        Object rawUUID =
+            invokeQuiet(
+                player,
+                new String[] {"getUniqueID", "func_110124_au"},
+                new Class[0],
+                new Object[0]);
+        json.append("{\"name\":\"");
+        json.append(escape(rawName == null ? "" : String.valueOf(rawName)));
+        json.append("\",\"uuid\":\"");
+        json.append(escape(rawUUID == null ? "" : String.valueOf(rawUUID)));
+        json.append("\",\"dim\":");
+        json.append(intField(player, "dimension", "field_71093_bK"));
+        json.append(",\"x\":");
+        json.append(doubleField(player, "posX", "field_70165_t"));
+        json.append(",\"y\":");
+        json.append(doubleField(player, "posY", "field_70163_u"));
+        json.append(",\"z\":");
+        json.append(doubleField(player, "posZ", "field_70161_v"));
+        json.append(",\"yaw\":");
+        json.append(doubleField(player, "rotationYaw", "field_70177_z"));
+        json.append(",\"pitch\":");
+        json.append(doubleField(player, "rotationPitch", "field_70125_A"));
+        json.append('}');
+      }
+    }
+    json.append("]}");
+    File out = playerPositionOutputFile(server);
+    submitWrite(
+        out,
+        json.toString(),
+        "[GREGGPT-PLAYERS]",
+        null);
+  }
+
+  private static File playerPositionOutputFile(Object server) throws Exception {
+    String folder = String.valueOf(invokeAny(server, new String[] {"getFolderName", "func_71270_I"}, new Class[0], new Object[0]));
+    File worldDir = (File) invokeAny(server, new String[] {"getFile", "func_71209_f"}, new Class[] {String.class}, new Object[] {folder});
+    return new File(new File(worldDir, "greggpt"), "player_positions.json");
   }
 
   private static File blockInventoryOutputFile(Object server) throws Exception {
@@ -750,6 +881,158 @@ public final class GregGPTMEExportMod {
     } catch (Throwable ignored) {
       return null;
     }
+  }
+
+  private static Object craftingGrid(Object grid) {
+    try {
+      Class<?> craftingGridClass = classForName("appeng.api.networking.crafting.ICraftingGrid");
+      return invokeAny(grid, new String[] {"getCache"}, new Class[] {Class.class}, new Object[] {craftingGridClass});
+    } catch (Throwable ignored) {
+      return null;
+    }
+  }
+
+  private static Iterator<?> craftingPatternIterator(Object grid) {
+    Object cache = craftingGrid(grid);
+    Object raw = invokeQuiet(cache, new String[] {"getCraftingPatterns"}, new Class[0], new Object[0]);
+    if (!(raw instanceof Map)) {
+      return new ArrayList<Object>().iterator();
+    }
+    return new CraftingPatternIterator(((Map<?, ?>) raw).values().iterator());
+  }
+
+  private static final class CraftingPatternIterator implements Iterator<Object> {
+    private final Iterator<?> groups;
+    private final IdentityHashMap<Object, Boolean> seen = new IdentityHashMap<Object, Boolean>();
+    private Iterator<?> current = new ArrayList<Object>().iterator();
+    private Object next = null;
+
+    CraftingPatternIterator(Iterator<?> groups) {
+      this.groups = groups;
+    }
+
+    public boolean hasNext() {
+      if (next != null) {
+        return true;
+      }
+      while (true) {
+        while (current.hasNext()) {
+          Object candidate = current.next();
+          if (candidate != null && !seen.containsKey(candidate)) {
+            seen.put(candidate, Boolean.TRUE);
+            next = candidate;
+            return true;
+          }
+        }
+        if (!groups.hasNext()) {
+          return false;
+        }
+        Object group = groups.next();
+        current = group instanceof Iterable ? ((Iterable<?>) group).iterator() : new ArrayList<Object>().iterator();
+      }
+    }
+
+    public Object next() {
+      if (!hasNext()) {
+        throw new java.util.NoSuchElementException();
+      }
+      Object value = next;
+      next = null;
+      return value;
+    }
+
+    public void remove() {
+      throw new UnsupportedOperationException();
+    }
+  }
+
+  private static String craftingPatternJson(Object pattern) {
+    Object inputs = invokeQuiet(pattern, new String[] {"getCondensedInputs"}, new Class[0], new Object[0]);
+    Object outputs = invokeQuiet(pattern, new String[] {"getCondensedOutputs"}, new Class[0], new Object[0]);
+    String outputJson = aeStackArrayJson(outputs);
+    if ("[]".equals(outputJson)) {
+      return "";
+    }
+    StringBuilder out = new StringBuilder(256);
+    out.append("{\"craftable\":");
+    out.append(booleanInvoke(pattern, "isCraftable"));
+    out.append(",\"can_substitute\":");
+    out.append(booleanInvoke(pattern, "canSubstitute"));
+    out.append(",\"priority\":");
+    out.append(intInvoke(pattern, "getPriority"));
+    out.append(",\"inputs\":");
+    out.append(aeStackArrayJson(inputs));
+    out.append(",\"outputs\":");
+    out.append(outputJson);
+    out.append('}');
+    return out.toString();
+  }
+
+  private static String aeStackArrayJson(Object raw) {
+    if (!(raw instanceof Object[])) {
+      return "[]";
+    }
+    StringBuilder out = new StringBuilder();
+    out.append('[');
+    boolean first = true;
+    for (Object aeStack : (Object[]) raw) {
+      Object stack = toItemStack(aeStack);
+      if (!isPositiveItemStack(stack)) {
+        continue;
+      }
+      if (!first) {
+        out.append(',');
+      }
+      first = false;
+      out.append(itemJson(stack));
+    }
+    out.append(']');
+    return out.toString();
+  }
+
+  private static String activeCraftsJson(Object cache) {
+    Object raw = invokeQuiet(cache, new String[] {"getCpus"}, new Class[0], new Object[0]);
+    if (!(raw instanceof Iterable)) {
+      return "[]";
+    }
+    StringBuilder out = new StringBuilder();
+    out.append('[');
+    boolean first = true;
+    for (Object cpu : (Iterable<?>) raw) {
+      if (!booleanInvoke(cpu, "isBusy")) {
+        continue;
+      }
+      Object finalOutput = invokeQuiet(cpu, new String[] {"getFinalMultiOutput", "getFinalOutput"}, new Class[0], new Object[0]);
+      Object stack = toItemStack(finalOutput);
+      if (!first) {
+        out.append(',');
+      }
+      first = false;
+      Object rawName = invokeQuiet(cpu, new String[] {"getName"}, new Class[0], new Object[0]);
+      out.append("{\"cpu_name\":\"");
+      out.append(escape(rawName == null ? "" : String.valueOf(rawName)));
+      out.append("\",\"start_count\":");
+      out.append(longInvoke(cpu, "getStartItemCount"));
+      out.append(",\"remaining_count\":");
+      out.append(longInvoke(cpu, "getRemainingItemCount"));
+      out.append(",\"elapsed_millis\":");
+      out.append(longInvoke(cpu, "getElapsedTime"));
+      out.append(",\"storage_bytes\":");
+      out.append(longInvoke(cpu, "getAvailableStorage"));
+      out.append(",\"used_bytes\":");
+      out.append(longInvoke(cpu, "getUsedStorage"));
+      out.append(",\"co_processors\":");
+      out.append(intInvoke(cpu, "getCoProcessors"));
+      out.append(",\"suspended\":");
+      out.append(booleanInvoke(cpu, "isSuspended"));
+      if (isPositiveItemStack(stack)) {
+        out.append(",\"output\":");
+        out.append(itemJson(stack));
+      }
+      out.append('}');
+    }
+    out.append(']');
+    return out.toString();
   }
 
   private static void writeNetwork(PrintWriter w, Object grid, Object te, Iterable<?> items) throws Exception {
@@ -1071,6 +1354,11 @@ public final class GregGPTMEExportMod {
       c = c.getSuperclass();
     }
   }
+  private static double doubleField(Object target, String... names) {
+    Object v = getFieldQuiet(target, names);
+    return v instanceof Number ? ((Number) v).doubleValue() : 0.0D;
+  }
+
 
   private static int intField(Object target, String... names) {
     Object v = getFieldQuiet(target, names);
@@ -1085,6 +1373,16 @@ public final class GregGPTMEExportMod {
   private static int intInvoke(Object target, String... names) {
     Object v = invokeQuiet(target, names, new Class[0], new Object[0]);
     return v instanceof Number ? ((Number) v).intValue() : 0;
+  }
+
+  private static long longInvoke(Object target, String... names) {
+    Object v = invokeQuiet(target, names, new Class[0], new Object[0]);
+    return v instanceof Number ? ((Number) v).longValue() : 0L;
+  }
+
+  private static boolean booleanInvoke(Object target, String... names) {
+    Object v = invokeQuiet(target, names, new Class[0], new Object[0]);
+    return v instanceof Boolean && ((Boolean) v).booleanValue();
   }
 
   private static int dimensionID(Object te) {

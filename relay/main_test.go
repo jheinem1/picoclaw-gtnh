@@ -219,7 +219,7 @@ func TestAskAgentRecipePromptUsesRecipeSQL(t *testing.T) {
 	if !strings.Contains(prompt, "recipe_sql") {
 		t.Fatalf("prompt missing recipe_sql guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Preserve returned quantities and freshness exactly") {
+	if !strings.Contains(prompt, "Preserve returned quantities, provenance, and freshness exactly") {
 		t.Fatalf("prompt missing concise lookup accuracy guidance: %q", prompt)
 	}
 	if strings.Contains(prompt, "gtnh_resolve_recipes") || strings.Contains(prompt, "gtnh_search_recipes") || strings.Contains(prompt, "gtnh_find_item") {

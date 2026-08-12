@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,12 +23,28 @@ const (
 )
 
 type SourceMeta struct {
-	PlayersScanAt  string `json:"players_scan_at"`
-	ChestsScanAt   string `json:"chests_scan_at"`
-	MEScanAt       string `json:"me_scan_at"`
-	BlockInvScanAt string `json:"block_inventories_scan_at,omitempty"`
-	BlocksScanAt   string `json:"blocks_scan_at"`
-	DatHostSyncAt  string `json:"dathost_sync_at"`
+	PlayersScanAt    string `json:"players_scan_at"`
+	ChestsScanAt     string `json:"chests_scan_at"`
+	ChestAreasScanAt string `json:"chest_areas_scan_at,omitempty"`
+	MEScanAt         string `json:"me_scan_at"`
+	BlockInvScanAt   string `json:"block_inventories_scan_at,omitempty"`
+	BlocksScanAt     string `json:"blocks_scan_at"`
+	DatHostSyncAt    string `json:"dathost_sync_at"`
+}
+
+type CompactScopeTotals struct {
+	Players    int `json:"players"`
+	Containers int `json:"containers"`
+	ME         int `json:"me"`
+	Total      int `json:"total"`
+}
+
+type CompactInventoryTotals struct {
+	Version     int                           `json:"version"`
+	GeneratedAt string                        `json:"generated_at"`
+	Source      SourceMeta                    `json:"source"`
+	Totals      map[string]int                `json:"totals"`
+	Scopes      map[string]CompactScopeTotals `json:"scopes"`
 }
 
 type IndexStats struct {
@@ -69,6 +86,44 @@ type MEItemStack struct {
 	RegName     string `json:"reg_name,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Name        string `json:"name,omitempty"`
+}
+
+type MECraftingPattern struct {
+	Inputs        []MEItemStack `json:"inputs"`
+	Outputs       []MEItemStack `json:"outputs"`
+	Craftable     bool          `json:"craftable"`
+	CanSubstitute bool          `json:"can_substitute"`
+	Priority      int           `json:"priority"`
+}
+
+type MEActiveCraft struct {
+	CPUName        string       `json:"cpu_name,omitempty"`
+	Output         *MEItemStack `json:"output,omitempty"`
+	StartCount     int64        `json:"start_count,omitempty"`
+	RemainingCount int64        `json:"remaining_count,omitempty"`
+	ElapsedMillis  int64        `json:"elapsed_millis,omitempty"`
+	StorageBytes   int64        `json:"storage_bytes,omitempty"`
+	UsedBytes      int64        `json:"used_bytes,omitempty"`
+	CoProcessors   int          `json:"co_processors,omitempty"`
+	Suspended      bool         `json:"suspended,omitempty"`
+}
+
+type MECraftingNetwork struct {
+	NetworkID         string              `json:"network_id,omitempty"`
+	Label             string              `json:"label,omitempty"`
+	Dimension         int                 `json:"dim"`
+	Pos               Position            `json:"pos"`
+	Items             []MEItemStack       `json:"items,omitempty"`
+	Patterns          []MECraftingPattern `json:"patterns,omitempty"`
+	PatternsTruncated bool                `json:"patterns_truncated,omitempty"`
+	ActiveCrafts      []MEActiveCraft     `json:"active_crafts,omitempty"`
+}
+
+type MECraftingSnapshot struct {
+	Version     int                 `json:"version"`
+	GeneratedAt string              `json:"generated_at"`
+	MEScanAt    string              `json:"me_scan_at"`
+	Networks    []MECraftingNetwork `json:"networks"`
 }
 
 type PlayerRecord struct {
@@ -258,6 +313,16 @@ func defaultStatusFile() string {
 	return getenv("GTNH_INVENTORY_STATUS_FILE", filepath.Join(ws, "state", "inventory_status.json"))
 }
 
+func defaultTotalsFile() string {
+	ws := workspaceDir()
+	return getenv("GTNH_INVENTORY_TOTALS_FILE", filepath.Join(ws, "state", "quest_inventory_totals.json"))
+}
+
+func defaultMECraftingFile() string {
+	ws := workspaceDir()
+	return getenv("GTNH_ME_CRAFTING_FILE", filepath.Join(ws, "state", "me_crafting.json"))
+}
+
 func defaultRefreshFile() string {
 	ws := workspaceDir()
 	return getenv("GTNH_INVENTORY_REFRESH_FILE", filepath.Join(ws, "state", "inventory_refresh.json"))
@@ -403,7 +468,101 @@ func registryRank(reg string) int {
 	}
 }
 
+func resolveExactQuery(query string, idx InventoryIndex, limit int) ([]ItemMeta, error) {
+	f, err := os.Open(defaultItemsIndex())
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	qn := normalize(query)
+	qc := compact(query)
+	if qn == "" {
+		return nil, nil
+	}
+	present := keysPresent(idx)
+	counts := keyCounts(idx)
+	type candidate struct {
+		present bool
+		count   int
+		item    ItemMeta
+	}
+	candidates := make([]candidate, 0, 4)
+	seen := map[string]bool{}
+	r := csv.NewReader(f)
+	r.Comma = '\t'
+	r.FieldsPerRecord = -1
+	r.LazyQuotes = true
+	for rowNumber := 0; ; rowNumber++ {
+		row, readErr := r.Read()
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		if rowNumber == 0 || len(row) < 4 {
+			continue
+		}
+		displayName := colorCode.ReplaceAllString(row[1], "")
+		if !exactNormalizedMatch(qn, qc, displayName) &&
+			!exactNormalizedMatch(qn, qc, row[2]) &&
+			!exactNormalizedMatch(qn, qc, row[3]) {
+			continue
+		}
+		if seen[row[0]] {
+			continue
+		}
+		seen[row[0]] = true
+		id, damage := parseSlug(row[0])
+		item := ItemMeta{Slug: row[0], DisplayName: row[1], RegName: row[2], Name: row[3], ID: id, Damage: damage}
+		key := itemKey(id, damage)
+		candidates = append(candidates, candidate{present: present[key], count: counts[key], item: item})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].present != candidates[j].present {
+			return candidates[i].present
+		}
+		di := strings.ToLower(candidates[i].item.DisplayName)
+		dj := strings.ToLower(candidates[j].item.DisplayName)
+		if di != dj {
+			return di < dj
+		}
+		ri := registryRank(candidates[i].item.RegName)
+		rj := registryRank(candidates[j].item.RegName)
+		if ri != rj {
+			return ri < rj
+		}
+		if candidates[i].count != candidates[j].count {
+			return candidates[i].count > candidates[j].count
+		}
+		return candidates[i].item.Slug < candidates[j].item.Slug
+	})
+	if limit <= 0 {
+		limit = 20
+	}
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]ItemMeta, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.item)
+	}
+	return out, nil
+}
+
+func exactNormalizedMatch(queryNormalized, queryCompact, value string) bool {
+	return normalize(value) == queryNormalized || compact(value) == queryCompact
+}
+
 func resolveQuery(query string, idx InventoryIndex, limit int) ([]ItemMeta, error) {
+	exact, err := resolveExactQuery(query, idx, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(exact) > 0 {
+		return exact, nil
+	}
 	items, _, err := loadItems()
 	if err != nil {
 		return nil, err
@@ -533,10 +692,21 @@ func ageText(ts string) string {
 	default:
 		return fmt.Sprintf("%dd old", int(d.Hours()/24))
 	}
+
 }
 
+func newestTimestamp(values ...string) string {
+	var newest time.Time
+	var result string
+	for _, value := range values {
+		if parsed := parseTime(value); parsed.After(newest) {
+			newest, result = parsed, value
+		}
+	}
+	return result
+}
 func freshness(meta SourceMeta) string {
-	return fmt.Sprintf("Freshness: players: %s | containers: %s | block inventories: %s | ME: %s | blocks: %s", ageText(meta.PlayersScanAt), ageText(meta.ChestsScanAt), ageText(meta.BlockInvScanAt), ageText(meta.MEScanAt), ageText(meta.BlocksScanAt))
+	return fmt.Sprintf("Freshness: players: %s | effective containers: %s | block inventories: %s | configured areas: %s | full-region fallback: %s | ME: %s | blocks: %s", ageText(meta.PlayersScanAt), ageText(newestTimestamp(meta.ChestsScanAt, meta.BlockInvScanAt, meta.ChestAreasScanAt)), ageText(meta.BlockInvScanAt), ageText(meta.ChestAreasScanAt), ageText(meta.ChestsScanAt), ageText(meta.MEScanAt), ageText(meta.BlocksScanAt))
 }
 
 func cmdStatus() error {
@@ -556,9 +726,21 @@ func cmdStatus() error {
 	if st.BlockStatus.Reason != "" {
 		fmt.Println("Block status:", st.BlockStatus.Reason)
 	}
-	for _, key := range []string{"players", "chests", "block_inventories", "me", "blocks"} {
+	areaFresh := false
+	if stale, reported := st.Stale["chest_areas"]; reported {
+		areaFresh = !stale
+	}
+	effectiveContainersCurrent := !st.Stale["block_inventories"] || areaFresh
+	for _, key := range []string{"players", "block_inventories", "me", "blocks"} {
 		if st.Stale[key] {
 			fmt.Printf("WARNING: %s data is stale\n", key)
+		}
+	}
+	if st.Stale["chests"] {
+		if effectiveContainersCurrent {
+			fmt.Println("NOTE: full-region chest fallback is stale or unavailable; fresh exported/configured containers remain usable, so counts are a current lower bound rather than invalid")
+		} else {
+			fmt.Println("WARNING: all container data sources are stale")
 		}
 	}
 	if len(st.Errors) == 0 {
@@ -755,6 +937,36 @@ func resolveExactItemMeta(items []ItemMeta, query string) (ItemMeta, bool) {
 			return item, true
 		}
 	}
+
+	// Some legacy recipe dumps omitted the item./tile. path prefix used by the
+	// runtime registry (for example dreamcraft:CircuitMV versus
+	// dreamcraft:item.CircuitMV). Only accept this compatibility mapping when it
+	// identifies exactly one indexed item; names such as MysteriousCrystal exist
+	// as both an item and a block and must remain ambiguous.
+	separator := strings.IndexByte(registryName, ':')
+	if separator <= 0 || separator == len(registryName)-1 {
+		return ItemMeta{}, false
+	}
+	namespace := registryName[:separator+1]
+	path := registryName[separator+1:]
+	compatible := []string{namespace + "item." + path, namespace + "tile." + path}
+	matches := make([]ItemMeta, 0, 1)
+	seen := map[string]bool{}
+	for _, item := range items {
+		if item.Damage != damage {
+			continue
+		}
+		for _, candidate := range compatible {
+			if strings.EqualFold(item.RegName, candidate) && !seen[item.Slug] {
+				seen[item.Slug] = true
+				matches = append(matches, item)
+				break
+			}
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
 	return ItemMeta{}, false
 }
 
@@ -810,6 +1022,55 @@ func resolveFindKeys(item string, id int, damage int, anyDamage bool, idx Invent
 		label = fmt.Sprintf("%s (%s)", key, valueOr(meta.DisplayName, meta.RegName))
 	}
 	return []string{key}, label, nil
+}
+
+func cmdCountItem(args []string) error {
+	fs := flag.NewFlagSet("count-item", flag.ContinueOnError)
+	query := fs.String("query", "", "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *query == "" && fs.NArg() > 0 {
+		*query = strings.Join(fs.Args(), " ")
+	}
+	if strings.TrimSpace(*query) == "" {
+		return errors.New("error: --query is required")
+	}
+	var snapshot CompactInventoryTotals
+	if err := loadJSON(defaultTotalsFile(), &snapshot); err != nil {
+		return fmt.Errorf("load compact inventory totals: %w", err)
+	}
+	rankingIndex := InventoryIndex{Source: snapshot.Source, ItemIndex: map[string]ItemHits{}}
+	for key, total := range snapshot.Totals {
+		if total > 0 {
+			rankingIndex.ItemIndex[key] = ItemHits{Players: []PlayerHit{{TotalCount: total}}}
+		}
+	}
+	matches, err := resolveQuery(*query, rankingIndex, 8)
+	if err != nil {
+		return err
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("item resolve failed for query: %s", *query)
+	}
+	if len(matches) > 1 && !itemMatchesQuery(matches[0], *query) {
+		fmt.Fprintf(os.Stderr, "error: ambiguous item query %q matched %d items; use an exact item name\n", *query, len(matches))
+		for _, match := range matches {
+			fmt.Fprintf(os.Stderr, "- %s (slug=%s reg=%s:%d)\n", match.DisplayName, match.Slug, match.RegName, match.Damage)
+		}
+		return errors.New("ambiguous item query")
+	}
+	match := matches[0]
+	key := itemKey(match.ID, match.Damage)
+	counts, scoped := snapshot.Scopes[key]
+	fmt.Printf("Resolved item query %q -> %s (slug=%s registry=%s:%d)\n", *query, match.DisplayName, match.Slug, match.RegName, match.Damage)
+	fmt.Println(freshness(snapshot.Source))
+	if !scoped && snapshot.Version < 2 {
+		return errors.New("compact inventory totals need a version 2 refresh before storage can be separated from player inventories")
+	}
+	fmt.Printf("Shared storage total=%d containers=%d me=%d\n", counts.Containers+counts.ME, counts.Containers, counts.ME)
+	fmt.Printf("Player inventories=%d all indexed=%d\n", counts.Players, counts.Total)
+	return nil
 }
 
 func cmdFindItem(args []string) error {
@@ -1258,6 +1519,217 @@ func mergeBlockHits(idx InventoryIndex, keys []string) []BlockHit {
 	return out
 }
 
+type meCraftingInputAssessment struct {
+	Item             MEItemStack `json:"item"`
+	MEAvailable      int         `json:"me_available"`
+	SharedAvailable  int         `json:"shared_available"`
+	TotalAvailable   int         `json:"total_available"`
+	MissingFromME    int         `json:"missing_from_me"`
+	MissingFromShare int         `json:"missing_from_shared"`
+}
+
+type meCraftingMatch struct {
+	NetworkID           string                      `json:"network_id,omitempty"`
+	NetworkLabel        string                      `json:"network_label,omitempty"`
+	Dimension           int                         `json:"dim"`
+	Outputs             []MEItemStack               `json:"outputs"`
+	Inputs              []meCraftingInputAssessment `json:"inputs"`
+	Craftable           bool                        `json:"craftable"`
+	CanSubstitute       bool                        `json:"can_substitute"`
+	Priority            int                         `json:"priority"`
+	DirectMEDeficitKeys int                         `json:"direct_me_deficit_types"`
+	DirectMEMissing     int                         `json:"direct_me_missing_total"`
+	DirectSharedDeficit int                         `json:"direct_shared_deficit_types"`
+	DirectSharedMissing int                         `json:"direct_shared_missing_total"`
+	searchScore         int
+}
+
+func meStackSearchScore(stack MEItemStack, query string) int {
+	queryNorm := normalize(query)
+	queryCompact := compact(query)
+	if queryNorm == "" {
+		return 1
+	}
+	values := []string{
+		colorCode.ReplaceAllString(stack.DisplayName, ""),
+		stack.RegName,
+		stack.Name,
+		fmt.Sprintf("%s:%d", stack.RegName, stack.Damage),
+	}
+	best := 0
+	for _, value := range values {
+		valueNorm := normalize(value)
+		valueCompact := compact(value)
+		score := 0
+		switch {
+		case valueNorm == queryNorm || valueCompact == queryCompact:
+			score = 1000
+		case strings.Contains(valueNorm, queryNorm):
+			score = 800
+		default:
+			all := true
+			for _, token := range strings.Fields(queryNorm) {
+				if !strings.Contains(valueNorm, token) {
+					all = false
+					break
+				}
+			}
+			if all {
+				score = 600
+			}
+		}
+		if score > best {
+			best = score
+		}
+	}
+	return best
+}
+
+func mePatternSearchScore(pattern MECraftingPattern, query string) int {
+	best := 0
+	for _, output := range pattern.Outputs {
+		if score := meStackSearchScore(output, query); score > best {
+			best = score
+		}
+	}
+	return best
+}
+
+func meNetworkCounts(network MECraftingNetwork) map[string]int {
+	counts := make(map[string]int, len(network.Items))
+	for _, item := range network.Items {
+		counts[itemKey(item.ID, item.Damage)] += item.Count
+	}
+	return counts
+}
+
+func meCraftingAssessment(network MECraftingNetwork, pattern MECraftingPattern, totals CompactInventoryTotals, haveTotals, haveNetworkInventory bool, query string) meCraftingMatch {
+	networkCounts := meNetworkCounts(network)
+	match := meCraftingMatch{
+		NetworkID:     network.NetworkID,
+		NetworkLabel:  network.Label,
+		Dimension:     network.Dimension,
+		Outputs:       pattern.Outputs,
+		Craftable:     pattern.Craftable,
+		CanSubstitute: pattern.CanSubstitute,
+		Priority:      pattern.Priority,
+		searchScore:   mePatternSearchScore(pattern, query),
+		Inputs:        make([]meCraftingInputAssessment, 0, len(pattern.Inputs)),
+	}
+	for _, input := range pattern.Inputs {
+		assessment := meCraftingInputAssessment{Item: input}
+		if haveNetworkInventory {
+			assessment.MEAvailable = networkCounts[itemKey(input.ID, input.Damage)]
+			assessment.MissingFromME = max(0, input.Count-assessment.MEAvailable)
+			if assessment.MissingFromME > 0 {
+				match.DirectMEDeficitKeys++
+				match.DirectMEMissing += assessment.MissingFromME
+			}
+		}
+		if haveTotals {
+			counts := totals.Scopes[itemKey(input.ID, input.Damage)]
+			assessment.SharedAvailable = counts.Containers + assessment.MEAvailable
+			assessment.TotalAvailable = counts.Players + assessment.SharedAvailable
+			assessment.MissingFromShare = max(0, input.Count-assessment.SharedAvailable)
+			if assessment.MissingFromShare > 0 {
+				match.DirectSharedDeficit++
+				match.DirectSharedMissing += assessment.MissingFromShare
+			}
+		}
+		match.Inputs = append(match.Inputs, assessment)
+	}
+	return match
+}
+
+func cmdMECrafting(args []string) error {
+	fs := flag.NewFlagSet("me-crafting", flag.ContinueOnError)
+	query := fs.String("query", "", "")
+	active := fs.Bool("active", false, "")
+	limit := fs.Int("limit", 10, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *query == "" && fs.NArg() > 0 {
+		*query = strings.Join(fs.Args(), " ")
+	}
+	if *limit < 1 {
+		*limit = 1
+	}
+	if *limit > 25 {
+		*limit = 25
+	}
+	var snapshot MECraftingSnapshot
+	if err := loadJSON(defaultMECraftingFile(), &snapshot); err != nil {
+		return fmt.Errorf("load ME crafting snapshot: %w", err)
+	}
+	var totals CompactInventoryTotals
+	haveTotals := loadJSON(defaultTotalsFile(), &totals) == nil && totals.Version >= 2
+	haveNetworkInventory := snapshot.Version >= 2
+
+	matches := make([]meCraftingMatch, 0)
+	activeCrafts := make([]map[string]any, 0)
+	patternCount := 0
+	patternsTruncated := false
+	for _, network := range snapshot.Networks {
+		patternCount += len(network.Patterns)
+		patternsTruncated = patternsTruncated || network.PatternsTruncated
+		for _, pattern := range network.Patterns {
+			score := mePatternSearchScore(pattern, *query)
+			if strings.TrimSpace(*query) != "" && score == 0 {
+				continue
+			}
+			matches = append(matches, meCraftingAssessment(network, pattern, totals, haveTotals, haveNetworkInventory, *query))
+		}
+		if *active {
+			for _, craft := range network.ActiveCrafts {
+				if strings.TrimSpace(*query) != "" && (craft.Output == nil || meStackSearchScore(*craft.Output, *query) == 0) {
+					continue
+				}
+				activeCrafts = append(activeCrafts, map[string]any{
+					"network_id": network.NetworkID, "network_label": network.Label, "dim": network.Dimension, "craft": craft,
+				})
+			}
+		}
+	}
+	if patternCount == 0 && !*active {
+		return errors.New("ME crafting snapshot has no exported patterns; update/restart the server ME exporter and refresh ME data")
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].searchScore != matches[j].searchScore {
+			return matches[i].searchScore > matches[j].searchScore
+		}
+		if haveNetworkInventory && matches[i].DirectMEDeficitKeys != matches[j].DirectMEDeficitKeys {
+			return matches[i].DirectMEDeficitKeys < matches[j].DirectMEDeficitKeys
+		}
+		if haveNetworkInventory && matches[i].DirectMEMissing != matches[j].DirectMEMissing {
+			return matches[i].DirectMEMissing < matches[j].DirectMEMissing
+		}
+		if matches[i].Craftable != matches[j].Craftable {
+			return matches[i].Craftable
+		}
+		return matches[i].Priority > matches[j].Priority
+	})
+	if len(matches) > *limit {
+		matches = matches[:*limit]
+	}
+	if len(activeCrafts) > *limit {
+		activeCrafts = activeCrafts[:*limit]
+	}
+	payload := map[string]any{
+		"version": snapshot.Version, "generated_at": snapshot.GeneratedAt, "me_scan_at": snapshot.MEScanAt,
+		"me_freshness": ageText(snapshot.MEScanAt),
+		"query":        strings.TrimSpace(*query), "inventory_assessment_available": haveTotals,
+		"network_inventory_assessment_available": haveNetworkInventory,
+		"available_pattern_count":                patternCount, "patterns_truncated": patternsTruncated, "matches": matches,
+	}
+	if *active {
+		payload["active_crafts"] = activeCrafts
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
+}
+
 func cmdRefresh(args []string) error {
 	scope := "all"
 	for _, arg := range args {
@@ -1291,7 +1763,7 @@ func cmdRefresh(args []string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|totals|find-item|find-block|chest|refresh ...")
+	fmt.Fprintln(os.Stderr, "usage: gtnh_inventory_query status|find|totals|count-item|me-crafting|find-item|find-block|chest|refresh ...")
 	os.Exit(2)
 }
 
@@ -1307,6 +1779,10 @@ func main() {
 		err = cmdFind(os.Args[2:])
 	case "totals":
 		err = cmdTotals(os.Args[2:])
+	case "count-item":
+		err = cmdCountItem(os.Args[2:])
+	case "me-crafting":
+		err = cmdMECrafting(os.Args[2:])
 	case "find-item":
 		err = cmdFindItem(os.Args[2:])
 	case "find-block":

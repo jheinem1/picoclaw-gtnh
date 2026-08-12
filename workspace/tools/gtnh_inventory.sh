@@ -20,7 +20,7 @@ fi
 
 if [ "${GTNH_INVENTORY_FORCE_LEGACY:-0}" != "1" ] && [ -n "$QUERY_BIN" ] && [ -x "$QUERY_BIN" ]; then
   case "${1:-}" in
-    status|find|find-item|find-block|chest|refresh)
+    status|find|totals|count-item|me-crafting|find-item|find-block|chest|refresh)
       export GTNH_WORKSPACE="$WORKSPACE_DIR"
       exec "$QUERY_BIN" "$@"
       ;;
@@ -33,6 +33,9 @@ usage() {
 usage:
   sh gtnh_inventory status
   sh gtnh_inventory find [--item <mod:name[:damage]> [--any-damage] | --id <num> --damage <num>] [--player <name|uuid>] [--dim <int>] [--scope players|chests|containers|me|both|all] [--limit <n>]
+  sh gtnh_inventory count-item --query "<name>"
+  sh gtnh_inventory me-crafting (--query "<output item>" | --active) [--active] [--limit <n>]
+  sh gtnh_inventory totals --item <mod:name:damage> [--item ...] [--dim <int>] [--scope players|containers|me|both|all]
   sh gtnh_inventory find-item --query "<name>" [--player <name|uuid>] [--dim <int>] [--scope players|chests|containers|me|both|all] [--limit <n>]
   sh gtnh_inventory find-block (--block "<name>" | --id <num> --meta <num>) [--dim <int>] [--limit <n>]
   sh gtnh_inventory player --name <player> | --uuid <uuid> [--all]
@@ -813,6 +816,7 @@ shift || true
 case "$cmd" in
   status) cmd_status "$@" ;;
   find) cmd_find "$@" ;;
+  count-item) echo "error: count-item requires gtnh_inventory_query" >&2; exit 2 ;;
   find-item) cmd_find_item "$@" ;;
   find-block) cmd_find_block "$@" ;;
   player) cmd_player "$@" ;;

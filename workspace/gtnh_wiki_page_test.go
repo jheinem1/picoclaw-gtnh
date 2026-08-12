@@ -11,14 +11,23 @@ import (
 	"testing"
 )
 
-type wikiPageOutput struct {
-	OK      bool   `json:"ok"`
-	Error   string `json:"error"`
-	Query   string `json:"query"`
+type wikiSearchMatch struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Summary string `json:"summary"`
-	Source  string `json:"source"`
+}
+
+type wikiPageOutput struct {
+	OK       bool              `json:"ok"`
+	Exact    bool              `json:"exact"`
+	Error    string            `json:"error"`
+	Query    string            `json:"query"`
+	Title    string            `json:"title"`
+	URL      string            `json:"url"`
+	Summary  string            `json:"summary"`
+	Strategy string            `json:"strategy"`
+	Matches  []wikiSearchMatch `json:"matches"`
+	Source   string            `json:"source"`
 }
 
 func TestGTNHWikiPageMegaElectricBlastFurnaceIncludesConstruction(t *testing.T) {
@@ -94,21 +103,73 @@ func TestGTNHWikiPageElectricBlastFurnaceIsBoundedAndKeepsConstruction(t *testin
 	}
 }
 
-func TestGTNHWikiPageFailsWhenExtractIsEmpty(t *testing.T) {
+func TestGTNHWikiPageSearchesWhenExactPageIsEmpty(t *testing.T) {
+	searchCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("list") == "search" {
+			searchCalls++
+			if got := r.URL.Query().Get("srsearch"); got != "Thaumcraft autocrafting" {
+				t.Fatalf("srsearch = %q, want Thaumcraft autocrafting", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"query": map[string]any{"search": []map[string]any{{
+				"title":   "Thaumic Energistics",
+				"snippet": "Essentia storage and <span>Applied Energistics</span> integration.",
+			}}}})
+			return
+		}
 		writeWikiPage(t, w, "Empty Page", " \n\t ")
 	}))
 	defer server.Close()
 
-	out := runWikiPageExpectFailure(t, server.URL, "Empty Page", nil)
-	if out.OK {
-		t.Fatalf("ok = true, want failure")
+	out := runWikiPage(t, server.URL, "Thaumcraft autocrafting", nil)
+	if !out.OK || out.Exact {
+		t.Fatalf("result = %+v, want successful non-exact fallback", out)
 	}
-	if !strings.Contains(out.Error, "empty extract for page: Empty Page") {
-		t.Fatalf("error = %q, want empty extract message", out.Error)
+	if searchCalls != 1 {
+		t.Fatalf("search calls = %d, want 1", searchCalls)
+	}
+	if out.Strategy != "query" || len(out.Matches) != 1 {
+		t.Fatalf("fallback = %+v, want one query match", out)
+	}
+	if out.Matches[0].Title != "Thaumic Energistics" || strings.Contains(out.Matches[0].Summary, "<span>") {
+		t.Fatalf("match = %+v, want cleaned Thaumic Energistics result", out.Matches[0])
 	}
 }
 
+func TestGTNHWikiPageBroadensConversationalAutocraftingQuery(t *testing.T) {
+	searchQueries := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("list") != "search" {
+			writeWikiPage(t, w, "Missing", "")
+			return
+		}
+		query := r.URL.Query().Get("srsearch")
+		searchQueries = append(searchQueries, query)
+		w.Header().Set("Content-Type", "application/json")
+		search := []map[string]any{}
+		if query == "thaum* autom*" {
+			search = append(search, map[string]any{
+				"title":   "Complete Guide to Thaumic Energistics Automation",
+				"snippet": "Request magically crafted items from an AE system.",
+			})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"query": map[string]any{"search": search}})
+	}))
+	defer server.Close()
+
+	query := "what all do we need for thaumcraft autocrafting in our ME system"
+	out := runWikiPage(t, server.URL, query, nil)
+	if !out.OK || out.Exact || out.Strategy != "broadened_terms" {
+		t.Fatalf("result = %+v, want broadened fallback", out)
+	}
+	if len(searchQueries) != 2 || searchQueries[0] != query || searchQueries[1] != "thaum* autom*" {
+		t.Fatalf("search queries = %#v", searchQueries)
+	}
+	if len(out.Matches) != 1 || out.Matches[0].Title != "Complete Guide to Thaumic Energistics Automation" {
+		t.Fatalf("matches = %+v", out.Matches)
+	}
+}
 func runWikiPage(t *testing.T, apiBase, title string, extraEnv []string) wikiPageOutput {
 	t.Helper()
 	cmd := exec.Command("sh", "./gtnh_wiki_page", title)

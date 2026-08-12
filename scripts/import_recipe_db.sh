@@ -34,6 +34,12 @@ if command -v sqlite3 >/dev/null 2>&1; then
       needs_v2_reconcile=1
     elif [[ "$(sqlite3 "$tmp" "SELECT count(*) FROM pragma_table_info('ore_vein_dimensions') WHERE name='dimension_key';")" != "1" ]]; then
       needs_v2_reconcile=1
+    elif [[ "$(sqlite3 "$tmp" "SELECT count(*) FROM sqlite_schema WHERE type='view' AND name='recipe_routes' AND lower(sql) LIKE '%recipe_input_options%';")" != "1" ]]; then
+      needs_v2_reconcile=1
+    elif [[ "$(sqlite3 "$tmp" "SELECT count(*) FROM sqlite_schema WHERE type='view' AND name='recipe_ingredients' AND lower(sql) LIKE '%recipe_input_options%' AND lower(sql) LIKE '%nullif(trim(e.resource_name)%';")" != "1" ]]; then
+      needs_v2_reconcile=1
+    elif [[ "$(sqlite3 "$tmp" "SELECT count(*) FROM recipe_inputs ri JOIN recipes r ON r.id=ri.recipe_id WHERE r.category='gregtech' AND ri.amount=0;")" != "0" ]]; then
+      needs_v2_reconcile=1
     fi
   fi
   if [[ "$schema_version" == "1" || "$needs_v2_reconcile" == "1" ]]; then
@@ -51,6 +57,16 @@ if command -v sqlite3 >/dev/null 2>&1; then
   done
   if [[ "$(sqlite3 "$tmp" "SELECT count(*) FROM recipe_outputs WHERE chance IS NULL;")" != "0" ]]; then
     echo "recipe database contains outputs without normalized chance" >&2
+    exit 1
+  fi
+  malformed_ingredients="$(sqlite3 "$tmp" "SELECT count(*) FROM recipe_ingredients WHERE input_resource_key IS NULL OR trim(coalesce(input_name,''))='' OR input_kind='unknown' OR input_resource_key IN ('item:','fluid:','oredict:') OR input_resource_key LIKE 'unknown:%';")"
+  if [[ "$malformed_ingredients" != "0" ]]; then
+    echo "recipe search view exposes $malformed_ingredients malformed ingredient identities" >&2
+    exit 1
+  fi
+  incomplete_routes="$(sqlite3 "$tmp" "SELECT count(*) FROM recipe_routes rr WHERE EXISTS (SELECT 1 FROM recipe_inputs ri WHERE ri.recipe_id=rr.recipe_id AND NOT EXISTS (SELECT 1 FROM recipe_input_options rio WHERE rio.input_id=ri.id));")"
+  if [[ "$incomplete_routes" != "0" ]]; then
+    echo "recipe search view exposes $incomplete_routes routes with unresolved inputs" >&2
     exit 1
   fi
   sqlite3 "$tmp" "SELECT 1 FROM item_search WHERE item_search MATCH 'machine' LIMIT 1;" >/dev/null

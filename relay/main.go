@@ -492,7 +492,7 @@ func askAgent(runner AgentRunner, cfg Config, ev ConsoleEvent, session string, m
 	prompt += "\nTreat clearly fictional Minecraft or factory roleplay as fiction. Give real-world emergency guidance only when the player clearly indicates real-world danger; if that distinction is genuinely unclear, ask one brief clarifying question."
 	prompt += "\nDo not claim a command was blocked by safety guard unless a tool call in this same turn returned stderr containing that exact phrase."
 	if mustVerify {
-		prompt += "\nVerify current facts with the appropriate native tool before answering: recipe_sql for recipes, inventory tools for live stock and locations, quest tools for progression, and GTNH wiki lookup for documentation. Preserve returned quantities and freshness exactly. If the result is ambiguous, ask one concise clarifying question."
+		prompt += "\nVerify current facts with the appropriate native tool before answering: item_id_lookup for numeric item ID/meta, mod_reference_search for indexed mod implementation details, item_search for unknown item names, recipe_sql for resolved recipes, inventory_count_item for quick storage counts, other inventory tools for locations, quest tools for progression, and GTNH wiki lookup for documentation. Preserve returned quantities, provenance, and freshness exactly. If the result is ambiguous, ask one concise clarifying question."
 	}
 
 	reply, err := askAgentWithPrompt(runner, cfg, session, prompt, recent, recalled, onCommentary, steering)

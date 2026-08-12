@@ -24,6 +24,7 @@ type itemMeta struct {
 type Planner struct {
 	quests          QuestIndex
 	inventory       InventoryIndex
+	inventoryTotals map[string]int
 	questStatus     StatusFile
 	inventoryStatus StatusFile
 	tasks           []TaskRow
@@ -45,13 +46,31 @@ func LoadWorkspace(workspace string) (*Planner, error) {
 		keysByDisplay:  map[string][]string{},
 		now:            time.Now,
 	}
-	if err := loadJSON(filepath.Join(workspace, "state", "quest_index.json"), &p.quests); err != nil {
-		return nil, fmt.Errorf("load quest index: %w", err)
+	compactQuestErr := loadJSON(filepath.Join(workspace, "state", "quest_planner_index.json"), &p.quests)
+	if compactQuestErr != nil {
+		if !os.IsNotExist(compactQuestErr) {
+			p.warnings = append(p.warnings, "compact quest index unavailable: "+compactQuestErr.Error())
+		}
+		if err := loadJSON(filepath.Join(workspace, "state", "quest_index.json"), &p.quests); err != nil {
+			return nil, fmt.Errorf("load quest index: %w", err)
+		}
 	}
 	normalizeQuestIndex(&p.quests)
-	if err := loadJSON(filepath.Join(workspace, "state", "inventory_index.json"), &p.inventory); err != nil {
-		p.warnings = append(p.warnings, "inventory index unavailable: "+err.Error())
-		p.inventory.ItemIndex = map[string]ItemHits{}
+	compact := InventoryTotals{}
+	compactErr := loadJSON(filepath.Join(workspace, "state", "quest_inventory_totals.json"), &compact)
+	if compactErr == nil {
+		p.inventory.Version = compact.Version
+		p.inventory.GeneratedAt = compact.GeneratedAt
+		p.inventory.Source = compact.Source
+		p.inventoryTotals = compact.Totals
+	} else {
+		if !os.IsNotExist(compactErr) {
+			p.warnings = append(p.warnings, "compact inventory totals unavailable: "+compactErr.Error())
+		}
+		if err := loadJSON(filepath.Join(workspace, "state", "inventory_index.json"), &p.inventory); err != nil {
+			p.warnings = append(p.warnings, "inventory index unavailable: "+err.Error())
+			p.inventory.ItemIndex = map[string]ItemHits{}
+		}
 	}
 	if err := loadJSON(filepath.Join(workspace, "state", "quest_status.json"), &p.questStatus); err != nil && !os.IsNotExist(err) {
 		p.warnings = append(p.warnings, "quest status unavailable: "+err.Error())
@@ -222,6 +241,9 @@ func loadTaskRows(path string) ([]TaskRow, error) {
 }
 
 func (p *Planner) inventoryCount(key string) int {
+	if p.inventoryTotals != nil {
+		return p.inventoryTotals[key]
+	}
 	hits := p.inventory.ItemIndex[key]
 	total := 0
 	for _, hit := range hits.Players {

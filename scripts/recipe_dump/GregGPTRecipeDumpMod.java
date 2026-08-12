@@ -135,6 +135,7 @@ public final class GregGPTRecipeDumpMod {
       int vanillaCount = vanilla.dump();
       int gregTechCount = gregTech.dump();
       worldgen.dump();
+      int oreDictEntryCount = db.dumpOreDictionary();
       db.finishSchema();
 
       db.putManifest("vanilla_recipe_count", String.valueOf(vanillaCount));
@@ -146,6 +147,7 @@ public final class GregGPTRecipeDumpMod {
       db.putManifest("ore_vein_count", String.valueOf(worldgen.veinCount));
       db.putManifest("small_ore_count", String.valueOf(worldgen.smallOreCount));
       db.putManifest("worldgen_error_count", String.valueOf(worldgen.errorCount));
+      db.putManifest("ore_dict_entry_count", String.valueOf(oreDictEntryCount));
       db.putManifest("worldgen_data_available", worldgen.errorCount == 0 && worldgen.veinCount > 0 ? "1" : "0");
       boolean sourceCoverageComplete =
           vanilla.craftingCount > 0
@@ -455,8 +457,11 @@ public final class GregGPTRecipeDumpMod {
           continue;
         }
         if (input) {
-          int inputId = db.insertInput(recipeId, pos, "item", accessors.stackSize(stack), null);
-          db.insertInputOption(inputId, 0, "item", db.itemId(stack), null, null, null, null, accessors.stackSize(stack));
+          int stackSize = accessors.stackSize(stack);
+          boolean reusable = stackSize == 0;
+          int requiredAmount = reusable ? 1 : stackSize;
+          int inputId = db.insertInput(recipeId, pos, "item", requiredAmount, null, !reusable, reusable);
+          db.insertInputOption(inputId, 0, "item", db.itemId(stack), null, null, null, null, requiredAmount);
         } else {
           db.insertOutput(recipeId, pos, "item", accessors.stackSize(stack), db.itemId(stack), null, Integer.valueOf(10000), null);
         }
@@ -747,6 +752,7 @@ public final class GregGPTRecipeDumpMod {
     private PreparedStatement putManifest;
     private PreparedStatement insertItem;
     private PreparedStatement selectItem;
+    private PreparedStatement insertOreDictEntry;
     private PreparedStatement insertFluid;
     private PreparedStatement selectFluid;
     private PreparedStatement insertHandler;
@@ -849,6 +855,8 @@ public final class GregGPTRecipeDumpMod {
           conn.prepareStatement(
               "INSERT OR IGNORE INTO items(registry_name, damage, display_name, unlocalized_name, max_damage) VALUES (?, ?, ?, ?, ?)");
       selectItem = conn.prepareStatement("SELECT id FROM items WHERE registry_name = ? AND damage = ?");
+      insertOreDictEntry =
+          conn.prepareStatement("INSERT OR IGNORE INTO ore_dict_entries(ore_name, item_id) VALUES (?, ?)");
       insertFluid = conn.prepareStatement("INSERT OR IGNORE INTO fluids(fluid_name, localized_name) VALUES (?, ?)");
       selectFluid = conn.prepareStatement("SELECT id FROM fluids WHERE fluid_name = ?");
       insertHandler = conn.prepareStatement("INSERT OR IGNORE INTO recipe_handlers(name) VALUES (?)");
@@ -859,7 +867,7 @@ public final class GregGPTRecipeDumpMod {
               Statement.RETURN_GENERATED_KEYS);
       insertInput =
           conn.prepareStatement(
-              "INSERT INTO recipe_inputs(recipe_id, position, kind, amount, label) VALUES (?, ?, ?, ?, ?)",
+              "INSERT INTO recipe_inputs(recipe_id, position, kind, amount, label, consumed, catalyst) VALUES (?, ?, ?, ?, ?, ?, ?)",
               Statement.RETURN_GENERATED_KEYS);
       insertInputOption =
           conn.prepareStatement(
@@ -892,9 +900,9 @@ public final class GregGPTRecipeDumpMod {
         st.executeUpdate(
             "CREATE VIEW resource_catalog AS SELECT 'item' AS resource_kind, id AS resource_id, 'item:' || registry_name || ':' || damage AS resource_key, display_name AS resource_name, registry_name, damage, NULL AS fluid_name FROM items UNION ALL SELECT 'fluid', id, 'fluid:' || fluid_name, COALESCE(localized_name, fluid_name), NULL, NULL, fluid_name FROM fluids");
         st.executeUpdate(
-            "CREATE VIEW recipe_routes AS SELECT r.id AS recipe_id, r.recipe_key, r.category, h.name AS handler_name, mc.capability_key, mc.machine_name_hint, r.duration_ticks, r.eut, CASE WHEN r.eut IS NULL THEN NULL WHEN abs(r.eut)<=8 THEN 'ULV' WHEN abs(r.eut)<=32 THEN 'LV' WHEN abs(r.eut)<=128 THEN 'MV' WHEN abs(r.eut)<=512 THEN 'HV' WHEN abs(r.eut)<=2048 THEN 'EV' WHEN abs(r.eut)<=8192 THEN 'IV' WHEN abs(r.eut)<=32768 THEN 'LuV' WHEN abs(r.eut)<=131072 THEN 'ZPM' WHEN abs(r.eut)<=524288 THEN 'UV' ELSE 'UHV+' END AS voltage_tier, e.position AS output_position, e.resource_kind AS output_kind, e.resource_key AS output_resource_key, e.resource_name AS output_name, i.registry_name, i.damage, f.fluid_name, e.amount AS output_amount, e.chance, e.expected_amount AS expected_output_amount, e.is_primary FROM recipe_edges e JOIN recipes r ON r.id=e.recipe_id JOIN recipe_handlers h ON h.id=r.handler_id LEFT JOIN machine_capabilities mc ON mc.handler_id=h.id LEFT JOIN items i ON i.id=e.item_id LEFT JOIN fluids f ON f.id=e.fluid_id WHERE e.direction='output' AND r.valid=1 AND r.hidden=0 AND r.fake=0 AND r.enabled=1");
+            "CREATE VIEW recipe_routes AS SELECT r.id AS recipe_id, r.recipe_key, r.category, h.name AS handler_name, mc.capability_key, mc.machine_name_hint, r.duration_ticks, r.eut, CASE WHEN r.eut IS NULL THEN NULL WHEN abs(r.eut)<=8 THEN 'ULV' WHEN abs(r.eut)<=32 THEN 'LV' WHEN abs(r.eut)<=128 THEN 'MV' WHEN abs(r.eut)<=512 THEN 'HV' WHEN abs(r.eut)<=2048 THEN 'EV' WHEN abs(r.eut)<=8192 THEN 'IV' WHEN abs(r.eut)<=32768 THEN 'LuV' WHEN abs(r.eut)<=131072 THEN 'ZPM' WHEN abs(r.eut)<=524288 THEN 'UV' ELSE 'UHV+' END AS voltage_tier, e.position AS output_position, e.resource_kind AS output_kind, e.resource_key AS output_resource_key, e.resource_name AS output_name, i.registry_name, i.damage, f.fluid_name, e.amount AS output_amount, e.chance, e.expected_amount AS expected_output_amount, e.is_primary FROM recipe_edges e JOIN recipes r ON r.id=e.recipe_id JOIN recipe_handlers h ON h.id=r.handler_id LEFT JOIN machine_capabilities mc ON mc.handler_id=h.id LEFT JOIN items i ON i.id=e.item_id LEFT JOIN fluids f ON f.id=e.fluid_id WHERE e.direction='output' AND r.valid=1 AND r.hidden=0 AND r.fake=0 AND r.enabled=1 AND NOT EXISTS (SELECT 1 FROM recipe_inputs ri WHERE ri.recipe_id=r.id AND NOT EXISTS (SELECT 1 FROM recipe_input_options rio WHERE rio.input_id=ri.id))");
         st.executeUpdate(
-            "CREATE VIEW recipe_ingredients AS SELECT e.recipe_id, e.position AS input_position, e.option_index, e.resource_kind AS input_kind, e.resource_key AS input_resource_key, e.resource_name AS input_name, i.registry_name, i.damage, f.fluid_name, e.ore_name, e.amount AS input_amount, e.consumed, e.catalyst FROM recipe_edges e LEFT JOIN items i ON i.id=e.item_id LEFT JOIN fluids f ON f.id=e.fluid_id WHERE e.direction='input'");
+            "CREATE VIEW recipe_ingredients AS SELECT e.recipe_id, e.position AS input_position, e.option_index, e.resource_kind AS input_kind, e.resource_key AS input_resource_key, COALESCE(NULLIF(trim(e.resource_name), ''), e.resource_key) AS input_name, i.registry_name, i.damage, f.fluid_name, e.ore_name, e.amount AS input_amount, e.consumed, e.catalyst FROM recipe_edges e JOIN recipes r ON r.id=e.recipe_id LEFT JOIN items i ON i.id=e.item_id LEFT JOIN fluids f ON f.id=e.fluid_id WHERE e.direction='input' AND r.valid=1 AND r.hidden=0 AND r.fake=0 AND r.enabled=1 AND e.resource_key NOT IN ('item:', 'fluid:', 'oredict:') AND NOT EXISTS (SELECT 1 FROM recipe_inputs ri WHERE ri.recipe_id=r.id AND NOT EXISTS (SELECT 1 FROM recipe_input_options rio WHERE rio.input_id=ri.id))");
         st.executeUpdate(
             "CREATE VIEW handler_machine_options AS SELECT mc.id AS capability_id, mc.handler_id, h.name AS handler_name, mc.capability_key, mc.machine_name_hint, mo.item_id, i.registry_name AS item_registry_name, i.damage AS item_damage, mo.block_registry_name, mo.block_meta, mo.display_name, mo.tier_name, mo.min_eut, mo.max_eut, mo.source FROM machine_capabilities mc JOIN recipe_handlers h ON h.id=mc.handler_id LEFT JOIN machine_options mo ON mo.capability_id=mc.id LEFT JOIN items i ON i.id=mo.item_id");
         st.executeUpdate(
@@ -903,6 +911,8 @@ public final class GregGPTRecipeDumpMod {
             "CREATE VIEW ore_generation_routes AS SELECT 'vein' AS generation_kind, v.vein_key AS source_key, v.display_name AS source_name, m.material_key, COALESCE(m.localized_name, m.internal_name) AS material_name, vm.role, d.dimension_key, d.dimension_name, d.min_y, d.max_y, v.weight, v.density, v.size, NULL AS amount_per_chunk FROM ore_veins v JOIN ore_vein_materials vm ON vm.vein_id=v.id JOIN ore_materials m ON m.id=vm.material_id JOIN ore_vein_dimensions d ON d.vein_id=v.id UNION ALL SELECT 'small_ore', s.small_ore_key, s.internal_name, m.material_key, COALESCE(m.localized_name, m.internal_name), 'small', d.dimension_key, d.dimension_name, s.min_y, s.max_y, NULL, NULL, NULL, s.amount_per_chunk FROM small_ores s JOIN ore_materials m ON m.id=s.material_id JOIN small_ore_dimensions d ON d.small_ore_id=s.id");
         st.executeUpdate("CREATE VIRTUAL TABLE item_search USING fts5(display_name, registry_name, unlocalized_name, content='items', content_rowid='id')");
         st.executeUpdate("INSERT INTO item_search(rowid, display_name, registry_name, unlocalized_name) SELECT id, display_name, registry_name, unlocalized_name FROM items");
+        st.executeUpdate("ANALYZE");
+        st.execute("PRAGMA optimize");
       } finally {
         st.close();
       }
@@ -962,6 +972,32 @@ public final class GregGPTRecipeDumpMod {
       return id;
     }
 
+    private int dumpOreDictionary() throws Exception {
+      Class<?> oreDictionary = classForName("net.minecraftforge.oredict.OreDictionary");
+      Object oreNamesValue = invokeStatic(oreDictionary, "getOreNames");
+      Method getOres = findMethod(oreDictionary, "getOres", String.class);
+      int count = 0;
+      for (Object oreNameValue : iterable(oreNamesValue)) {
+        if (oreNameValue == null || oreNameValue.toString().trim().isEmpty()) {
+          continue;
+        }
+        String oreName = oreNameValue.toString().trim();
+        Object stacks = getOres.invoke(null, oreName);
+        for (Object stack : iterable(stacks)) {
+          if (isEmptyStack(stack)) {
+            continue;
+          }
+          insertOreDictEntry.setString(1, oreName);
+          insertOreDictEntry.setInt(2, itemId(stack));
+          count += insertOreDictEntry.executeUpdate();
+        }
+      }
+      if (count == 0) {
+        throw new SQLException("Forge ore dictionary produced no item mappings");
+      }
+      return count;
+    }
+
     private int fluidId(Object fluidStack) throws Exception {
       String name = fluidName(fluidStack);
       Integer cached = fluidIds.get(name);
@@ -1016,11 +1052,25 @@ public final class GregGPTRecipeDumpMod {
     }
 
     private int insertInput(int recipeId, int position, String kind, Integer amount, String label) throws SQLException {
+      return insertInput(recipeId, position, kind, amount, label, true, false);
+    }
+
+    private int insertInput(
+        int recipeId,
+        int position,
+        String kind,
+        Integer amount,
+        String label,
+        boolean consumed,
+        boolean catalyst)
+        throws SQLException {
       insertInput.setInt(1, recipeId);
       insertInput.setInt(2, position);
       insertInput.setString(3, kind);
       setNullableInt(insertInput, 4, amount);
       insertInput.setString(5, label);
+      insertInput.setInt(6, consumed ? 1 : 0);
+      insertInput.setInt(7, catalyst ? 1 : 0);
       insertInput.executeUpdate();
       return generatedId(insertInput);
     }

@@ -1,0 +1,283 @@
+registry_name	damage	alias	source
+ae2fc:fluid_part	0	1k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	1	4k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	2	16k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	3	64k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	4	256k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	5	1024k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	6	4096k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_part	7	16384k ME Fluid Storage Component	canonical_display_stripped
+ae2fc:fluid_storage1	0	1k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage1024	0	1024k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage16	0	16k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage16384	0	16384k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage256	0	256k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage4	0	4k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage4096	0	4096k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:fluid_storage64	0	64k ME Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage1	0	1k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage1024	0	1024k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage16	0	16k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage16384	0	16384k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage256	0	256k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage4	0	4k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage4096	0	4096k ME Multi-Fluid Storage Cell	canonical_display_stripped
+ae2fc:multi_fluid_storage64	0	64k ME Multi-Fluid Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemAdvancedStorageCell.1024k	0	1024k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemAdvancedStorageCell.16384k	0	16384k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemAdvancedStorageCell.256k	0	256k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemAdvancedStorageCell.4096k	0	4096k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemBasicStorageCell.16k	0	16k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemBasicStorageCell.1k	0	1k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemBasicStorageCell.4k	0	4k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemBasicStorageCell.64k	0	64k ME Storage Cell	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	35	1k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	36	4k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	37	16k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	38	64k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	57	256k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	58	1024k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	59	4096k ME Storage Component	canonical_display_stripped
+appliedenergistics2:item.ItemMultiMaterial	60	16384k ME Storage Component	canonical_display_stripped
+appliedenergistics2:tile.BlockAdvancedCraftingStorage	0	256k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockAdvancedCraftingStorage	1	1024k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockAdvancedCraftingStorage	2	4096k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockAdvancedCraftingStorage	3	16384k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockCraftingStorage	0	1k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockCraftingStorage	1	4k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockCraftingStorage	2	16k Crafting Storage	canonical_display_stripped
+appliedenergistics2:tile.BlockCraftingStorage	3	64k Crafting Storage	canonical_display_stripped
+Botania:brewFlask	0	Flask of Fleetfeet (6)	canonical_display_stripped
+Botania:brewVial	0	Vial of Fleetfeet (4)	canonical_display_stripped
+Botany:pigment	0	Aquamarine	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	1	Black	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	2	Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	3	Brown	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	4	Cadet Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	5	Chocolate	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	6	Coral	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	7	Crimson	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	8	Cyan	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	9	Dark Goldenrod	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	10	Dark Gray	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	11	Dark Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	12	Dark Khaki	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	13	Dark Olive Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	14	Dark Orange	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	15	Dark Salmon	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	16	Dark Sea Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	17	Dark Slate Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	18	Dark Slate Gray	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	19	Dark Turquoise	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	20	Dark Violet	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	21	Deep Pink	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	22	Deep Sky Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	23	Dim Gray	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	24	Dodger Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	25	Gold	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	26	Goldenrod	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	27	Gray	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	28	Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	29	Hot Pink	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	30	Indian Red	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	31	Indigo	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	32	Khaki	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	33	Lavender	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	34	Lemon Chiffon	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	35	Light Gray	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	36	Light Sea Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	37	Light Steel Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	38	Lime	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	39	Lime Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	40	Magenta	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	41	Maroon	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	42	Medium Aquamarine	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	43	Medium Orchid	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	44	Medium Purple	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	45	Medium Sea Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	46	Medium Violet Red	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	47	Misty Rose	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	48	Navy	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	49	Olive	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	50	Olive Drab	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	51	Orange	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	52	Pale Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	53	Pale Turquoise	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	54	Pale Violet Red	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	55	Peru	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	56	Pink	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	57	Plum	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	58	Purple	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	59	Red	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	60	Rosy Brown	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	61	Royal Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	62	Salmon	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	63	Sandy Brown	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	64	Sea Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	65	Sienna	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	66	Sky Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	67	Slate Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	68	Slate Gray	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	69	Spring Green	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	70	Steel Blue	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	71	Tan	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	72	Teal	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	73	Thistle	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	74	Turquoise	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	75	Violet	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	76	Wheat	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	77	White	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	78	Yellow	binnie.botany.EnumFlowerColor tooltip
+Botany:pigment	79	Yellow Green	binnie.botany.EnumFlowerColor tooltip
+EMT:BaseBaubles	0	The One Ring	canonical_display_stripped
+EMT:electricCloud	0	Electric Cloud	canonical_display_stripped
+EMT:EMTBaubles	0	Armor Charging Ring	canonical_display_stripped
+EMT:EMTBaubles	1	Inventory Charging Ring	canonical_display_stripped
+ForbiddenMagic:WandCores	14	Alchemical Rod	canonical_display_stripped
+gregtech:gt.metaitem.01	32348	Samarium Electromagnet	canonical_display_stripped
+gregtech:gt.metaitem.01	32349	Tengam Electromagnet	canonical_display_stripped
+kubatech:kubablocks	0	Tea Acceptor	canonical_display_stripped
+kubatech:kubablocks	1	Tea Storage Extender	canonical_display_stripped
+kubatech:kubaitems	11	Kuba's Yellow Tea	canonical_display_stripped
+kubatech:kubaitems	12	Kuba's ULTIMATE Tea	canonical_display_stripped
+miscutils:bookGT	0	Thermal Boiler Manual	canonical_display_stripped
+miscutils:bookGT	1	Power Storage & You [Version 0.64]	canonical_display_stripped
+miscutils:bookGT	2	How to: Modular Baubles	canonical_display_stripped
+miscutils:bookGT	3	Multi-Machine Manual	canonical_display_stripped
+miscutils:bookGT	4	Nuclear Chemistry [FFPP]	canonical_display_stripped
+miscutils:dummyResearch	0	Research on Containment Fields	canonical_display_stripped
+miscutils:dummyResearch	1	Research on Basic Chemistry	canonical_display_stripped
+miscutils:dummyResearch	2	Research on Advanced Chemistry	canonical_display_stripped
+miscutils:dummyResearch	3	Research on Basic Physics	canonical_display_stripped
+miscutils:dummyResearch	4	Research on Advanced Physics	canonical_display_stripped
+miscutils:dummyResearch	5	Research on Basic Metallurgy	canonical_display_stripped
+miscutils:dummyResearch	6	Research on Advanced Metallurgy	canonical_display_stripped
+miscutils:dummyResearch	7	Research on Turbine Automation	canonical_display_stripped
+miscutils:dummyResearch	8	Research on Cloaking Technologies	canonical_display_stripped
+miscutils:dummyResearch	9	Research on Gas Sparging	canonical_display_stripped
+miscutils:dummyResearch	10	Research on Molecular Transformation	canonical_display_stripped
+miscutils:GTPP.BattPack.01.name	0	Charge Pack [LV]	canonical_display_stripped
+miscutils:GTPP.BattPack.01.name	1	Charge Pack [LV]	canonical_display_stripped
+miscutils:GTPP.BattPack.01.name	26	Charge Pack [LV]	canonical_display_stripped
+miscutils:GTPP.BattPack.02.name	0	Charge Pack [MV]	canonical_display_stripped
+miscutils:GTPP.BattPack.02.name	1	Charge Pack [MV]	canonical_display_stripped
+miscutils:GTPP.BattPack.02.name	26	Charge Pack [MV]	canonical_display_stripped
+miscutils:GTPP.BattPack.03.name	0	Charge Pack [HV]	canonical_display_stripped
+miscutils:GTPP.BattPack.03.name	1	Charge Pack [HV]	canonical_display_stripped
+miscutils:GTPP.BattPack.03.name	26	Charge Pack [HV]	canonical_display_stripped
+miscutils:GTPP.BattPack.04.name	0	Charge Pack [EV]	canonical_display_stripped
+miscutils:GTPP.BattPack.04.name	1	Charge Pack [EV]	canonical_display_stripped
+miscutils:GTPP.BattPack.04.name	26	Charge Pack [EV]	canonical_display_stripped
+miscutils:GTPP.BattPack.05.name	0	Charge Pack [IV]	canonical_display_stripped
+miscutils:GTPP.BattPack.05.name	1	Charge Pack [IV]	canonical_display_stripped
+miscutils:GTPP.BattPack.05.name	26	Charge Pack [IV]	canonical_display_stripped
+miscutils:GTPP.BattPack.06.name	0	Charge Pack [LuV]	canonical_display_stripped
+miscutils:GTPP.BattPack.06.name	1	Charge Pack [LuV]	canonical_display_stripped
+miscutils:GTPP.BattPack.06.name	26	Charge Pack [LuV]	canonical_display_stripped
+miscutils:GTPP.BattPack.07.name	0	Charge Pack [ZPM]	canonical_display_stripped
+miscutils:GTPP.BattPack.07.name	1	Charge Pack [ZPM]	canonical_display_stripped
+miscutils:GTPP.BattPack.07.name	26	Charge Pack [ZPM]	canonical_display_stripped
+miscutils:GTPP.BattPack.08.name	0	Charge Pack [UV]	canonical_display_stripped
+miscutils:GTPP.BattPack.08.name	1	Charge Pack [UV]	canonical_display_stripped
+miscutils:GTPP.BattPack.08.name	26	Charge Pack [UV]	canonical_display_stripped
+miscutils:GTPP.BattPack.09.name	0	Charge Pack [UHV]	canonical_display_stripped
+miscutils:GTPP.BattPack.09.name	1	Charge Pack [UHV]	canonical_display_stripped
+miscutils:GTPP.BattPack.09.name	26	Charge Pack [UHV]	canonical_display_stripped
+miscutils:GTPP.bauble.fireprotection.0.name	0	Supreme Pizza Gloves	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	0	Breedable Algae	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	1	Breedable Algae	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	2	Breedable Algae	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	3	Breedable Algae	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	4	Breedable Algae	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	5	Breedable Algae	canonical_display_stripped
+miscutils:item.BasicAlgaeItem	6	Breedable Algae	canonical_display_stripped
+miscutils:itemCircuitLFTR	0	Control Circuit	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	0	Ultra Low Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	1	Low Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	2	Medium Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	3	High Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	4	Extreme Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	5	Insane Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	6	Ludicrous Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	7	ZPM Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	8	Ultimate Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	9	Ultimate High Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	10	Ultimate Extreme Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	11	Ultimate Insane Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	12	Ultimate Mega Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	13	Ultimate Extended Mega Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemCustomMetaCover.miscutils.GtMachineCasings	14	Maximum Voltage Machine Plate Cover	canonical_display_stripped
+miscutils:itemGenericToken	0	BitCoin	canonical_display_stripped
+miscutils:itemGenericToken	1	Hand Pump Trade Token I	canonical_display_stripped
+miscutils:itemGenericToken	2	Hand Pump Trade Token II	canonical_display_stripped
+miscutils:itemGenericToken	3	Hand Pump Trade Token III	canonical_display_stripped
+miscutils:itemGenericToken	4	Hand Pump Trade Token IV	canonical_display_stripped
+miscutils:personalCloakingDevice-0.0	0	Personal Cloaking Device	canonical_display_stripped
+miscutils:personalHealingDevice	0	Personal Healing NanoBooster	canonical_display_stripped
+OpenComputers:accessPoint	0	Access Point	canonical_display_stripped
+OpenComputers:switch	0	Switch	canonical_display_stripped
+TConstruct:ArrowAmmo	0	Typhoon	canonical_display_stripped
+TConstruct:battleaxe	0	Desolation	canonical_display_stripped
+TConstruct:battlesign	0	Read Carefully	canonical_display_stripped
+TConstruct:BoltAmmo	0	Pierce	canonical_display_stripped
+TConstruct:Crossbow	0	Heartseeker	canonical_display_stripped
+TConstruct:cutlass	0	Yaaaarghh!	canonical_display_stripped
+TConstruct:frypan	0	The Pan of Doooom	canonical_display_stripped
+TConstruct:hammer	0	Tunneler	canonical_display_stripped
+TConstruct:hatchet	0	Tomahawk	canonical_display_stripped
+TConstruct:ShortBow	0	Cyclone	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	0	Crude Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	1	Primitive Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	2	Stable Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	3	Advanced Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	4	Superb Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	5	Exotic Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	6	Perfect Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	7	Tipler Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.spacetime_compression_field_generator	8	Gallifreyan Spacetime Compression Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	0	Crude Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	1	Primitive Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	2	Stable Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	3	Advanced Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	4	Superb Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	5	Exotic Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	6	Perfect Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	7	Tipler Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.stabilisation_field_generator	8	Gallifreyan Stabilisation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	0	Crude Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	1	Primitive Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	2	Stable Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	3	Advanced Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	4	Superb Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	5	Exotic Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	6	Perfect Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	7	Tipler Time Dilation Field Generator	canonical_display_stripped
+tectech:gt.time_acceleration_field_generator	8	Gallifreyan Time Dilation Field Generator	canonical_display_stripped
+Thaumcraft:WandCasting	84	Void Aspected Alchemical Wand	canonical_display_stripped
+thaumicbases:nodeFoci	0	Node Manipulator Focus: Brightness	canonical_display_stripped
+thaumicbases:nodeFoci	1	Node Manipulator Focus: Destruction	canonical_display_stripped
+thaumicbases:nodeFoci	2	Node Manipulator Focus: Efficiency	canonical_display_stripped
+thaumicbases:nodeFoci	3	Node Manipulator Focus: Hunger	canonical_display_stripped
+thaumicbases:nodeFoci	4	Node Manipulator Focus: Instability	canonical_display_stripped
+thaumicbases:nodeFoci	5	Node Manipulator Focus: Purity	canonical_display_stripped
+thaumicbases:nodeFoci	6	Node Manipulator Focus: Sinister	canonical_display_stripped
+thaumicbases:nodeFoci	7	Node Manipulator Focus: Speed	canonical_display_stripped
+thaumicbases:nodeFoci	8	Node Manipulator Focus: Stability	canonical_display_stripped
+thaumicbases:nodeFoci	9	Node Manipulator Focus: Taint	canonical_display_stripped
+thaumicenergistics:storage.component	0	1k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	1	4k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	2	16k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	3	64k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	5	256k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	6	1024k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	7	4096k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.component	8	16384k ME Essentia Storage Component	canonical_display_stripped
+thaumicenergistics:storage.essentia	0	1k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	1	4k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	2	16k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	3	64k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	5	256k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	6	1024k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	7	4096k ME Essentia Storage Cell	canonical_display_stripped
+thaumicenergistics:storage.essentia	8	16384k ME Essentia Storage Cell	canonical_display_stripped
+ToxicEverglades:everglades.trigger	0	Alkalus Disk [Activated]	canonical_display_stripped

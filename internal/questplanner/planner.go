@@ -47,11 +47,11 @@ func (p *Planner) Plan(user, message string, limit int) PlanResult {
 	candidates := make([]Recommendation, 0, len(p.quests.Quests)+len(p.tasks))
 	excluded := 0
 	for _, quest := range p.quests.Quests {
-		candidate := p.evaluateQuest(quest, questByID, activeTier, tierHint, user)
-		if candidate.State == "completed_unclaimed" && !requestsRewardClaim(message) {
+		if !questEligibleForPlan(quest, questByID, tierHint, user, message) {
 			excluded++
 			continue
 		}
+		candidate := p.evaluateQuest(quest, questByID, activeTier, tierHint, user)
 		if candidate.Eligible {
 			candidates = append(candidates, candidate)
 		} else {
@@ -97,6 +97,15 @@ func (p *Planner) Plan(user, message string, limit int) PlanResult {
 		Warnings:        p.allWarnings(),
 	}
 }
+func questEligibleForPlan(quest Quest, questByID map[string]Quest, tierHint, user, message string) bool {
+	if quest.Completed {
+		return questClaimableFor(quest, user) && requestsRewardClaim(message)
+	}
+	if _, blockedBy := effectiveState(quest, questByID); len(blockedBy) > 0 {
+		return false
+	}
+	return tierHint == "" || strings.Contains(strings.ToLower(quest.QuestLine), tierHint)
+}
 
 func (p *Planner) ExplainQuest(id, user, message string) (Recommendation, error) {
 	questByID := p.questMap()
@@ -133,7 +142,10 @@ func (p *Planner) evaluateQuest(quest Quest, questByID map[string]Quest, activeT
 	}
 
 	materials := p.assessMaterials(quest, user)
-	downstream := downstreamCount(quest.ID, questByID)
+	downstream := 0
+	if eligible {
+		downstream = downstreamCount(quest.ID, questByID)
+	}
 	actionUnlocks := append([]string(nil), quest.Unlocks...)
 	actionDownstream := downstream
 	if quest.Completed {

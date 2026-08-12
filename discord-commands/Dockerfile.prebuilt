@@ -4,4 +4,5 @@ WORKDIR /app
 COPY discord-commands/prebuilt/discord-commands /usr/local/bin/discord-commands
 COPY discord-commands/prebuilt/gtnh_inventory_query /usr/local/bin/gtnh_inventory_query
 COPY discord-commands/prebuilt/gtnh_quest_query /usr/local/bin/gtnh_quest_query
+COPY discord-commands/prebuilt/codex /usr/local/bin/codex
 ENTRYPOINT ["/usr/local/bin/discord-commands"]

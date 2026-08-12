@@ -93,10 +93,15 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 
 	tools := []Tool{
 		recipeSQLTool(cfg, medium),
+		resourceSearchTool(cfg, medium),
+		itemSearchTool(cfg, short),
+		recipeCompareTool(cfg, medium),
+		itemIDLookupTool(cfg, short),
+		modReferenceSearchTool(cfg, medium),
 		oreGenerationTool(cfg, medium),
 		identityMapTool(cfg, short),
 		interactionFailureLogTool(cfg, short),
-		tool("gtnh_wiki_page", GroupGTNHData, "Fetch a GTNH wiki page summary.", network, object(
+		tool("gtnh_wiki_page", GroupGTNHData, "Fetch an exact GTNH wiki page summary. Pass the concrete subject phrase, not only a generic parent-mod title. When the title is missing or empty, returns exact=false with bounded full-text search matches; inspect those candidates and continue with resource, recipe, ME-pattern, and installed-mod evidence instead of assuming the subject does not exist.", network, object(
 			required("title", stringSpec("Wiki page title.")),
 		), func(a Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_wiki_page", stringArg(a, "title")}, nil
@@ -148,6 +153,28 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			}
 			argv = append(argv, "--scope", scope)
 			return argv, nil
+		}),
+		tool("me_crafting", GroupInventory, "Search currently installed ME autocrafting patterns and optionally active crafting CPU jobs. With no query or active filter, return a bounded pattern sample plus the available pattern count. Results include exact pattern inputs/outputs, live ME and shared-storage deficits, freshness, and truncation status.", medium, object(
+			optional("query", stringSpec("Output item display name or exact registry identity to match.")),
+			optional("active", boolSpec("Include matching active crafting CPU jobs; with no query, list all busy CPUs.", false)),
+			optional("limit", intSpec("Maximum matching patterns and active jobs to return.", 1, 25, 10)),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "gtnh_inventory", "me-crafting"}
+			if query := stringArg(a, "query"); query != "" {
+				argv = append(argv, "--query", query)
+			}
+			if boolArg(a, "active") {
+				argv = append(argv, "--active")
+			}
+			if limit := intArg(a, "limit", 0); limit > 0 {
+				argv = append(argv, "--limit", strconv.Itoa(limit))
+			}
+			return argv, nil
+		}),
+		tool("inventory_count_item", GroupInventory, "Quickly resolve a natural-language item name and return current aggregate counts from the compact inventory snapshot. Use this for do-we-have-any, how-many, and shared-storage availability questions. It reports containers plus ME as shared storage separately from player inventories; use inventory_find_item only when locations are requested.", medium, object(
+			required("query", stringSpec("Item display name, registry name, or unlocalized name to count.")),
+		), func(a Arguments) ([]string, error) {
+			return []string{"sh", "gtnh_inventory", "count-item", "--query", stringArg(a, "query")}, nil
 		}),
 		tool("inventory_find_item", GroupInventory, "Best-effort natural-language item resolver and inventory lookup. Prefer recipe_sql followed by inventory_find when exact identity matters. Do not use for placed blocks.", medium, object(
 			required("query", stringSpec("Natural-language item display name.")),
@@ -391,6 +418,15 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 			return []string{"sh", "gtnh_tasks", "summary"}, nil
 		}),
 
+		tool("player_positions", GroupMinecraft, "Get current dimension and coordinates for all online Minecraft players, or filter by player name.", network, object(
+			optional("player", stringSpec("Exact Minecraft player name; omit to list all online players.")),
+		), func(a Arguments) ([]string, error) {
+			argv := []string{"sh", "mc_positions"}
+			if player := stringArg(a, "player"); player != "" {
+				argv = append(argv, player)
+			}
+			return argv, nil
+		}),
 		tool("mc_online", GroupMinecraft, "List online Minecraft players through the bridge.", network, object(
 			optional("lines", intSpec("Console lines to scan.", 1, 5000, 500)),
 		), func(a Arguments) ([]string, error) {

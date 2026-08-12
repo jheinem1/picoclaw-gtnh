@@ -55,6 +55,8 @@ Discord-first GTNH assistant stack for Raspberry Pi 3 using GregGPT + Podman, wi
 
 Discord slash commands are provided by the separate `discord-commands` service in the compose stack. Global command registration can take a while to propagate; if you want fast iteration, set `DISCORD_GUILD_ID` in `deploy/env/greggpt.env` to the target guild and redeploy.
 
+Experimental live voice is available behind `GREGGPT_VOICE_ENABLED=true`. Use `/voice join channel:<voice-channel>` to start it, `/voice status` to inspect it, and `/voice leave` to stop it. The Discord image bundles a pinned ARM64 Codex CLI and connects through app-server's experimental WebRTC transport. It deliberately removes `OPENAI_API_KEY` from the child process and requires `auth_mode=chatgpt` in the existing `/root/.greggpt/auth.json`, so voice uses the same ChatGPT login as the text agent rather than API billing. The Discord service refreshes the shared credential under the normal OAuth file lock, then supplies only the access token and ChatGPT account ID to app-server's external-auth login in memory. The isolated `/root/.greggpt/voice-codex` home contains no OAuth credential or refresh token; reconnecting starts a new short-lived session and obtains a fresh access token again.
+
 The OAuth helper requires a current `codex` CLI on the workstation. It does not expect an authentication binary inside the Pi images. The login runs with an isolated temporary `CODEX_HOME`, validates the generated ChatGPT OAuth credentials, transfers them over the same narrowed SSH path, and replaces `runtime/greggpt/auth.json` while holding the same lock used by the running services.
 
 ## Pi access
@@ -257,11 +259,15 @@ Index outputs written under workspace state:
 - `state/inventory_index.json`
 - `state/inventory_status.json`
 - `state/inventory_refresh.json` (manual refresh request)
+- `state/quest_inventory_totals.json` (compact per-source totals used by fast count and quest tools)
+- `state/me_crafting.json` (installed ME patterns and active crafting CPU jobs)
 
 Commands from workspace root:
 - `sh gtnh_inventory status`
 - `sh gtnh_inventory find --item <mod:name[:damage]> [--any-damage] [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
 - `sh gtnh_inventory totals --item <mod:name:damage> [--item <mod:name:damage> ...] [--scope players|chests|containers|me|both|all] [--dim <id>]`
+- `sh gtnh_inventory count-item --query "<name>"`
+- `sh gtnh_inventory me-crafting (--query "<output item>" | --active) [--active] [--limit <n>]`
 - `sh gtnh_inventory find-item --query "<name>" [--player <name|uuid>] [--scope players|chests|containers|me|both|all] [--limit <n>]`
 - `sh gtnh_inventory find-block --block "<name>" [--limit <n>]`
 - `sh gtnh_inventory player --name <player>|--uuid <uuid> [--all]`
@@ -288,7 +294,7 @@ To provide exact AE2/ME contents, install the GregGPT ME export mod on the GTNH 
    - `scripts/install_me_export_mod.sh "/path/to/server"`
 3. Restart the server. The mod writes:
    - `world/greggpt/me_index.json`
-The exporter runs periodically and `inventory-sync` marks ME data stale if this file is missing or old.
+The exporter runs periodically and includes stored items, installed autocrafting patterns, and active crafting CPU jobs. `inventory-sync` writes the compact `state/me_crafting.json` query surface and marks ME data stale if the source file is missing or old.
 
 The same mod also writes loaded tile-entity inventories to:
 - `world/picoclaw/block_inventories.json`
@@ -297,6 +303,7 @@ The same mod also writes loaded tile-entity inventories to:
 
 Exporter defaults are intentionally conservative for live servers:
 - ME export: enabled, every 300 seconds (`-Dgreggpt.me_export_enabled=true`, `-Dgreggpt.me_export_interval_seconds=300`)
+- ME pattern traversal: 128 work entries per tick with a 2 ms budget and at most 5,000 patterns per network (`-Dgreggpt.me_export_items_per_tick=128`, `-Dgreggpt.me_export_budget_ms=2`, `-Dgreggpt.me_export_max_patterns_per_network=5000`); truncation is explicit in query output
 - Block inventory export: enabled, every 300 seconds (`-Dgreggpt.block_inventory_export_enabled=true`, `-Dgreggpt.block_inventory_export_interval_seconds=300`)
 - Block inventory work is budgeted across ticks (`-Dgreggpt.block_inventory_tiles_per_tick=2`, `-Dgreggpt.block_inventory_budget_ms=2`)
 
@@ -315,6 +322,8 @@ To build a real GTNH ore-dictionary cache without checking large dumps into the 
    - `scripts/import_oredict_dump.sh "/path/to/instance/minecraft/dumps/greggpt_oredict_dump.tsv"`
 5. If needed, sync updated runtime data to the Pi:
    - `scripts/sync_gtnh_data.sh DEPLOY_TO_PI=1`
+6. To populate an existing schema-v2 recipe database with those exact mappings:
+   - `scripts/backfill_recipe_oredict.sh "/path/to/greggpt_recipes.sqlite"`
 
 The imported runtime index is:
 - `data/gtnh/index/oredict_index.tsv`
@@ -343,9 +352,14 @@ Env vars in `deploy/env/greggpt.env`:
 - `INVENTORY_SCAN_DIMS` (defaults to `0,-1,1,183`; dimension 183 is the shared pocket dimension)
 - `INVENTORY_MAX_REGION_FILES_PER_RUN`
 - `INVENTORY_CHEST_BOUNDS` (`dim,min_x,min_z,max_x,max_z`; optional chest scan bounding box)
+- `INVENTORY_CHEST_AREAS` (semicolon-separated `dim,min_x,min_z,max_x,max_z` boxes; priority region snapshots refreshed with the block-inventory interval)
+
+The native `resource_search` tool safely resolves item and fluid identities with stable recipe keys, `item_search` provides item-only FTS results, `recipe_compare` performs bounded two-target production comparisons, `item_id_lookup` resolves exported Minecraft numeric ID/meta pairs, and `mod_reference_search` searches bounded artifact-derived references under `workspace/gtnh-data/mod-reference`. The initial corpus covers Binnie Botany flower-color mutations and Thaumic Energistics automation mechanics from their exact installed jars.
 
 The ME and block-inventory exporters are fetched before an all-region chest pass, so a slow
-world scan cannot delay pocket-dimension machine data. Chest scheduling records the last
+world scan cannot delay pocket-dimension machine data. Priority chest areas are read directly
+from their region files on the same five-minute cycle, even when those chunks are not loaded.
+Chest scheduling records the last
 attempt as well as the last successful snapshot; failed complete scans retain the previous
 snapshot and wait for the configured interval instead of retrying every loop.
 

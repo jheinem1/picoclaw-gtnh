@@ -93,6 +93,12 @@ type InventoryIndex struct {
 	Source      InventorySource     `json:"source"`
 	ItemIndex   map[string]ItemHits `json:"item_index"`
 }
+type InventoryTotals struct {
+	Version     int             `json:"version"`
+	GeneratedAt string          `json:"generated_at"`
+	Source      InventorySource `json:"source"`
+	Totals      map[string]int  `json:"totals"`
+}
 
 type ItemHits struct {
 	Players []CountHit `json:"players"`

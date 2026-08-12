@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,5 +137,72 @@ func TestParseOnlineListLine_Invalid(t *testing.T) {
 	_, err := parseOnlineListLine("joined the game")
 	if err == nil {
 		t.Fatalf("expected parse error")
+	}
+}
+
+func TestGetMCPositionsRefreshesAndFiltersSnapshot(t *testing.T) {
+	var sawSync bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/game-servers/server-1/files/sync":
+			sawSync = true
+			w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/game-servers/server-1/files/world/greggpt/player_positions.json":
+			w.Write([]byte(`{"generated_at":"2026-08-11T20:15:00Z","players":[{"name":"Snow","uuid":"snow-id","dim":0,"x":12.5,"y":64,"z":-8.25},{"name":"Greg","dim":183,"x":1,"y":2,"z":3}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	b := newBridge(Config{
+		DatHostToken: "token", DatHostServer: "server-1", DatHostBase: server.URL,
+		Timeout: time.Second, StateFile: t.TempDir() + "/state.json", DedupeMax: 1000,
+		PlayerPositionsPath:   "world/greggpt/player_positions.json",
+		PlayerPositionsMaxAge: 365 * 24 * time.Hour,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/mc/positions?player=snow", nil)
+	rec := httptest.NewRecorder()
+	b.getMCPositions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got PlayerPositionsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !sawSync || !got.OK || got.Source != "greggpt_player_export" || got.GeneratedAt != "2026-08-11T20:15:00Z" {
+		t.Fatalf("unexpected response metadata: sync=%v response=%#v", sawSync, got)
+	}
+	if len(got.Players) != 1 || got.Players[0].Name != "Snow" || got.Players[0].X != 12.5 || got.Players[0].Z != -8.25 {
+		t.Fatalf("unexpected filtered players: %#v", got.Players)
+	}
+}
+
+func TestGetMCPositionsRejectsStaleSnapshot(t *testing.T) {
+	stale := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			w.Write([]byte(`{}`))
+		case http.MethodGet:
+			w.Write([]byte(`{"generated_at":"` + stale + `","players":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	b := newBridge(Config{
+		DatHostToken: "token", DatHostServer: "server-1", DatHostBase: server.URL,
+		Timeout: time.Second, StateFile: t.TempDir() + "/state.json", DedupeMax: 1000,
+		PlayerPositionsPath: "world/greggpt/player_positions.json", PlayerPositionsMaxAge: 30 * time.Second,
+	})
+	rec := httptest.NewRecorder()
+	b.getMCPositions(rec, httptest.NewRequest(http.MethodGet, "/mc/positions", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "stale") {
+		t.Fatalf("missing stale error: %s", rec.Body.String())
 	}
 }

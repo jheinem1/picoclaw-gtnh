@@ -33,6 +33,7 @@ Last updated: 2026-07-20
 - While a Discord task is active, ordinary messages from the same user in the same channel steer that task without requiring another mention; the first acknowledgement is posted as a reply to the steering message when commentary is enabled.
 - While a Minecraft task is active, ordinary chat from the same player steers that task without requiring the normal trigger substring; `mc-relay` polls for steering every two seconds by default.
 - Channel restriction strategy: enforce in Discord server/channel permissions and `GREGGPT_DISCORD_ALLOW_FROM`.
+- Experimental `/voice join`, `/voice status`, and `/voice leave` controls use Codex app-server WebRTC with the shared ChatGPT OAuth file. The voice subprocess strips `OPENAI_API_KEY` and refuses non-ChatGPT auth.
 - Fixed Kanban board channel (fishtank server): `1477539994825392128` via `KANBAN_CHANNEL_ID`.
 - Kanban board embed includes `Paused` column for blocked tasks with short reason text.
 
@@ -97,11 +98,12 @@ Last updated: 2026-07-20
 - Item TSV index builder: `workspace/tools/build_item_index.py`
 - Recipe DB importer: `scripts/import_recipe_db.sh`
 - Runtime recipe artifact: `gtnh-data/index/greggpt_recipes.sqlite`
-- Runtime recipe API: GregGPT `recipe_sql` tool only
+- Runtime recipe APIs: GregGPT `resource_search`, `item_search`, `recipe_compare`, and `recipe_sql` tools
 
 ### Query commands
 - Recipe and recipe-index item metadata queries use `recipe_sql`.
 - Inventory/storage item lookup uses `sh workspace/gtnh_inventory find-item --query "<name>" --scope all`.
+- Installed ME patterns and active crafting jobs use `sh workspace/gtnh_inventory me-crafting --query "<output>" [--active]`.
 - Old recipe and standalone item wrapper commands are intentionally absent.
 
 ## Storage layout

@@ -21,18 +21,20 @@ import (
 )
 
 type Config struct {
-	ListenAddr       string
-	DatHostToken     string
-	DatHostEmail     string
-	DatHostPassword  string
-	DatHostServer    string
-	DatHostBase      string
-	DefaultLines     int
-	ReplyMaxChars    int
-	Timeout          time.Duration
-	StateFile        string
-	DedupeMax        int
-	UseEmailPassword bool
+	ListenAddr            string
+	DatHostToken          string
+	DatHostEmail          string
+	DatHostPassword       string
+	DatHostServer         string
+	DatHostBase           string
+	DefaultLines          int
+	ReplyMaxChars         int
+	Timeout               time.Duration
+	StateFile             string
+	DedupeMax             int
+	PlayerPositionsMaxAge time.Duration
+	PlayerPositionsPath   string
+	UseEmailPassword      bool
 }
 
 type BridgeState struct {
@@ -75,6 +77,25 @@ type PresenceResponse struct {
 	Source  string           `json:"source"`
 	RawLine string           `json:"raw_line,omitempty"`
 }
+type PlayerPosition struct {
+	Name      string  `json:"name"`
+	UUID      string  `json:"uuid,omitempty"`
+	Dimension int     `json:"dim"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Z         float64 `json:"z"`
+	Yaw       float64 `json:"yaw,omitempty"`
+	Pitch     float64 `json:"pitch,omitempty"`
+}
+
+type PlayerPositionsResponse struct {
+	OK          bool             `json:"ok"`
+	GeneratedAt string           `json:"generated_at"`
+	FetchedAt   string           `json:"fetched_at"`
+	Source      string           `json:"source"`
+	Players     []PlayerPosition `json:"players"`
+	Player      string           `json:"player,omitempty"`
+}
 
 type consoleLine struct {
 	Text      string
@@ -103,17 +124,19 @@ func getenvInt(key string, fallback int) int {
 
 func loadConfig() (Config, error) {
 	cfg := Config{
-		ListenAddr:      getenv("DATHOST_BRIDGE_LISTEN", ":8080"),
-		DatHostToken:    strings.TrimSpace(os.Getenv("DATHOST_API_TOKEN")),
-		DatHostEmail:    strings.TrimSpace(os.Getenv("DATHOST_API_EMAIL")),
-		DatHostPassword: strings.TrimSpace(os.Getenv("DATHOST_API_PASSWORD")),
-		DatHostServer:   strings.TrimSpace(os.Getenv("DATHOST_SERVER_ID")),
-		DatHostBase:     strings.TrimRight(getenv("DATHOST_API_BASE", "https://dathost.net/api/0.1"), "/"),
-		DefaultLines:    getenvInt("DATHOST_CONSOLE_LINES", 500),
-		ReplyMaxChars:   getenvInt("MC_REPLY_MAX_CHARS", 180),
-		Timeout:         time.Duration(getenvInt("DATHOST_HTTP_TIMEOUT_SECONDS", 15)) * time.Second,
-		StateFile:       getenv("DATHOST_BRIDGE_STATE_FILE", "/var/lib/dathost-bridge/state.json"),
-		DedupeMax:       getenvInt("DATHOST_DEDUPE_MAX", 4000),
+		ListenAddr:            getenv("DATHOST_BRIDGE_LISTEN", ":8080"),
+		DatHostToken:          strings.TrimSpace(os.Getenv("DATHOST_API_TOKEN")),
+		DatHostEmail:          strings.TrimSpace(os.Getenv("DATHOST_API_EMAIL")),
+		DatHostPassword:       strings.TrimSpace(os.Getenv("DATHOST_API_PASSWORD")),
+		DatHostServer:         strings.TrimSpace(os.Getenv("DATHOST_SERVER_ID")),
+		DatHostBase:           strings.TrimRight(getenv("DATHOST_API_BASE", "https://dathost.net/api/0.1"), "/"),
+		DefaultLines:          getenvInt("DATHOST_CONSOLE_LINES", 500),
+		ReplyMaxChars:         getenvInt("MC_REPLY_MAX_CHARS", 180),
+		Timeout:               time.Duration(getenvInt("DATHOST_HTTP_TIMEOUT_SECONDS", 15)) * time.Second,
+		StateFile:             getenv("DATHOST_BRIDGE_STATE_FILE", "/var/lib/dathost-bridge/state.json"),
+		DedupeMax:             getenvInt("DATHOST_DEDUPE_MAX", 4000),
+		PlayerPositionsMaxAge: time.Duration(getenvInt("DATHOST_PLAYER_POSITIONS_MAX_AGE_SECONDS", 60)) * time.Second,
+		PlayerPositionsPath:   getenv("DATHOST_PLAYER_POSITIONS_PATH", "world/greggpt/player_positions.json"),
 	}
 
 	if cfg.DatHostToken == "" {
@@ -334,6 +357,85 @@ func (b *Bridge) getMCOnline(w http.ResponseWriter, r *http.Request) {
 		Source:  "dathost_console_list",
 		RawLine: line,
 	})
+}
+func (b *Bridge) getMCPositions(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		return
+	}
+	playerFilter := strings.TrimSpace(r.URL.Query().Get("player"))
+	syncPath := fmt.Sprintf("/game-servers/%s/files/sync", b.cfg.DatHostServer)
+	if _, status, err := b.callDatHost(r.Context(), http.MethodPost, syncPath, "application/json", nil); err != nil {
+		log.Printf("event=positions_sync_error status=%d error=%q", status, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "unable to refresh live player positions: " + err.Error()})
+		return
+	}
+
+	filePath := strings.Trim(strings.TrimSpace(b.cfg.PlayerPositionsPath), "/")
+	if filePath == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "player positions path is not configured"})
+		return
+	}
+	path := fmt.Sprintf("/game-servers/%s/files/%s", b.cfg.DatHostServer, encodeDatHostFilePath(filePath))
+	raw, status, err := b.callDatHost(r.Context(), http.MethodGet, path, "", nil)
+	if err != nil {
+		log.Printf("event=positions_fetch_error status=%d path=%q error=%q", status, filePath, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	var snapshot struct {
+		GeneratedAt string           `json:"generated_at"`
+		Players     []PlayerPosition `json:"players"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		log.Printf("event=positions_parse_error path=%q error=%q", filePath, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "unable to parse player positions export"})
+		return
+	}
+	if strings.TrimSpace(snapshot.GeneratedAt) == "" || snapshot.Players == nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "player positions export is incomplete"})
+		return
+	}
+	generatedAt, err := time.Parse(time.RFC3339, snapshot.GeneratedAt)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "player positions export has an invalid generated_at timestamp"})
+		return
+	}
+	maxAge := b.cfg.PlayerPositionsMaxAge
+	if maxAge <= 0 {
+		maxAge = time.Minute
+	}
+	age := time.Since(generatedAt)
+	if age < -maxAge || age > maxAge {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"ok":    false,
+			"error": fmt.Sprintf("player positions export is stale (generated_at=%s, max_age=%s)", snapshot.GeneratedAt, maxAge),
+		})
+		return
+	}
+	players := snapshot.Players
+	if playerFilter != "" {
+		players = make([]PlayerPosition, 0, 1)
+		for _, player := range snapshot.Players {
+			if strings.EqualFold(player.Name, playerFilter) {
+				players = append(players, player)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, PlayerPositionsResponse{
+		OK: true, GeneratedAt: snapshot.GeneratedAt, FetchedAt: time.Now().UTC().Format(time.RFC3339),
+		Source: "greggpt_player_export", Players: players, Player: playerFilter,
+	})
+}
+
+func encodeDatHostFilePath(path string) string {
+	parts := strings.Split(path, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
 }
 
 func (b *Bridge) postMCSay(w http.ResponseWriter, r *http.Request) {
@@ -685,6 +787,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", bridge.healthz)
 	mux.HandleFunc("/mc/console", bridge.getMCConsole)
+	mux.HandleFunc("/mc/positions", bridge.getMCPositions)
 	mux.HandleFunc("/mc/online", bridge.getMCOnline)
 	mux.HandleFunc("/mc/say", bridge.postMCSay)
 

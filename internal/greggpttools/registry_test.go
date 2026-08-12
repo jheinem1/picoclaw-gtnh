@@ -63,8 +63,11 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 	}{
 		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
+		{"player_positions", `{"player":"Snow"}`, []string{"sh", "mc_positions", "Snow"}},
 		{"inventory_find", `{"item":"gregtech:gt.metaitem.01","any_damage":true,"player":"Snow","dim":183,"scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01", "--any-damage", "--player", "Snow", "--dim", "183", "--scope", "players", "--limit", "5"}},
 		{"inventory_totals", `{"items":["gregtech:gt.metaitem.01:2045","IC2:itemCellEmpty:0"],"dim":183,"scope":"all"}`, []string{"sh", "gtnh_inventory", "totals", "--item", "gregtech:gt.metaitem.01:2045", "--item", "IC2:itemCellEmpty:0", "--dim", "183", "--scope", "all"}},
+		{"me_crafting", `{"query":"Energetic Alloy","active":true,"limit":7}`, []string{"sh", "gtnh_inventory", "me-crafting", "--query", "Energetic Alloy", "--active", "--limit", "7"}},
+		{"inventory_count_item", `{"query":"beetroot"}`, []string{"sh", "gtnh_inventory", "count-item", "--query", "beetroot"}},
 		{"inventory_find_item", `{"query":"steel ingot","player":"Snow","dim":183,"scope":"me","limit":7}`, []string{"sh", "gtnh_inventory", "find-item", "--query", "steel ingot", "--player", "Snow", "--dim", "183", "--scope", "me", "--limit", "7"}},
 		{"inventory_player", `{"name":"Snow","all":true}`, []string{"sh", "gtnh_inventory", "player", "--name", "Snow", "--all"}},
 		{"inventory_chest", `{"x":1,"y":64,"z":-2,"dim":-1}`, []string{"sh", "gtnh_inventory", "chest", "--x", "1", "--y", "64", "--z", "-2", "--dim", "-1"}},
@@ -122,6 +125,28 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 	}
 }
 
+func TestPlayerPositionsToolHasOptionalPlayerFilter(t *testing.T) {
+	registry := testRegistry(t, DefaultConfig())
+	def, ok := registry.Definition("player_positions")
+	if !ok {
+		t.Fatal("player_positions tool definition not found")
+	}
+	if _, ok := def.Parameters.Properties["player"]; !ok {
+		t.Fatalf("player_positions schema is missing player filter: %#v", def.Parameters)
+	}
+	if len(def.Parameters.Required) != 0 {
+		t.Fatalf("player_positions should allow listing all online players, required=%#v", def.Parameters.Required)
+	}
+	got, err := registry.argvForTest("player_positions", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("argvForTest returned error: %v", err)
+	}
+	want := []string{"sh", "mc_positions"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unfiltered argv mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
 func TestQuestListLimitIsRaisedAndClamped(t *testing.T) {
 	registry := testRegistry(t, DefaultConfig())
 	for _, toolName := range []string{"quest_open_json", "quest_completed_json"} {
@@ -166,8 +191,8 @@ func TestRecipeToolRegistrySurface(t *testing.T) {
 			recipeTools = append(recipeTools, def.Name)
 		}
 	}
-	if !reflect.DeepEqual(recipeTools, []string{"recipe_sql"}) {
-		t.Fatalf("recipe tool surface = %#v, want only recipe_sql", recipeTools)
+	if !reflect.DeepEqual(recipeTools, []string{"recipe_compare", "recipe_sql"}) {
+		t.Fatalf("recipe tool surface = %#v, want recipe_compare and recipe_sql", recipeTools)
 	}
 	for _, name := range []string{"gtnh_resolve_recipes", "gtnh_search_recipes", "gtnh_find_item", "gtnh_item"} {
 		if _, ok := registry.Definition(name); ok {

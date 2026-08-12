@@ -3,6 +3,7 @@ set -eu
 
 API_BASE="${GTNH_WIKI_API_BASE:-https://wiki.gtnewhorizons.com/w/api.php}"
 HTML_BASE="${GTNH_WIKI_HTML_BASE:-https://gtnh.miraheze.org/wiki}"
+SEARCH_LIMIT="${GTNH_WIKI_SEARCH_LIMIT:-5}"
 MAX_CHARS="${GTNH_WIKI_MAX_CHARS:-6000}"
 TITLE="${*:-}"
 
@@ -85,6 +86,7 @@ PY
 [ -n "$TITLE" ] || fail "usage: gtnh_wiki_page <title>"
 
 RAW=""
+API_OK=false
 if RAW="$(
   curl -fsS --connect-timeout 5 --max-time 20 --get "$API_BASE" \
     --data-urlencode "action=query" \
@@ -98,9 +100,10 @@ if RAW="$(
     --data-urlencode "origin=*" \
     2>/dev/null
 )"; then
-  PAGE_TITLE="$(printf '%s' "$RAW" | jq -r 'first(.query.pages[]? | .title // empty) // empty')"
-  EXTRACT="$(printf '%s' "$RAW" | jq -r 'first(.query.pages[]? | .extract // empty) // empty')"
-  FULLURL="$(printf '%s' "$RAW" | jq -r 'first(.query.pages[]? | .fullurl // empty) // empty')"
+  API_OK=true
+  PAGE_TITLE="$(printf '%s' "$RAW" | jq -r 'first(.query.pages[]? | select(.missing != true and .pageid != null) | .title // empty) // empty')"
+  EXTRACT="$(printf '%s' "$RAW" | jq -r 'first(.query.pages[]? | select(.missing != true and .pageid != null) | .extract // empty) // empty')"
+  FULLURL="$(printf '%s' "$RAW" | jq -r 'first(.query.pages[]? | select(.missing != true and .pageid != null) | .fullurl // empty) // empty')"
 else
   PAGE_TITLE=""
   EXTRACT=""
@@ -108,7 +111,7 @@ else
 fi
 
 EXTRACT_CLEAN="$(clean_text "$EXTRACT")"
-if [ -z "$EXTRACT_CLEAN" ]; then
+if [ -z "$EXTRACT_CLEAN" ] && [ "$API_OK" = false ]; then
   PAGE_PATH="$(urlencode_title "$TITLE")"
   HTML_URL="${HTML_BASE%/}/$PAGE_PATH"
   HTML_FILE="$(mktemp)"
@@ -119,6 +122,53 @@ if [ -z "$EXTRACT_CLEAN" ]; then
     EXTRACT_CLEAN="$(extract_html_text "$HTML_FILE")"
   fi
 fi
+if [ -z "$EXTRACT_CLEAN" ]; then
+  SEARCH_RAW=""
+  if SEARCH_RAW="$(
+    curl -fsS --connect-timeout 5 --max-time 20 --get "$API_BASE" \
+      --data-urlencode "action=query" \
+      --data-urlencode "format=json" \
+      --data-urlencode "formatversion=2" \
+      --data-urlencode "list=search" \
+      --data-urlencode "srsearch=${TITLE}" \
+      --data-urlencode "srlimit=${SEARCH_LIMIT}" \
+      --data-urlencode "srprop=snippet" \
+      --data-urlencode "origin=*" \
+      2>/dev/null
+  )"; then
+    MATCH_COUNT="$(printf '%s' "$SEARCH_RAW" | jq -r '[.query.search[]?] | length')"
+    SEARCH_STRATEGY="query"
+    if [ "$MATCH_COUNT" -eq 0 ]; then
+      BROAD_QUERY="$(python3 -c 'import re,sys; stop={"a","all","an","and","do","for","how","in","is","me","need","of","our","requirements","setup","system","the","to","we","what","with"}; alias={"autocraft":"automation","autocrafting":"automation"}; words=[alias.get(w.lower(),w) for w in re.findall(r"[A-Za-z0-9]+",sys.argv[1]) if w.lower() not in stop][:3]; print(" ".join((w[:5]+"*") if len(w)>6 else w for w in words))' "$TITLE")"
+      if [ -n "$BROAD_QUERY" ] && [ "$BROAD_QUERY" != "$TITLE" ]; then
+        SEARCH_RAW="$(
+          curl -fsS --connect-timeout 5 --max-time 20 --get "$API_BASE" \
+            --data-urlencode "action=query" \
+            --data-urlencode "format=json" \
+            --data-urlencode "formatversion=2" \
+            --data-urlencode "list=search" \
+            --data-urlencode "srsearch=${BROAD_QUERY}" \
+            --data-urlencode "srlimit=${SEARCH_LIMIT}" \
+            --data-urlencode "srprop=snippet" \
+            --data-urlencode "origin=*" \
+            2>/dev/null
+        )" || SEARCH_RAW='{}'
+        SEARCH_STRATEGY="broadened_terms"
+      fi
+    fi
+    printf '%s' "$SEARCH_RAW" | jq -c \
+      --arg query "$TITLE" \
+      --arg strategy "$SEARCH_STRATEGY" \
+      --arg source "wiki.gtnewhorizons.com/w/api.php" \
+      '{ok:true, exact:false, query:$query, strategy:$strategy,
+        matches:[.query.search[]? | {
+          title:.title,
+          url:("https://wiki.gtnewhorizons.com/wiki/" + (.title | gsub(" "; "_"))),
+          summary:((.snippet // "") | gsub("<[^>]*>"; "") | gsub("&quot;"; "\"") | gsub("&amp;"; "&") | gsub("&#39;"; "\u0027"))
+        }], source:$source}'
+    exit 0
+  fi
+fi
 
 [ -n "$PAGE_TITLE" ] || fail "page not found"
 [ -n "$FULLURL" ] || FULLURL="https://wiki.gtnewhorizons.com/wiki/$(printf '%s' "$PAGE_TITLE" | sed 's/ /_/g')"
@@ -126,7 +176,7 @@ fi
 EXTRACT_CLEAN="$(printf '%s' "$EXTRACT_CLEAN" | cut -c "1-${MAX_CHARS}")"
 [ -n "$EXTRACT_CLEAN" ] || fail "empty extract for page: $PAGE_TITLE"
 
-printf '{"ok":true,"query":"%s","title":"%s","url":"%s","summary":"%s","source":"wiki.gtnewhorizons.com/w/api.php"}\n' \
+printf '{"ok":true,"exact":true,"query":"%s","title":"%s","url":"%s","summary":"%s","source":"wiki.gtnewhorizons.com/w/api.php"}\n' \
   "$(json_escape "$TITLE")" \
   "$(json_escape "$PAGE_TITLE")" \
   "$(json_escape "$FULLURL")" \

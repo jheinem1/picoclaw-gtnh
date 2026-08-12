@@ -30,6 +30,11 @@ copy_required_index() {
 
 copy_required_index item_index.tsv
 copy_required_index greggpt_recipes.sqlite
+if [[ -f "$SRC/index/item_aliases.tsv" ]]; then
+  cp -f "$SRC/index/item_aliases.tsv" "$DST/index/item_aliases.tsv"
+  cp -f "$SRC/index/item_aliases.tsv" "$WS_DST/index/item_aliases.tsv"
+fi
+
 
 if [[ -f "$SRC/index/oredict_index.tsv" ]]; then
   cp -f "$SRC/index/oredict_index.tsv" "$DST/index/oredict_index.tsv"
@@ -44,6 +49,7 @@ to prevent accidental full-file reads and OOM/restarts.
 
 Use indexed files under index/:
 - item_index.tsv
+- item_aliases.tsv (optional NEI tooltip and formatted-name aliases)
 - greggpt_recipes.sqlite (SQLite recipe and ore-worldgen database)
 - oredict_index.tsv (optional; only present after importing a real ore-dict dump)
 EOF

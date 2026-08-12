@@ -15,8 +15,7 @@ and inventory tools:
 - `item:<registry_name>:<damage>`
 - `fluid:<fluid_name>`
 
-Use `item_search MATCH '<terms>'` for fast item-name resolution. The FTS rowid
-is the corresponding `items.id`.
+Use the native `resource_search` tool for item-and-fluid resolution; it returns exact stable resource keys plus production-route counts. `item_search` remains the item-only resolver. For manual SQL, `item_search MATCH '<terms>'` is available and its rowid is the corresponding internal `items.id`.
 
 ### `recipe_routes`
 
@@ -28,12 +27,16 @@ One row per recipe output, including:
 - `is_primary`, so byproducts are not mistaken for a route's main product;
 - handler, capability, machine-name hint, EU/t, and voltage tier.
 
-The view excludes recipes that are invalid, hidden, fake, or disabled.
+The view excludes recipes that are invalid, hidden, fake, disabled, or have an
+input that the dump could not resolve to at least one concrete option.
 
 ### `recipe_ingredients`
 
-One row per input alternative. Rows preserve the input position and option
-index, exact item/fluid/ore-dictionary identity, quantity, and the `consumed`
+One row per input alternative. The view includes only valid, visible, non-fake,
+enabled recipes with fully resolved inputs and excludes incomplete placeholder
+identities. Blank display names for otherwise valid wildcard items fall back to
+their stable resource key. Rows preserve the input position and option index,
+exact item/fluid/ore-dictionary identity, quantity, and the `consumed`
 and `catalyst` flags. Alternatives sharing an input position are choices, not
 additional required ingredients.
 
@@ -136,17 +139,18 @@ Schema v2 indexes both traversal directions:
 
 ## Completeness rules
 
-- `manifest.schema_version` must equal `2`.
-- `manifest.dump_complete=1` only when recipe and worldgen passes report no
+- `manifest` is a key/value table. `SELECT value FROM manifest WHERE key='schema_version'` must return `2`; manifest keys are not columns.
+- Manifest key `dump_complete` has value `1` only when recipe and worldgen passes report no
   record failures and every required source has nonzero coverage.
-- `manifest.worldgen_data_available=1` only when a successful dump contains ore
+- Manifest key `worldgen_data_available` has value `1` only when a successful dump contains ore
   veins.
 - `crafting_recipe_count` and `furnace_recipe_count` are separate; furnace rows
   cannot make a failed crafting pass appear complete.
 - Every output has a non-null normalized chance.
 - Partial recipe inserts are rolled back with a savepoint and recorded in
   `dump_errors`.
-- `recipe_routes` must never expose invalid, hidden, fake, or disabled rows.
+- `recipe_routes` must never expose invalid, hidden, fake, disabled, or
+  unresolved-input rows.
 
 Legacy schema-v1 files can be upgraded with
 `scripts/migrate_recipe_db_v2.sh`. The migration restores query structure and

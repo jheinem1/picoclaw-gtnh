@@ -46,6 +46,7 @@ type Config struct {
 	MaxRegionFiles     int
 	ScanDims           []int
 	ChestBounds        *ChestBounds
+	ChestAreas         []ChestBounds
 	BlockBounds        *BlockBounds
 	BlockAllowlist     map[string]bool
 	BlockRegistryFile  string
@@ -91,18 +92,20 @@ type RefreshRequest struct {
 }
 
 type SourceMeta struct {
-	ServerID        string `json:"server_id"`
-	PlayersScanAt   string `json:"players_scan_at"`
-	ChestsScanAt    string `json:"chests_scan_at"`
-	MEScanAt        string `json:"me_scan_at"`
-	BlockInvScanAt  string `json:"block_inventories_scan_at,omitempty"`
-	BlocksScanAt    string `json:"blocks_scan_at,omitempty"`
-	DatHostSyncAt   string `json:"dathost_sync_at"`
-	PlayersVersion  int    `json:"players_version"`
-	ChestsVersion   int    `json:"chests_version"`
-	MEVersion       int    `json:"me_version"`
-	BlockInvVersion int    `json:"block_inventories_version,omitempty"`
-	BlocksVersion   int    `json:"blocks_version,omitempty"`
+	ServerID          string `json:"server_id"`
+	PlayersScanAt     string `json:"players_scan_at"`
+	ChestsScanAt      string `json:"chests_scan_at"`
+	MEScanAt          string `json:"me_scan_at"`
+	BlockInvScanAt    string `json:"block_inventories_scan_at,omitempty"`
+	BlocksScanAt      string `json:"blocks_scan_at,omitempty"`
+	DatHostSyncAt     string `json:"dathost_sync_at"`
+	PlayersVersion    int    `json:"players_version"`
+	ChestsVersion     int    `json:"chests_version"`
+	MEVersion         int    `json:"me_version"`
+	BlockInvVersion   int    `json:"block_inventories_version,omitempty"`
+	BlocksVersion     int    `json:"blocks_version,omitempty"`
+	ChestAreasScanAt  string `json:"chest_areas_scan_at,omitempty"`
+	ChestAreasVersion int    `json:"chest_areas_version,omitempty"`
 }
 
 type IndexStats struct {
@@ -158,11 +161,14 @@ type ChestRecord struct {
 }
 
 type MERecord struct {
-	NetworkID string        `json:"network_id,omitempty"`
-	Label     string        `json:"label,omitempty"`
-	Dimension int           `json:"dim"`
-	Pos       Position      `json:"pos"`
-	Items     []MEItemStack `json:"items"`
+	NetworkID         string              `json:"network_id,omitempty"`
+	Label             string              `json:"label,omitempty"`
+	Dimension         int                 `json:"dim"`
+	Pos               Position            `json:"pos"`
+	Items             []MEItemStack       `json:"items"`
+	Patterns          []MECraftingPattern `json:"crafting_patterns,omitempty"`
+	PatternsTruncated bool                `json:"crafting_patterns_truncated,omitempty"`
+	ActiveCrafts      []MEActiveCraft     `json:"active_crafts,omitempty"`
 }
 
 type MEItemStack struct {
@@ -172,6 +178,26 @@ type MEItemStack struct {
 	RegName     string `json:"reg_name,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Name        string `json:"name,omitempty"`
+}
+
+type MECraftingPattern struct {
+	Inputs        []MEItemStack `json:"inputs"`
+	Outputs       []MEItemStack `json:"outputs"`
+	Craftable     bool          `json:"craftable"`
+	CanSubstitute bool          `json:"can_substitute"`
+	Priority      int           `json:"priority"`
+}
+
+type MEActiveCraft struct {
+	CPUName        string       `json:"cpu_name,omitempty"`
+	Output         *MEItemStack `json:"output,omitempty"`
+	StartCount     int64        `json:"start_count,omitempty"`
+	RemainingCount int64        `json:"remaining_count,omitempty"`
+	ElapsedMillis  int64        `json:"elapsed_millis,omitempty"`
+	StorageBytes   int64        `json:"storage_bytes,omitempty"`
+	UsedBytes      int64        `json:"used_bytes,omitempty"`
+	CoProcessors   int          `json:"co_processors,omitempty"`
+	Suspended      bool         `json:"suspended,omitempty"`
 }
 
 type PlayerSlotRef struct {
@@ -275,6 +301,62 @@ type InventoryStatus struct {
 	Stale       map[string]bool   `json:"stale"`
 	Errors      map[string]string `json:"errors"`
 }
+type InventoryScopeTotals struct {
+	Players    int `json:"players"`
+	Containers int `json:"containers"`
+	ME         int `json:"me"`
+	Total      int `json:"total"`
+}
+type PlannerInventorySnapshot struct {
+	Version     int                             `json:"version"`
+	GeneratedAt string                          `json:"generated_at"`
+	Source      SourceMeta                      `json:"source"`
+	Totals      map[string]int                  `json:"totals"`
+	Scopes      map[string]InventoryScopeTotals `json:"scopes"`
+}
+
+type MECraftingNetwork struct {
+	NetworkID         string              `json:"network_id,omitempty"`
+	Label             string              `json:"label,omitempty"`
+	Dimension         int                 `json:"dim"`
+	Pos               Position            `json:"pos"`
+	Items             []MEItemStack       `json:"items,omitempty"`
+	Patterns          []MECraftingPattern `json:"patterns,omitempty"`
+	PatternsTruncated bool                `json:"patterns_truncated,omitempty"`
+	ActiveCrafts      []MEActiveCraft     `json:"active_crafts,omitempty"`
+}
+
+type MECraftingSnapshot struct {
+	Version     int                 `json:"version"`
+	GeneratedAt string              `json:"generated_at"`
+	MEScanAt    string              `json:"me_scan_at"`
+	Networks    []MECraftingNetwork `json:"networks"`
+}
+type PlannerQuestSnapshot struct {
+	Version     int             `json:"version"`
+	GeneratedAt string          `json:"generated_at"`
+	Source      QuestSourceMeta `json:"source"`
+	Stats       QuestStats      `json:"stats"`
+	QuestLines  []QuestLine     `json:"quest_lines,omitempty"`
+	Warnings    []string        `json:"warnings,omitempty"`
+	Quests      []PlannerQuest  `json:"quests"`
+}
+
+type PlannerQuest struct {
+	ID              string      `json:"id"`
+	Title           string      `json:"title"`
+	QuestLineID     string      `json:"quest_line_id,omitempty"`
+	QuestLine       string      `json:"quest_line,omitempty"`
+	QuestLineOrder  int         `json:"quest_line_order,omitempty"`
+	TierQuestLine   bool        `json:"tier_quest_line,omitempty"`
+	Completed       bool        `json:"completed"`
+	ClaimableBy     []string    `json:"claimable_by,omitempty"`
+	Prerequisites   []string    `json:"prerequisites,omitempty"`
+	Unlocks         []string    `json:"unlocks,omitempty"`
+	State           string      `json:"state"`
+	CompletionRatio float64     `json:"completion_ratio,omitempty"`
+	Tasks           []QuestTask `json:"tasks,omitempty"`
+}
 
 type DatHostFileEntry struct {
 	Path    string `json:"path"`
@@ -347,6 +429,7 @@ func loadConfig() (Config, error) {
 		MaxRegionFiles:     max(0, getenvInt("INVENTORY_MAX_REGION_FILES_PER_RUN", 0)),
 		ScanDims:           parseDims(getenv("INVENTORY_SCAN_DIMS", "0,-1,1,183")),
 		ChestBounds:        parseChestBounds(strings.TrimSpace(os.Getenv("INVENTORY_CHEST_BOUNDS"))),
+		ChestAreas:         parseChestAreas(strings.TrimSpace(os.Getenv("INVENTORY_CHEST_AREAS"))),
 		BlockBounds:        parseBlockBounds(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_BOUNDS"))),
 		BlockAllowlist:     parseBlockAllowlist(strings.TrimSpace(os.Getenv("INVENTORY_BLOCK_ALLOWLIST"))),
 		BlockRegistryFile:  getenv("GTNH_BLOCK_REGISTRY", filepath.Join(getenv("INVENTORY_WORKDIR", "/root/.greggpt/workspace"), "gtnh-data", "index", "block_registry.tsv")),
@@ -432,6 +515,23 @@ func parseChestBounds(raw string) *ChestBounds {
 		MinZ: minZ,
 		MaxZ: maxZ,
 	}
+}
+func parseChestAreas(raw string) []ChestBounds {
+	areas := make([]ChestBounds, 0)
+	for _, part := range strings.Split(raw, ";") {
+		if bounds := parseChestBounds(strings.TrimSpace(part)); bounds != nil {
+			areas = append(areas, *bounds)
+		}
+	}
+	return areas
+}
+
+func formatChestAreas(areas []ChestBounds) string {
+	parts := make([]string, 0, len(areas))
+	for _, area := range areas {
+		parts = append(parts, fmt.Sprintf("%d,%d,%d,%d,%d", area.Dim, area.MinX, area.MinZ, area.MaxX, area.MaxZ))
+	}
+	return strings.Join(parts, ";")
 }
 
 func parseBlockBounds(raw string) *BlockBounds {
@@ -1017,6 +1117,36 @@ func numberToInt(v any) int {
 	}
 }
 
+func numberToInt64(v any) int64 {
+	switch t := v.(type) {
+	case int8:
+		return int64(t)
+	case int16:
+		return int64(t)
+	case int32:
+		return int64(t)
+	case int64:
+		return t
+	case uint8:
+		return int64(t)
+	case uint16:
+		return int64(t)
+	case uint32:
+		return int64(t)
+	case uint64:
+		if t > uint64(^uint64(0)>>1) {
+			return int64(^uint64(0) >> 1)
+		}
+		return int64(t)
+	case float32:
+		return int64(t)
+	case float64:
+		return int64(t)
+	default:
+		return 0
+	}
+}
+
 func numberToFloat(v any) float64 {
 	switch t := v.(type) {
 	case int8:
@@ -1234,6 +1364,73 @@ func parseMEItem(row map[string]any) (MEItemStack, bool) {
 	}, true
 }
 
+func parseMEItems(rows []any) []MEItemStack {
+	items := make([]MEItemStack, 0, len(rows))
+	for _, row := range rows {
+		item, ok := parseMEItem(toMap(row))
+		if ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func meBoolFromAny(v any) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		parsed, _ := strconv.ParseBool(strings.TrimSpace(value))
+		return parsed
+	default:
+		return numberToInt(value) != 0
+	}
+}
+
+func parseMECraftingPatterns(rows []any) []MECraftingPattern {
+	patterns := make([]MECraftingPattern, 0, len(rows))
+	for _, row := range rows {
+		m := toMap(row)
+		inputs := parseMEItems(toList(m["inputs"]))
+		outputs := parseMEItems(toList(m["outputs"]))
+		if len(outputs) == 0 {
+			continue
+		}
+		patterns = append(patterns, MECraftingPattern{
+			Inputs:        inputs,
+			Outputs:       outputs,
+			Craftable:     meBoolFromAny(m["craftable"]),
+			CanSubstitute: meBoolFromAny(firstPresent(m, "can_substitute", "canSubstitute")),
+			Priority:      numberToInt(m["priority"]),
+		})
+	}
+	return patterns
+}
+
+func parseMEActiveCrafts(rows []any) []MEActiveCraft {
+	crafts := make([]MEActiveCraft, 0, len(rows))
+	for _, row := range rows {
+		m := toMap(row)
+		craft := MEActiveCraft{
+			CPUName:        firstNonEmptyString(m["cpu_name"], m["cpuName"], m["name"]),
+			StartCount:     numberToInt64(firstPresent(m, "start_count", "startCount")),
+			RemainingCount: numberToInt64(firstPresent(m, "remaining_count", "remainingCount")),
+			ElapsedMillis:  numberToInt64(firstPresent(m, "elapsed_millis", "elapsedMillis")),
+			StorageBytes:   numberToInt64(firstPresent(m, "storage_bytes", "storageBytes")),
+			UsedBytes:      numberToInt64(firstPresent(m, "used_bytes", "usedBytes")),
+			CoProcessors:   numberToInt(firstPresent(m, "co_processors", "coProcessors")),
+			Suspended:      meBoolFromAny(m["suspended"]),
+		}
+		if output, ok := parseMEItem(toMap(m["output"])); ok {
+			craft.Output = &output
+		}
+		if craft.CPUName != "" || craft.Output != nil {
+			crafts = append(crafts, craft)
+		}
+	}
+	return crafts
+}
+
 func firstNonEmptyString(values ...any) string {
 	for _, v := range values {
 		s := stringFromAny(v)
@@ -1263,7 +1460,10 @@ func parseMEExport(raw []byte) ([]MERecord, string, int, error) {
 				Y: numberToFloat(firstPresent(net, "y")),
 				Z: numberToFloat(firstPresent(net, "z")),
 			},
-			Items: make([]MEItemStack, 0, len(itemRows)),
+			Items:             make([]MEItemStack, 0, len(itemRows)),
+			Patterns:          parseMECraftingPatterns(toList(firstPresent(net, "crafting_patterns", "craftingPatterns", "patterns"))),
+			PatternsTruncated: meBoolFromAny(firstPresent(net, "crafting_patterns_truncated", "craftingPatternsTruncated", "patterns_truncated")),
+			ActiveCrafts:      parseMEActiveCrafts(toList(firstPresent(net, "active_crafts", "activeCrafts", "crafts"))),
 		}
 		for _, row := range itemRows {
 			item, ok := parseMEItem(toMap(row))
@@ -1273,7 +1473,7 @@ func parseMEExport(raw []byte) ([]MERecord, string, int, error) {
 			rec.Items = append(rec.Items, item)
 			stackCount++
 		}
-		if len(rec.Items) > 0 {
+		if len(rec.Items) > 0 || len(rec.Patterns) > 0 || len(rec.ActiveCrafts) > 0 {
 			if rec.Label == "" {
 				rec.Label = rec.NetworkID
 			}
@@ -2148,6 +2348,97 @@ func parseRegionCoords(path string) (int, int, bool) {
 	rz, err2 := strconv.Atoi(parts[1])
 	return rx, rz, err1 == nil && err2 == nil
 }
+func regionIntersectsChestAreas(dim int, regionPath string, areas []ChestBounds) bool {
+	rx, rz, ok := parseRegionCoords(regionPath)
+	if !ok {
+		return true
+	}
+	minX, maxX := rx*512, rx*512+511
+	minZ, maxZ := rz*512, rz*512+511
+	for _, area := range areas {
+		if dim == area.Dim && maxX >= area.MinX && minX <= area.MaxX && maxZ >= area.MinZ && minZ <= area.MaxZ {
+			return true
+		}
+	}
+	return false
+}
+
+func chestInAreas(chest ChestRecord, areas []ChestBounds) bool {
+	for _, area := range areas {
+		if chest.Dimension == area.Dim &&
+			chest.X >= area.MinX && chest.X <= area.MaxX &&
+			chest.Z >= area.MinZ && chest.Z <= area.MaxZ {
+			return true
+		}
+	}
+	return false
+}
+
+func scanChestAreas(client *http.Client, cfg Config) ([]ChestRecord, int, int, error) {
+	if len(cfg.ChestAreas) == 0 {
+		return nil, 0, 0, nil
+	}
+	dimSet := make(map[int]bool)
+	for _, area := range cfg.ChestAreas {
+		dimSet[area.Dim] = true
+	}
+	dims := make([]int, 0, len(dimSet))
+	for dim := range dimSet {
+		dims = append(dims, dim)
+	}
+	sort.Ints(dims)
+
+	all := make([]ChestRecord, 0)
+	regionCount := 0
+	chestStacks := 0
+	scanErrors := make([]string, 0)
+	for _, dim := range dims {
+		path, _ := dimPath(dim)
+		entries, err := listFiles(client, cfg, path)
+		if err != nil {
+			scanErrors = append(scanErrors, fmt.Sprintf("list %s: %v", path, err))
+			continue
+		}
+		regionFiles := make([]string, 0)
+		for _, entry := range entries {
+			if entry.Deleted || !strings.HasSuffix(entry.Path, ".mca") || !regionIntersectsChestAreas(dim, entry.Path, cfg.ChestAreas) {
+				continue
+			}
+			regionFiles = append(regionFiles, entry.Path)
+		}
+		sort.Strings(regionFiles)
+		if cfg.MaxRegionFiles > 0 && len(regionFiles) > cfg.MaxRegionFiles {
+			scanErrors = append(scanErrors, fmt.Sprintf("%s priority areas need %d region files, exceeding configured limit %d", path, len(regionFiles), cfg.MaxRegionFiles))
+			continue
+		}
+		for _, relPath := range regionFiles {
+			regionCount++
+			fullPath := path + filepath.Base(relPath)
+			raw, err := getFile(client, cfg, fullPath)
+			if err != nil {
+				scanErrors = append(scanErrors, fmt.Sprintf("download %s: %v", fullPath, err))
+				continue
+			}
+			chests, err := parseMCAChests(raw, dim)
+			if err != nil {
+				scanErrors = append(scanErrors, fmt.Sprintf("parse %s: %v", fullPath, err))
+				continue
+			}
+			for _, chest := range chests {
+				if !chestInAreas(chest, cfg.ChestAreas) {
+					continue
+				}
+				chest.Source = "area"
+				chestStacks += len(chest.Items)
+				all = append(all, chest)
+			}
+		}
+	}
+	if len(scanErrors) > 0 {
+		return nil, regionCount, 0, fmt.Errorf("incomplete priority chest-area scan: %s", strings.Join(scanErrors, "; "))
+	}
+	return all, regionCount, chestStacks, nil
+}
 
 func regionIntersectsBlockBounds(dim int, regionPath string, bounds *BlockBounds) bool {
 	if bounds == nil {
@@ -2434,6 +2725,87 @@ func countChestStacks(chests []ChestRecord) int {
 	}
 	return n
 }
+func plannerInventorySnapshot(index InventoryIndex) PlannerInventorySnapshot {
+	totals := make(map[string]int, len(index.ItemIndex))
+	scopes := make(map[string]InventoryScopeTotals, len(index.ItemIndex))
+	for key, hits := range index.ItemIndex {
+		counts := InventoryScopeTotals{}
+		for _, hit := range hits.Players {
+			counts.Players += hit.TotalCount
+		}
+		for _, hit := range hits.Chests {
+			counts.Containers += hit.TotalCount
+		}
+		for _, hit := range hits.ME {
+			counts.ME += hit.TotalCount
+		}
+		counts.Total = counts.Players + counts.Containers + counts.ME
+		totals[key] = counts.Total
+		scopes[key] = counts
+	}
+	return PlannerInventorySnapshot{
+		Version:     2,
+		GeneratedAt: index.GeneratedAt,
+		Source:      index.Source,
+		Totals:      totals,
+		Scopes:      scopes,
+	}
+}
+
+func meCraftingSnapshot(index InventoryIndex) MECraftingSnapshot {
+	networks := make([]MECraftingNetwork, 0, len(index.ME))
+	for _, network := range index.ME {
+		if len(network.Patterns) == 0 && len(network.ActiveCrafts) == 0 {
+			continue
+		}
+		networks = append(networks, MECraftingNetwork{
+			NetworkID:         network.NetworkID,
+			Label:             network.Label,
+			Dimension:         network.Dimension,
+			Pos:               network.Pos,
+			Items:             network.Items,
+			Patterns:          network.Patterns,
+			PatternsTruncated: network.PatternsTruncated,
+			ActiveCrafts:      network.ActiveCrafts,
+		})
+	}
+	return MECraftingSnapshot{
+		Version:     2,
+		GeneratedAt: index.GeneratedAt,
+		MEScanAt:    index.Source.MEScanAt,
+		Networks:    networks,
+	}
+}
+
+func plannerQuestSnapshot(index QuestIndex) PlannerQuestSnapshot {
+	quests := make([]PlannerQuest, 0, len(index.Quests))
+	for _, quest := range index.Quests {
+		quests = append(quests, PlannerQuest{
+			ID:              quest.ID,
+			Title:           quest.Title,
+			QuestLineID:     quest.QuestLineID,
+			QuestLine:       quest.QuestLine,
+			QuestLineOrder:  quest.QuestLineOrder,
+			TierQuestLine:   quest.TierQuestLine,
+			Completed:       quest.Completed,
+			ClaimableBy:     quest.ClaimableBy,
+			Prerequisites:   quest.Prerequisites,
+			Unlocks:         quest.Unlocks,
+			State:           quest.State,
+			CompletionRatio: quest.CompletionRatio,
+			Tasks:           quest.Tasks,
+		})
+	}
+	return PlannerQuestSnapshot{
+		Version:     1,
+		GeneratedAt: index.GeneratedAt,
+		Source:      index.Source,
+		Stats:       index.Stats,
+		QuestLines:  index.QuestLines,
+		Warnings:    index.Warnings,
+		Quests:      quests,
+	}
+}
 
 func main() {
 	cfg, err := loadConfig()
@@ -2447,6 +2819,9 @@ func main() {
 	questIndexFile := filepath.Join(cfg.WorkDir, "state", "quest_index.json")
 	questStatusFile := filepath.Join(cfg.WorkDir, "state", "quest_status.json")
 	refreshFile := filepath.Join(cfg.WorkDir, "state", "inventory_refresh.json")
+	plannerInventoryFile := filepath.Join(cfg.WorkDir, "state", "quest_inventory_totals.json")
+	meCraftingFile := filepath.Join(cfg.WorkDir, "state", "me_crafting.json")
+	plannerQuestFile := filepath.Join(cfg.WorkDir, "state", "quest_planner_index.json")
 
 	client := &http.Client{Timeout: cfg.HTTPTimeout + 3*time.Second}
 	state := loadRuntimeState(stateFile)
@@ -2571,6 +2946,10 @@ func main() {
 					log.Printf("event=quest_index_write_error file=%q err=%q", questIndexFile, err.Error())
 					errorsMap["quest_index_write"] = err.Error()
 				}
+				if err := atomicWriteJSON(plannerQuestFile, plannerQuestSnapshot(questIndex)); err != nil {
+					log.Printf("event=quest_planner_index_write_error file=%q err=%q", plannerQuestFile, err.Error())
+					errorsMap["quest_planner_index_write"] = err.Error()
+				}
 				if err := atomicWriteJSON(questStatusFile, statusFromQuestIndex(questIndex, nil)); err != nil {
 					log.Printf("event=quest_status_write_error file=%q err=%q", questStatusFile, err.Error())
 				}
@@ -2618,6 +2997,20 @@ func main() {
 					blockStatus.Reason = "block scan disabled; using exported inventory block positions"
 				}
 			}
+			if len(cfg.ChestAreas) > 0 {
+				areaChests, areaRegions, areaStacks, areaErr := scanChestAreas(client, cfg)
+				if areaErr != nil {
+					errorsMap["chest_areas"] = areaErr.Error()
+					log.Printf("event=inventory_chest_areas_scan_error areas=%q err=%q", formatChestAreas(cfg.ChestAreas), areaErr.Error())
+				} else {
+					chests = mergeChestRecords(chests, areaChests, "area")
+					source.ChestAreasScanAt = nowUTC()
+					source.ChestAreasVersion++
+					stats.ChestCount = len(chests)
+					stats.ChestStacks = countChestStacks(chests)
+					log.Printf("event=inventory_chest_areas_scan_complete areas=%q regions=%d chests=%d stacks=%d", formatChestAreas(cfg.ChestAreas), areaRegions, len(areaChests), areaStacks)
+				}
+			}
 		}
 
 		// Run the expensive all-region chest pass after the small, live exporter
@@ -2653,6 +3046,14 @@ func main() {
 			log.Printf("event=inventory_index_write_error file=%q err=%q", indexFile, err.Error())
 			errorsMap["index_write"] = err.Error()
 		}
+		if err := atomicWriteJSON(plannerInventoryFile, plannerInventorySnapshot(index)); err != nil {
+			log.Printf("event=quest_inventory_totals_write_error file=%q err=%q", plannerInventoryFile, err.Error())
+			errorsMap["quest_inventory_totals_write"] = err.Error()
+		}
+		if err := atomicWriteJSON(meCraftingFile, meCraftingSnapshot(index)); err != nil {
+			log.Printf("event=me_crafting_write_error file=%q err=%q", meCraftingFile, err.Error())
+			errorsMap["me_crafting_write"] = err.Error()
+		}
 
 		now2 := time.Now().UTC()
 		status := InventoryStatus{
@@ -2663,6 +3064,7 @@ func main() {
 			Stale: map[string]bool{
 				"players":           sourceIsStale(index.Source.PlayersScanAt, now2, 30*time.Minute),
 				"chests":            sourceIsStale(index.Source.ChestsScanAt, now2, 24*time.Hour),
+				"chest_areas":       sourceIsStale(index.Source.ChestAreasScanAt, now2, cfg.BlockInvStaleAfter),
 				"me":                sourceIsStale(index.Source.MEScanAt, now2, cfg.MEStaleAfter),
 				"block_inventories": sourceIsStale(index.Source.BlockInvScanAt, now2, cfg.BlockInvStaleAfter),
 				"blocks":            index.BlockStatus.Enabled && (parseRFC3339(index.Source.BlocksScanAt).IsZero() || now2.Sub(parseRFC3339(index.Source.BlocksScanAt)) > 7*24*time.Hour),

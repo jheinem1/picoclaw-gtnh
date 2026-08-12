@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,7 +36,10 @@ func writeTestWorkspace(t *testing.T) string {
 	items := "slug\tdisplay_name\treg_name\tname\n" +
 		"7437d32652\tRobot Arm (HV)\tgregtech:gt.metaitem.01\tgt.metaitem.01.32652\n" +
 		"7437d32653\tRobot Arm (EV)\tgregtech:gt.metaitem.01\tgt.metaitem.01.32653\n" +
-		"7437d11305\tSteel Ingot\tgregtech:gt.metaitem.01\tgt.metaitem.01.11305\n"
+		"7437d11305\tSteel Ingot\tgregtech:gt.metaitem.01\tgt.metaitem.01.11305\n" +
+		"5391d0\tAny MV Circuit\tdreamcraft:item.CircuitMV\titem.CircuitMV\n" +
+		"9001d0\tMysterious Crystal\tdreamcraft:item.MysteriousCrystal\titem.MysteriousCrystal\n" +
+		"9002d0\tMysterious Crystal Block\tdreamcraft:tile.MysteriousCrystal\ttile.MysteriousCrystal\n"
 	if err := os.WriteFile(filepath.Join(indexDir, "item_index.tsv"), []byte(items), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +137,31 @@ func TestResolveExactItemMetaRequiresDamage(t *testing.T) {
 	}
 	if _, ok := resolveExactItemMeta(items, "gregtech:gt.metaitem.01"); ok {
 		t.Fatal("damage-less identity should not resolve in batch totals")
+	}
+}
+
+func TestResolveExactItemMetaAcceptsUniqueLegacyPathPrefix(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+	items, _, err := loadItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := resolveExactItemMeta(items, "dreamcraft:CircuitMV:0")
+	if !ok || got.RegName != "dreamcraft:item.CircuitMV" || got.Damage != 0 {
+		t.Fatalf("unexpected compatibility resolution: %#v ok=%t", got, ok)
+	}
+}
+
+func TestResolveExactItemMetaRejectsAmbiguousLegacyPathPrefix(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+	items, _, err := loadItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := resolveExactItemMeta(items, "dreamcraft:MysteriousCrystal:0"); ok {
+		t.Fatalf("ambiguous item/tile compatibility identity resolved as %#v", got)
 	}
 }
 
@@ -264,5 +293,74 @@ func TestCmdChest_ExportedBlockInventory(t *testing.T) {
 	t.Setenv("GTNH_WORKSPACE", ws)
 	if err := cmdChest([]string{"--x", "100", "--y", "64", "--z", "-25", "--dim", "0"}); err != nil {
 		t.Fatalf("cmdChest failed: %v", err)
+	}
+}
+
+func TestCmdCountItemUsesCompactScopedTotals(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+	snapshot := `{
+	  "version":2,
+	  "source":{"players_scan_at":"2026-04-28T12:00:00Z","chests_scan_at":"2026-04-28T11:00:00Z","me_scan_at":"2026-04-28T12:04:00Z"},
+	  "totals":{"7437:11305":205},
+	  "scopes":{"7437:11305":{"players":5,"containers":128,"me":72,"total":205}}
+	}`
+	if err := os.WriteFile(filepath.Join(ws, "state", "quest_inventory_totals.json"), []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	err = cmdCountItem([]string{"--query", "steel ingot"})
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	if err != nil {
+		t.Fatalf("cmdCountItem failed: %v", err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(raw)
+	if !strings.Contains(output, "Shared storage total=200 containers=128 me=72") || !strings.Contains(output, "Player inventories=5 all indexed=205") {
+		t.Fatalf("unexpected compact count output: %s", output)
+	}
+}
+
+func TestCmdMECraftingRanksInstalledPatternByMEDeficit(t *testing.T) {
+	ws := writeTestWorkspace(t)
+	t.Setenv("GTNH_WORKSPACE", ws)
+	crafting := `{"version":2,"generated_at":"2026-08-11T12:01:00Z","me_scan_at":"2026-08-11T12:00:00Z","networks":[{"network_id":"main","label":"Main ME","dim":0,"items":[{"id":1,"damage":0,"count":2}],"patterns_truncated":true,"patterns":[{"craftable":true,"priority":5,"inputs":[{"id":1,"damage":0,"count":4,"display_name":"Iron Ingot"}],"outputs":[{"id":2,"damage":0,"count":1,"display_name":"Energetic Alloy"}]}],"active_crafts":[{"cpu_name":"CPU 1","output":{"id":2,"damage":0,"count":64,"display_name":"Energetic Alloy"},"remaining_count":12}]},{"network_id":"isolated","dim":0,"items":[{"id":1,"damage":0,"count":100}]}]}`
+	totals := `{"version":2,"totals":{"1:0":3},"scopes":{"1:0":{"players":0,"containers":1,"me":2,"total":3}}}`
+	if err := os.WriteFile(filepath.Join(ws, "state", "me_crafting.json"), []byte(crafting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "state", "quest_inventory_totals.json"), []byte(totals), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	err = cmdMECrafting([]string{"--query", "energetic alloy", "--active"})
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	if err != nil {
+		t.Fatalf("cmdMECrafting failed: %v", err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(raw)
+	for _, expected := range []string{`"patterns_truncated": true`, `"direct_me_missing_total": 2`, `"missing_from_shared": 1`, `"cpu_name": "CPU 1"`, `"me_freshness"`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("ME crafting output missing %s: %s", expected, output)
+		}
 	}
 }

@@ -15,6 +15,9 @@ const (
 	DefaultMemoryPath             = "state/greggpt_memory.json"
 	DefaultFailedInteractionsPath = "state/failed_interactions.jsonl"
 	DefaultRecipeSQLPath          = "gtnh-data/index/greggpt_recipes.sqlite"
+	DefaultItemIndexPath          = "gtnh-data/index/item_index.tsv"
+	DefaultItemAliasesPath        = "gtnh-data/index/item_aliases.tsv"
+	DefaultModReferencePath       = "gtnh-data/mod-reference"
 )
 
 const (
@@ -22,6 +25,9 @@ const (
 	EnvToolTimeout            = "GREGGPT_TOOL_TIMEOUT_SECONDS"
 	EnvMaxOutputBytes         = "GREGGPT_TOOL_MAX_OUTPUT_BYTES"
 	EnvRecipeSQLPath          = "GREGGPT_RECIPE_SQLITE_PATH"
+	EnvItemIndexPath          = "GREGGPT_ITEM_INDEX_PATH"
+	EnvItemAliasesPath        = "GREGGPT_ITEM_ALIASES_PATH"
+	EnvModReferencePath       = "GREGGPT_MOD_REFERENCE_PATH"
 	EnvMemoryEnabled          = "GREGGPT_MEMORY_ENABLED"
 	EnvMemoryPath             = "GREGGPT_MEMORY_PATH"
 	EnvMemoryDefaultTTL       = "GREGGPT_MEMORY_DEFAULT_TTL_SECONDS"
@@ -33,6 +39,9 @@ type Config struct {
 	ToolTimeout            time.Duration
 	MaxOutputBytes         int
 	RecipeSQLPath          string
+	ItemIndexPath          string
+	ItemAliasesPath        string
+	ModReferencePath       string
 	MemoryEnabled          bool
 	MemoryPath             string
 	MemoryDefaultTTL       time.Duration
@@ -45,6 +54,9 @@ func DefaultConfig() Config {
 		ToolTimeout:            DefaultToolTimeout,
 		MaxOutputBytes:         DefaultMaxOutputLength,
 		RecipeSQLPath:          DefaultRecipeSQLPath,
+		ItemIndexPath:          DefaultItemIndexPath,
+		ItemAliasesPath:        DefaultItemAliasesPath,
+		ModReferencePath:       DefaultModReferencePath,
 		MemoryPath:             DefaultMemoryPath,
 		FailedInteractionsPath: DefaultFailedInteractionsPath,
 	}
@@ -63,6 +75,15 @@ func ConfigFromEnv() Config {
 	}
 	if path := strings.TrimSpace(os.Getenv(EnvRecipeSQLPath)); path != "" {
 		cfg.RecipeSQLPath = path
+	}
+	if path := strings.TrimSpace(os.Getenv(EnvItemIndexPath)); path != "" {
+		cfg.ItemIndexPath = path
+	}
+	if path := strings.TrimSpace(os.Getenv(EnvItemAliasesPath)); path != "" {
+		cfg.ItemAliasesPath = path
+	}
+	if path := strings.TrimSpace(os.Getenv(EnvModReferencePath)); path != "" {
+		cfg.ModReferencePath = path
 	}
 	cfg.MemoryEnabled = boolEnv(EnvMemoryEnabled)
 	if path := strings.TrimSpace(os.Getenv(EnvMemoryPath)); path != "" {
@@ -83,6 +104,33 @@ func (c Config) resolvedRecipeSQLPath() string {
 		path = DefaultRecipeSQLPath
 	}
 	if filepath.IsAbs(path) || path == ":memory:" {
+		return path
+	}
+	workspace := c.Workspace
+	if workspace == "" {
+		workspace = DefaultWorkspace
+	}
+	return filepath.Join(workspace, path)
+}
+
+func (c Config) resolvedItemIndexPath() string {
+	return c.resolveWorkspacePath(c.ItemIndexPath, DefaultItemIndexPath)
+}
+
+func (c Config) resolvedItemAliasesPath() string {
+	return c.resolveWorkspacePath(c.ItemAliasesPath, DefaultItemAliasesPath)
+}
+
+func (c Config) resolvedModReferencePath() string {
+	return c.resolveWorkspacePath(c.ModReferencePath, DefaultModReferencePath)
+}
+
+func (c Config) resolveWorkspacePath(path, fallback string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = fallback
+	}
+	if filepath.IsAbs(path) {
 		return path
 	}
 	workspace := c.Workspace
