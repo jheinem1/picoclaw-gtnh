@@ -16,7 +16,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
+func TestToResponseRequestAddsGeneralWebSearch(t *testing.T) {
 	req, err := toResponseRequest(ModelRequest{
 		Model:           "gpt-5",
 		ReasoningEffort: "medium",
@@ -43,8 +43,8 @@ func TestToResponseRequestAddsGTNHWikiWebSearch(t *testing.T) {
 	if webSearch.SearchContextSize != responses.WebSearchToolSearchContextSizeMedium {
 		t.Fatalf("search context size = %q, want medium", webSearch.SearchContextSize)
 	}
-	if got := webSearch.Filters.AllowedDomains; len(got) != 1 || got[0] != gtnhWikiSearchDomain {
-		t.Fatalf("allowed domains = %#v, want [%q]", got, gtnhWikiSearchDomain)
+	if got := webSearch.Filters.AllowedDomains; len(got) != 0 {
+		t.Fatalf("allowed domains = %#v, want unrestricted web search", got)
 	}
 	if len(req.Include) != 1 || req.Include[0] != responses.ResponseIncludableWebSearchCallActionSources {
 		t.Fatalf("Include = %#v, want web search action sources", req.Include)

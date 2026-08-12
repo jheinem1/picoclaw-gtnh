@@ -77,10 +77,18 @@ type InputItem struct {
 }
 
 type ModelResponse struct {
-	ID         string
-	Commentary []string
-	FinalText  string
-	ToolCalls  []ToolCall
+	ID           string
+	Commentary   []string
+	FinalText    string
+	URLCitations []URLCitation
+	ToolCalls    []ToolCall
+}
+
+type URLCitation struct {
+	StartIndex int
+	EndIndex   int
+	Title      string
+	URL        string
 }
 
 type ToolDefinition struct {
@@ -277,7 +285,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (string, error) {
 		}
 
 		if strings.TrimSpace(resp.FinalText) != "" {
-			return profile.formatFinal(resp.FinalText), nil
+			return profile.formatFinal(renderURLCitations(resp.FinalText, resp.URLCitations, profile.Markdown)), nil
 		}
 		if len(resp.ToolCalls) == 0 {
 			return profile.formatFinal("I could not produce a final answer."), nil
@@ -368,7 +376,7 @@ func (r *Runner) recoverTimeoutSummary(profile Profile, instructions string, inp
 	if err != nil || strings.TrimSpace(resp.FinalText) == "" {
 		return fallback
 	}
-	return profile.formatFinal(resp.FinalText)
+	return profile.formatFinal(renderURLCitations(resp.FinalText, resp.URLCitations, profile.Markdown))
 }
 
 func timeoutSummaryInstructions(profile Profile, base string) string {

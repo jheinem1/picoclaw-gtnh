@@ -101,12 +101,6 @@ func buildTools(cfg Config, memory *MemoryStore) []Tool {
 		oreGenerationTool(cfg, medium),
 		identityMapTool(cfg, short),
 		interactionFailureLogTool(cfg, short),
-		tool("gtnh_wiki_page", GroupGTNHData, "Fetch an exact GTNH wiki page summary. Pass the concrete subject phrase, not only a generic parent-mod title. When the title is missing or empty, returns exact=false with bounded full-text search matches; inspect those candidates and continue with resource, recipe, ME-pattern, and installed-mod evidence instead of assuming the subject does not exist.", network, object(
-			required("title", stringSpec("Wiki page title.")),
-		), func(a Arguments) ([]string, error) {
-			return []string{"sh", "gtnh_wiki_page", stringArg(a, "title")}, nil
-		}),
-
 		tool("inventory_status", GroupInventory, "Show inventory index freshness and stats.", short, object(), func(Arguments) ([]string, error) {
 			return []string{"sh", "gtnh_inventory", "status"}, nil
 		}),

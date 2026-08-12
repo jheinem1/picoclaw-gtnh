@@ -1,6 +1,11 @@
 package agent
 
-import "strings"
+import (
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 type Profile struct {
 	Channel      Channel
@@ -60,6 +65,75 @@ func (p Profile) formatFinal(text string) string {
 		text = stripSimpleMarkdown(text)
 	}
 	return strings.TrimSpace(text)
+}
+
+func renderURLCitations(text string, citations []URLCitation, markdown bool) string {
+	if len(citations) == 0 {
+		return text
+	}
+	runes := []rune(text)
+	valid := make([]URLCitation, 0, len(citations))
+	for _, citation := range citations {
+		if citation.StartIndex < 0 || citation.EndIndex <= citation.StartIndex || citation.EndIndex > len(runes) || !isSafeWebURL(citation.URL) {
+			continue
+		}
+		valid = append(valid, citation)
+	}
+	if len(valid) == 0 {
+		return text
+	}
+	sort.SliceStable(valid, func(i, j int) bool {
+		if valid[i].StartIndex != valid[j].StartIndex {
+			return valid[i].StartIndex < valid[j].StartIndex
+		}
+		if valid[i].EndIndex != valid[j].EndIndex {
+			return valid[i].EndIndex < valid[j].EndIndex
+		}
+		return valid[i].URL < valid[j].URL
+	})
+
+	var b strings.Builder
+	cursor := 0
+	sourceNumbers := map[string]int{}
+	for i := 0; i < len(valid); {
+		citation := valid[i]
+		if citation.StartIndex < cursor {
+			i++
+			continue
+		}
+		b.WriteString(string(runes[cursor:citation.StartIndex]))
+		j := i
+		groupURLs := map[string]bool{}
+		for j < len(valid) && valid[j].StartIndex == citation.StartIndex && valid[j].EndIndex == citation.EndIndex {
+			current := valid[j]
+			if markdown && !groupURLs[current.URL] {
+				number, ok := sourceNumbers[current.URL]
+				if !ok {
+					number = len(sourceNumbers) + 1
+					sourceNumbers[current.URL] = number
+				}
+				b.WriteString("[[")
+				b.WriteString(strconv.Itoa(number))
+				b.WriteString("]](<")
+				b.WriteString(strings.ReplaceAll(current.URL, ">", "%3E"))
+				b.WriteString(">)")
+				groupURLs[current.URL] = true
+			}
+			j++
+		}
+		cursor = citation.EndIndex
+		i = j
+	}
+	b.WriteString(string(runes[cursor:]))
+	return b.String()
+}
+
+func isSafeWebURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
 func asciiOnly(text string) string {

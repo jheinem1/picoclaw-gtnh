@@ -61,7 +61,6 @@ func TestArgvGenerationForEveryTool(t *testing.T) {
 		args string
 		want []string
 	}{
-		{"gtnh_wiki_page", `{"title":"Steam Machines"}`, []string{"sh", "gtnh_wiki_page", "Steam Machines"}},
 		{"inventory_status", `{}`, []string{"sh", "gtnh_inventory", "status"}},
 		{"player_positions", `{"player":"Snow"}`, []string{"sh", "mc_positions", "Snow"}},
 		{"inventory_find", `{"item":"gregtech:gt.metaitem.01","any_damage":true,"player":"Snow","dim":183,"scope":"players","limit":5}`, []string{"sh", "gtnh_inventory", "find", "--item", "gregtech:gt.metaitem.01", "--any-damage", "--player", "Snow", "--dim", "183", "--scope", "players", "--limit", "5"}},
@@ -201,6 +200,16 @@ func TestRecipeToolRegistrySurface(t *testing.T) {
 		if err := registry.Validate(name, json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "unknown tool") {
 			t.Fatalf("Validate(%s) error = %v, want unknown tool", name, err)
 		}
+	}
+}
+
+func TestWikiPageWrapperIsNotAnAgentFunction(t *testing.T) {
+	registry := testRegistry(t, DefaultConfig())
+	if _, ok := registry.Definition("gtnh_wiki_page"); ok {
+		t.Fatal("gtnh_wiki_page should remain a manual wrapper, not an agent function")
+	}
+	if err := registry.Validate("gtnh_wiki_page", json.RawMessage(`{"title":"Applied Energistics 2"}`)); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("Validate(gtnh_wiki_page) error = %v, want unknown tool", err)
 	}
 }
 

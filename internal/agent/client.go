@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"greggpt-gtnh/internal/greggptauth"
 
@@ -17,8 +19,6 @@ import (
 
 const (
 	DefaultCodexBaseURL = "https://chatgpt.com/backend-api/codex"
-
-	gtnhWikiSearchDomain = "wiki.gtnewhorizons.com"
 
 	codexOriginatorHeader  = "originator"
 	codexOriginatorValue   = "codex_cli_rs"
@@ -255,10 +255,7 @@ func toResponseRequest(request ModelRequest) (ResponseRequest, error) {
 		tools = make([]responses.ToolUnionParam, 0, len(request.Tools)+1)
 		tools = append(tools, responses.ToolUnionParam{
 			OfWebSearch: &responses.WebSearchToolParam{
-				Type: responses.WebSearchToolTypeWebSearch,
-				Filters: responses.WebSearchToolFiltersParam{
-					AllowedDomains: []string{gtnhWikiSearchDomain},
-				},
+				Type:              responses.WebSearchToolTypeWebSearch,
 				SearchContextSize: responses.WebSearchToolSearchContextSizeMedium,
 			},
 		})
@@ -342,34 +339,89 @@ func fromResponse(response *Response) ModelResponse {
 		if item.Type != "message" {
 			continue
 		}
-		text := outputItemText(item)
-		if text == "" {
+		content := outputItemAnnotatedText(item)
+		if content.Text == "" {
 			continue
 		}
 		switch item.Phase {
 		case responses.ResponseOutputMessagePhaseCommentary:
-			out.Commentary = append(out.Commentary, text)
+			out.Commentary = append(out.Commentary, content.Text)
 		case responses.ResponseOutputMessagePhaseFinalAnswer:
-			out.FinalText += text
+			appendFinalOutput(&out, content)
 		default:
 			if hasToolCalls {
-				out.Commentary = append(out.Commentary, text)
+				out.Commentary = append(out.Commentary, content.Text)
 			} else {
-				out.FinalText += text
+				appendFinalOutput(&out, content)
 			}
 		}
 	}
 	return out
 }
 
-func outputItemText(item responses.ResponseOutputItemUnion) string {
-	var b strings.Builder
-	for _, content := range item.Content {
-		if content.Type == "output_text" {
-			b.WriteString(content.Text)
-		}
+type annotatedOutput struct {
+	Text      string
+	Citations []URLCitation
+}
+
+func appendFinalOutput(out *ModelResponse, content annotatedOutput) {
+	offset := utf8.RuneCountInString(out.FinalText)
+	out.FinalText += content.Text
+	for _, citation := range content.Citations {
+		citation.StartIndex += offset
+		citation.EndIndex += offset
+		out.URLCitations = append(out.URLCitations, citation)
 	}
-	return strings.TrimSpace(b.String())
+}
+
+func outputItemAnnotatedText(item responses.ResponseOutputItemUnion) annotatedOutput {
+	var b strings.Builder
+	citations := make([]URLCitation, 0)
+	runeOffset := 0
+	for _, content := range item.Content {
+		if content.Type != "output_text" {
+			continue
+		}
+		contentRunes := utf8.RuneCountInString(content.Text)
+		for _, annotation := range content.Annotations {
+			if annotation.Type != "url_citation" || strings.TrimSpace(annotation.URL) == "" {
+				continue
+			}
+			start := int(annotation.StartIndex)
+			end := int(annotation.EndIndex)
+			if start < 0 || end <= start || end > contentRunes {
+				continue
+			}
+			citations = append(citations, URLCitation{
+				StartIndex: runeOffset + start,
+				EndIndex:   runeOffset + end,
+				Title:      strings.TrimSpace(annotation.Title),
+				URL:        strings.TrimSpace(annotation.URL),
+			})
+		}
+		b.WriteString(content.Text)
+		runeOffset += contentRunes
+	}
+
+	raw := b.String()
+	trimmedLeft := strings.TrimLeftFunc(raw, unicode.IsSpace)
+	leadingRunes := utf8.RuneCountInString(raw[:len(raw)-len(trimmedLeft)])
+	text := strings.TrimSpace(raw)
+	textRunes := utf8.RuneCountInString(text)
+	out := annotatedOutput{Text: text, Citations: make([]URLCitation, 0, len(citations))}
+	for _, citation := range citations {
+		citation.StartIndex -= leadingRunes
+		citation.EndIndex -= leadingRunes
+		if citation.StartIndex < 0 || citation.EndIndex <= citation.StartIndex || citation.EndIndex > textRunes {
+			continue
+		}
+		out.Citations = append(out.Citations, citation)
+	}
+	return out
+}
+
+func outputItemText(item responses.ResponseOutputItemUnion) string {
+	return outputItemAnnotatedText(item).Text
 }
 
 func emitResponseCommentary(response *Response, emitted map[string]struct{}, onCommentary func(string)) {
