@@ -1,10 +1,12 @@
 #!/usr/bin/env sh
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 API_BASE="${GTNH_WIKI_API_BASE:-https://wiki.gtnewhorizons.com/w/api.php}"
 HTML_BASE="${GTNH_WIKI_HTML_BASE:-https://gtnh.miraheze.org/wiki}"
 SEARCH_LIMIT="${GTNH_WIKI_SEARCH_LIMIT:-5}"
 MAX_CHARS="${GTNH_WIKI_MAX_CHARS:-6000}"
+SEARCH_SUMMARY_CHARS="${GTNH_WIKI_SEARCH_SUMMARY_CHARS:-1400}"
 TITLE="${*:-}"
 
 fail() {
@@ -88,7 +90,7 @@ PY
 RAW=""
 API_OK=false
 if RAW="$(
-  curl -fsS --connect-timeout 5 --max-time 20 --get "$API_BASE" \
+  curl -fsS --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 30 --get "$API_BASE" \
     --data-urlencode "action=query" \
     --data-urlencode "format=json" \
     --data-urlencode "formatversion=2" \
@@ -116,7 +118,7 @@ if [ -z "$EXTRACT_CLEAN" ] && [ "$API_OK" = false ]; then
   HTML_URL="${HTML_BASE%/}/$PAGE_PATH"
   HTML_FILE="$(mktemp)"
   trap 'rm -f "$HTML_FILE"' EXIT
-  if curl -fsSL --connect-timeout 5 --max-time 20 "$HTML_URL" -o "$HTML_FILE" 2>/dev/null; then
+  if curl -fsSL --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 30 "$HTML_URL" -o "$HTML_FILE" 2>/dev/null; then
     PAGE_TITLE="${PAGE_TITLE:-$TITLE}"
     FULLURL="${FULLURL:-$HTML_URL}"
     EXTRACT_CLEAN="$(extract_html_text "$HTML_FILE")"
@@ -125,12 +127,13 @@ fi
 if [ -z "$EXTRACT_CLEAN" ]; then
   SEARCH_RAW=""
   if SEARCH_RAW="$(
-    curl -fsS --connect-timeout 5 --max-time 20 --get "$API_BASE" \
+    curl -fsS --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 30 --get "$API_BASE" \
       --data-urlencode "action=query" \
       --data-urlencode "format=json" \
       --data-urlencode "formatversion=2" \
       --data-urlencode "list=search" \
       --data-urlencode "srsearch=${TITLE}" \
+      --data-urlencode "srwhat=text" \
       --data-urlencode "srlimit=${SEARCH_LIMIT}" \
       --data-urlencode "srprop=snippet" \
       --data-urlencode "origin=*" \
@@ -142,12 +145,13 @@ if [ -z "$EXTRACT_CLEAN" ]; then
       BROAD_QUERY="$(python3 -c 'import re,sys; stop={"a","all","an","and","do","for","how","in","is","me","need","of","our","requirements","setup","system","the","to","we","what","with"}; alias={"autocraft":"automation","autocrafting":"automation"}; words=[alias.get(w.lower(),w) for w in re.findall(r"[A-Za-z0-9]+",sys.argv[1]) if w.lower() not in stop][:3]; print(" ".join((w[:5]+"*") if len(w)>6 else w for w in words))' "$TITLE")"
       if [ -n "$BROAD_QUERY" ] && [ "$BROAD_QUERY" != "$TITLE" ]; then
         SEARCH_RAW="$(
-          curl -fsS --connect-timeout 5 --max-time 20 --get "$API_BASE" \
+          curl -fsS --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 30 --get "$API_BASE" \
             --data-urlencode "action=query" \
             --data-urlencode "format=json" \
             --data-urlencode "formatversion=2" \
             --data-urlencode "list=search" \
             --data-urlencode "srsearch=${BROAD_QUERY}" \
+            --data-urlencode "srwhat=text" \
             --data-urlencode "srlimit=${SEARCH_LIMIT}" \
             --data-urlencode "srprop=snippet" \
             --data-urlencode "origin=*" \
@@ -156,17 +160,36 @@ if [ -z "$EXTRACT_CLEAN" ]; then
         SEARCH_STRATEGY="broadened_terms"
       fi
     fi
-    printf '%s' "$SEARCH_RAW" | jq -c \
-      --arg query "$TITLE" \
-      --arg strategy "$SEARCH_STRATEGY" \
-      --arg source "wiki.gtnewhorizons.com/w/api.php" \
-      '{ok:true, exact:false, query:$query, strategy:$strategy,
-        matches:[.query.search[]? | {
-          title:.title,
-          url:("https://wiki.gtnewhorizons.com/wiki/" + (.title | gsub(" "; "_"))),
-          summary:((.snippet // "") | gsub("<[^>]*>"; "") | gsub("&quot;"; "\"") | gsub("&amp;"; "&") | gsub("&#39;"; "\u0027"))
-        }], source:$source}'
+    SEARCH_FILE="$(mktemp)"
+    DETAIL_FILE="$(mktemp)"
+    trap 'rm -f "$SEARCH_FILE" "$DETAIL_FILE"' EXIT
+    printf '%s' "$SEARCH_RAW" > "$SEARCH_FILE"
+    printf '{}' > "$DETAIL_FILE"
+
+    MATCH_TITLES="$(printf '%s' "$SEARCH_RAW" | jq -r '[.query.search[]?.title] | join("|")')"
+    if [ -n "$MATCH_TITLES" ]; then
+      DETAIL_RAW="$({
+        curl -fsS --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 30 --get "$API_BASE" \
+          --data-urlencode "action=query" \
+          --data-urlencode "format=json" \
+          --data-urlencode "formatversion=2" \
+          --data-urlencode "prop=extracts|info" \
+          --data-urlencode "explaintext=1" \
+          --data-urlencode "inprop=url" \
+          --data-urlencode "redirects=1" \
+          --data-urlencode "titles=${MATCH_TITLES}" \
+          --data-urlencode "origin=*" \
+          2>/dev/null
+      } || printf '{}')"
+      printf '%s' "$DETAIL_RAW" > "$DETAIL_FILE"
+    fi
+
+    python3 "$SCRIPT_DIR/tools/wiki_search_enrich.py" \
+      "$TITLE" "$SEARCH_STRATEGY" "$SEARCH_SUMMARY_CHARS" \
+      "$SEARCH_FILE" "$DETAIL_FILE"
     exit 0
+  else
+    fail "wiki API search unavailable after retries"
   fi
 fi
 

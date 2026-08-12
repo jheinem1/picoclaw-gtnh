@@ -389,6 +389,15 @@ func userSet(ids []string) map[string]struct{} {
 }
 
 func main() {
+	commandLineOutput, err := discordCommandsCommandLine(os.Args[1:])
+	if err != nil {
+		log.Fatalf("startup_error: %v", err)
+	}
+	if commandLineOutput != "" {
+		fmt.Print(commandLineOutput)
+		return
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("startup_error: %v", err)
@@ -437,6 +446,16 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+}
+
+func discordCommandsCommandLine(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		return "usage: discord-commands\n", nil
+	}
+	return "", fmt.Errorf("unexpected arguments: %q", args)
 }
 
 func (s *Service) registerCommands(appID string) error {

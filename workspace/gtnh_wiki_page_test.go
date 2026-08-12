@@ -111,6 +111,9 @@ func TestGTNHWikiPageSearchesWhenExactPageIsEmpty(t *testing.T) {
 			if got := r.URL.Query().Get("srsearch"); got != "Thaumcraft autocrafting" {
 				t.Fatalf("srsearch = %q, want Thaumcraft autocrafting", got)
 			}
+			if got := r.URL.Query().Get("srwhat"); got != "text" {
+				t.Fatalf("srwhat = %q, want text", got)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"query": map[string]any{"search": []map[string]any{{
 				"title":   "Thaumic Energistics",
@@ -134,6 +137,41 @@ func TestGTNHWikiPageSearchesWhenExactPageIsEmpty(t *testing.T) {
 	}
 	if out.Matches[0].Title != "Thaumic Energistics" || strings.Contains(out.Matches[0].Summary, "<span>") {
 		t.Fatalf("match = %+v, want cleaned Thaumic Energistics result", out.Matches[0])
+	}
+}
+
+func TestGTNHWikiPageSearchReturnsRelevantParentPageExtract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Query().Get("list") == "search":
+			if got := r.URL.Query().Get("srwhat"); got != "text" {
+				t.Fatalf("srwhat = %q, want text", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"query": map[string]any{"search": []map[string]any{{
+				"title":   "Applied Energistics 2",
+				"snippet": "Quantum table row without the answer.",
+			}}}})
+		case r.URL.Query().Get("titles") == "Applied Energistics 2":
+			writeWikiPage(t, w, "Applied Energistics 2", strings.Join([]string{
+				strings.Repeat("introductory storage and channel details ", 80),
+				"ME Quantum Ring",
+				"A pair of Quantum Rings are linked by placing a Quantum Entangled Singularity in each one. Quantum Entangled Singularities are always generated in pairs.",
+			}, "\n"))
+		default:
+			writeWikiPage(t, w, "Missing", "")
+		}
+	}))
+	defer server.Close()
+
+	out := runWikiPage(t, server.URL, "Quantum Entangled Singularity", nil)
+	if !out.OK || out.Exact || len(out.Matches) != 1 {
+		t.Fatalf("result = %+v, want one non-exact match", out)
+	}
+	for _, want := range []string{"ME Quantum Ring", "linked by placing", "always generated in pairs"} {
+		if !strings.Contains(out.Matches[0].Summary, want) {
+			t.Fatalf("summary missing %q: %q", want, out.Matches[0].Summary)
+		}
 	}
 }
 

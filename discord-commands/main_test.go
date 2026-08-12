@@ -103,6 +103,27 @@ func (f *fakeDiscordMessageAPI) ChannelMessageDelete(_ string, messageID string,
 	return f.deleteErrByID[messageID]
 }
 
+func TestDiscordCommandsCommandLineHelpExitsBeforeStartingService(t *testing.T) {
+	for _, arg := range []string{"-h", "--help"} {
+		output, err := discordCommandsCommandLine([]string{arg})
+		if err != nil {
+			t.Fatalf("discordCommandsCommandLine(%q) error: %v", arg, err)
+		}
+		if output != "usage: discord-commands\n" {
+			t.Fatalf("discordCommandsCommandLine(%q) output = %q", arg, output)
+		}
+	}
+}
+
+func TestDiscordCommandsCommandLineRejectsUnexpectedArguments(t *testing.T) {
+	if output, err := discordCommandsCommandLine(nil); err != nil || output != "" {
+		t.Fatalf("no-argument command line = (%q, %v), want empty success", output, err)
+	}
+	if _, err := discordCommandsCommandLine([]string{"--smoke"}); err == nil {
+		t.Fatal("unexpected argument was accepted")
+	}
+}
+
 func TestSplitNames(t *testing.T) {
 	got := splitNames("Alice, Bob;Carol  Dana")
 	want := []string{"Alice", "Bob", "Carol", "Dana"}
