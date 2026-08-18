@@ -39,7 +39,7 @@ Last updated: 2026-07-20
 
 ## Model/Auth
 - Provider: `openai` via OAuth
-- Repository/runtime-template model default: `gpt-5.6-terra` with `high` reasoning (the deployed values remain controlled by the Pi env file)
+- Repository/runtime-template model default: `gpt-5.6-sol` with `high` reasoning (the deployed values remain controlled by the Pi env file)
 - Auth file: `/home/jhein/greggpt-gtnh/runtime/greggpt/auth.json`
 - OAuth refresh and credential replacement use `/home/jhein/greggpt-gtnh/runtime/greggpt/auth.json.lock` across both agent services.
 
